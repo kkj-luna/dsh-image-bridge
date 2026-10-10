@@ -201,6 +201,7 @@ window.__ModuleLoader__.load({
         'provider.status.ok': '已连接',
         'provider.status.fail': '连接失败',
         'provider.status.untested': '未测试',
+        'provider.failReason': '连接失败：',
         'editorAdd': '添加模型提供商',
         'editorEdit': '编辑模型提供商',
         'keyNote': 'API Key 保存在凭据服务里，不会写进配置文件，也不会回传浏览器',
@@ -308,6 +309,7 @@ window.__ModuleLoader__.load({
         'provider.status.ok': 'Connected',
         'provider.status.fail': 'Connection failed',
         'provider.status.untested': 'Not tested',
+        'provider.failReason': 'Connection failed: ',
         'editorAdd': 'Add model provider',
         'editorEdit': 'Edit model provider',
         'keyNote': 'The API key lives in the credential service: it is never written to the config file and never sent back to the browser.',
@@ -418,6 +420,8 @@ window.__ModuleLoader__.load({
       '.dib-btn-secondary{background:transparent;border-color:var(--dsw-alias-border-l4);color:var(--dsw-alias-label-primary)}',
       '.dib-btn-secondary:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2)}',
       '.dib-status{flex:1 1 100%;margin:0;font-size:12px;line-height:1.6}',
+      /* 贴在按钮旁边的反馈：不再占满整行、不撑开布局。 */
+      '.dib-status-inline{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dib-status-ok{color:var(--dsw-alias-state-success-primary)}',
       '.dib-status-error{color:var(--dsw-alias-state-error-primary)}',
       '.dib-status-info{color:var(--dsw-alias-label-secondary)}',
@@ -429,6 +433,8 @@ window.__ModuleLoader__.load({
       '.dib-card-name{font-size:14px;font-weight:500;line-height:22px;color:var(--dsw-alias-label-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       /* 状态小字：比名称浅（tertiary）、比名称小，只作解释，不抢名称的位置 */
       '.dib-card-status{font-size:12px;line-height:16px;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      /* 失败原因：同样弱化，比状态小字再浅一档，只挂在这一张卡片上 */
+      '.dib-card-reason{font-size:12px;line-height:16px;color:var(--dsw-alias-label-quaternary,var(--dsw-alias-label-tertiary));overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dib-card-tag{flex:none;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-xs);color:var(--dsw-alias-label-secondary);padding:1px 6px;font-size:11px;line-height:16px;white-space:nowrap}',
       '.dib-card-tag-on{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary)}',
       '.dib-card-actions{display:inline-flex;align-items:center;gap:4px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}',
@@ -1468,6 +1474,13 @@ window.__ModuleLoader__.load({
         sizeCustom: false,
         keyConfigured: {},
         testState: {},
+        /**
+         * 每家的失败原因：`{ [providerId]: message }`。
+         *
+         * 页面底部不再有状态行，失败原因直接挂到对应的那张卡片上——按 provider 归属，
+         * 不串台；只活在内存里，不写配置。
+         */
+        providerErrors: {},
         legacy: { baseUrl: '', model: '', editModel: '' },
         // 四个模型槽位（生图/修图 × 主/备）与主模型超时。
         routes: routesOf({}),
@@ -1478,6 +1491,8 @@ window.__ModuleLoader__.load({
         busyId: '',
         status: '',
         statusKind: 'info',
+        /** 这条反馈属于哪个动作：'provider' | 'routes' | 'size'（决定渲染在哪个按钮旁边）。 */
+        statusScope: '',
       }
       if (injected === null || injected === undefined || typeof injected !== 'object') return base
       const merged = { ...base, ...injected }
@@ -1682,11 +1697,11 @@ window.__ModuleLoader__.load({
           const written = await settings.update(SETTINGS_NS, { providers: next, activeProviderId }, undefined)
           const failure = failureOf(written)
           if (failure !== null) throw new Error(failure)
-          patch({ phase: 'idle', providers: next, activeProviderId, confirmDelete: '', status: trRef.current('removed'), statusKind: 'ok' })
+          patch({ phase: 'idle', providers: next, activeProviderId, confirmDelete: '', status: trRef.current('removed'), statusKind: 'ok', statusScope: 'provider' })
           report('info', '提供商已删除', JSON.stringify({ id: provider.id, keyRef: provider.keyRef, remaining: next.length, activeProviderId, keyKept: true }))
         } catch (error) {
           report('error', '删除提供商失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
-          patch({ phase: 'idle', confirmDelete: '', status: messageOf(error), statusKind: 'error' })
+          patch({ phase: 'idle', confirmDelete: '', status: messageOf(error), statusKind: 'error', statusScope: 'provider' })
         }
       }, [state.providers, state.activeProviderId, patch])
 
@@ -1702,7 +1717,7 @@ window.__ModuleLoader__.load({
         const settings = current === null || current === undefined ? undefined : current.settings
         const credentials = current === null || current === undefined ? undefined : current.credentials
         if (settings === undefined) {
-          patch({ editor: null, status: trRef.current('unavailable'), statusKind: 'error' })
+          patch({ editor: null, status: trRef.current('unavailable'), statusKind: 'error', statusScope: 'provider' })
           return
         }
         patch({ phase: 'saving', status: '', statusKind: 'info' })
@@ -1758,6 +1773,7 @@ window.__ModuleLoader__.load({
             editor: null,
             status: keySaved ? `${trRef.current('saved')} ${trRef.current('savedKey')}` : trRef.current('saved'),
             statusKind: 'ok',
+            statusScope: 'provider',
           })
           // 只记长度与是否保存，绝不记密钥本身。
           report('info', '提供商已保存', JSON.stringify({
@@ -1773,7 +1789,7 @@ window.__ModuleLoader__.load({
           }))
         } catch (error) {
           report('error', '提供商保存失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
-          patch({ phase: 'idle', status: messageOf(error), statusKind: 'error' })
+          patch({ phase: 'idle', status: messageOf(error), statusKind: 'error', statusScope: 'provider' })
         }
       }, [state.providers, state.activeProviderId, state.keyConfigured, state.routes, state.fallbackDraft, patch])
 
@@ -1789,7 +1805,7 @@ window.__ModuleLoader__.load({
         if (settings === undefined) return
         const fallbackAfterMs = parseFallbackMs(state.fallbackDraft)
         if (fallbackAfterMs === undefined) {
-          patch({ status: trRef.current('fallbackInvalid'), statusKind: 'error' })
+          patch({ status: trRef.current('fallbackInvalid'), statusKind: 'error', statusScope: 'routes' })
           report('warn', '模型设置未保存：超时不是正整数', JSON.stringify({ length: state.fallbackDraft.length }))
           return
         }
@@ -1804,11 +1820,11 @@ window.__ModuleLoader__.load({
           }, undefined)
           const failure = failureOf(written)
           if (failure !== null) throw new Error(failure)
-          patch({ phase: 'idle', fallbackDraft: String(fallbackAfterMs), status: trRef.current('routes.saved'), statusKind: 'ok' })
+          patch({ phase: 'idle', fallbackDraft: String(fallbackAfterMs), status: trRef.current('routes.saved'), statusKind: 'ok', statusScope: 'routes' })
           report('info', '模型设置已保存', JSON.stringify({ modelRoutes, fallbackAfterMs }))
         } catch (error) {
           report('error', '模型设置保存失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
-          patch({ phase: 'idle', status: messageOf(error), statusKind: 'error' })
+          patch({ phase: 'idle', status: messageOf(error), statusKind: 'error', statusScope: 'routes' })
         }
       }, [state.routes, state.fallbackDraft, state.providers, state.activeProviderId, patch])
 
@@ -1822,17 +1838,21 @@ window.__ModuleLoader__.load({
           const written = await settings.update(SETTINGS_NS, { size: state.size }, undefined)
           const failure = failureOf(written)
           if (failure !== null) throw new Error(failure)
-          patch({ phase: 'idle', status: trRef.current('saved'), statusKind: 'ok' })
+          patch({ phase: 'idle', status: trRef.current('saved'), statusKind: 'ok', statusScope: 'size' })
           report('info', '默认尺寸已保存', JSON.stringify({ size: state.size }))
         } catch (error) {
           report('error', '默认尺寸保存失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
-          patch({ phase: 'idle', status: messageOf(error), statusKind: 'error' })
+          patch({ phase: 'idle', status: messageOf(error), statusKind: 'error', statusScope: 'size' })
         }
       }, [state.size, patch])
 
       /** 卡片上的「测试」：用这张卡片自己的密钥打一次 test，结果决定状态点的颜色。 */
       const testProvider = React.useCallback(async (provider) => {
         patch({ busyId: provider.id, status: '', statusKind: 'info' })
+        const reasonOf = (message, ok) => ({
+          // 失败原因**按 provider 归属**：只挂在这一张卡片上，不会串到别家。
+          providerErrors: { ...state.providerErrors, [provider.id]: ok ? '' : message },
+        })
         try {
           // 同样带上 keyRef（先过形状校验）：卡片上的测试多半就发生在"不是当前生效"的那张卡上。
           const keyRef = safeKeyRef(provider.keyRef)
@@ -1846,22 +1866,26 @@ window.__ModuleLoader__.load({
             message: outcome.message,
             keyProvided: false,
           }))
+          const reason = outcome.message === '' ? (outcome.ok ? trRef.current('testOk') : trRef.current('testFail')) : outcome.message
           patch({
             busyId: '',
             testState: { ...state.testState, [provider.id]: outcome.ok ? 'ok' : 'fail' },
-            status: outcome.message === '' ? (outcome.ok ? trRef.current('testOk') : trRef.current('testFail')) : outcome.message,
+            // 页面底部已经不再有状态行：失败原因直接落到这张卡片上。
+            status: '',
             statusKind: outcome.ok ? 'ok' : 'error',
+            ...reasonOf(reason, outcome.ok),
           })
         } catch (error) {
           report('error', '测试连接失败', `${provider.id}: ${messageOf(error)}`)
           patch({
             busyId: '',
             testState: { ...state.testState, [provider.id]: 'fail' },
-            status: messageOf(error),
+            status: '',
             statusKind: 'error',
+            ...reasonOf(messageOf(error), false),
           })
         }
-      }, [state.testState, patch])
+      }, [state.testState, state.providerErrors, patch])
 
       if (state.phase === 'loading') {
         return h('div', { className: 'dib-cfg' }, h('p', { className: 'dib-field-hint' }, tr('loading')))
@@ -1872,6 +1896,16 @@ window.__ModuleLoader__.load({
           state.status === '' ? null : h('p', { key: 'why', className: 'dib-status dib-status-error' }, state.status),
         ])
       }
+
+      /**
+       * 反馈渲染在**动作旁边**。
+       *
+       * 页面底部不再有状态行：保存模型设置 / 保存尺寸的反馈分别落在各自按钮那一行，
+       * 提供商保存/删除的反馈落在卡片列表下方——"说了什么"紧挨着"做了什么"。
+       */
+      const statusNodeFor = (scope) => (state.status !== '' && state.statusScope === scope
+        ? h('p', { key: 'status', className: `${statusClassOf(state.statusKind)} dib-status-inline`, role: 'status' }, state.status)
+        : null)
 
       const disabled = state.writable === false
       const busy = state.phase !== 'idle'
@@ -1885,6 +1919,7 @@ window.__ModuleLoader__.load({
        */
       const cardOf = (provider) => {
         const signal = providerSignalOf(provider, state.testState)
+        const reason = typeof state.providerErrors[provider.id] === 'string' ? state.providerErrors[provider.id].trim() : ''
         const dotClass = signal === 'ok' ? 'dib-dot dib-dot-ok' : signal === 'fail' ? 'dib-dot dib-dot-fail' : 'dib-dot'
         const dotTitle = signal === 'ok'
           ? state.testState[provider.id] === 'ok' ? tr('dot.ok') : tr('dot.connected')
@@ -1898,6 +1933,10 @@ window.__ModuleLoader__.load({
             h('div', { key: 'identity', className: 'dib-card-identity' }, [
               h('span', { key: 'name', className: 'dib-card-name', title: provider.id }, name),
               h('span', { key: 'status', className: 'dib-card-status' }, tr(PROVIDER_STATUS_KEYS[signal])),
+              // 只有"这家失败"时才多一行原因；成功不需要（状态小字已经说了）。
+              signal === 'fail' && reason !== ''
+                ? h('span', { key: 'reason', className: 'dib-card-reason', title: reason }, `${tr('provider.failReason')}${reason}`)
+                : null,
             ]),
             provider.legacy === true ? h('span', { key: 'legacy', className: 'dib-card-tag' }, tr('legacyTag')) : null,
             h('div', { key: 'actions', className: 'dib-card-actions' }, [
@@ -2119,6 +2158,8 @@ window.__ModuleLoader__.load({
             disabled: disabled || busy,
             onClick: () => { void saveRoutes() },
           }, tr('routes.save')),
+          // 反馈就贴在按钮旁边（不再是页面底部那行）。
+          statusNodeFor('routes'),
         ]),
       ])
 
@@ -2126,6 +2167,8 @@ window.__ModuleLoader__.load({
         h('p', { key: 'intro', className: 'dib-cfg-intro' }, tr('intro')),
         state.providers.length === 0 ? null : h('ul', { key: 'list', className: 'dib-list' }, state.providers.map(cardOf)),
         state.providers.length === 0 ? h('p', { key: 'empty', className: 'dib-field-hint' }, tr('empty')) : null,
+        // 提供商保存/删除的反馈落在列表下方（它的动作就在卡片/浮层上）。
+        statusNodeFor('provider'),
         editor === null || editor === undefined
           ? h('button', {
             key: 'add',
@@ -2205,18 +2248,15 @@ window.__ModuleLoader__.load({
               disabled: disabled || busy,
               onClick: () => { void saveSize() },
             }, tr('saveSize')),
+            // 保存尺寸的反馈同样贴在按钮旁边。
+            statusNodeFor('size'),
           ]),
           h('p', { key: 'hint', className: 'dib-field-hint' }, tr('size.hint')),
         ]),
         /*
-         * 底部状态行：只报失败。
-         *
-         * 成功的反馈改成"不渲染这一行"（保存/测试成功的绿色文案用户不需要），但**失败必须
-         * 留着**——不然用户不知道哪里出错了。错误文案仍带 statusKind='error' 上色。
+         * 页面底部不再有状态行：反馈全部挪到动作旁边（见 statusNodeFor）。
+         * 失败原因也不再落在这里——它挂在对应的那张卡片上（`providerErrors`）。
          */
-        state.status === '' || state.statusKind === 'ok'
-          ? null
-          : h('p', { key: 'status', className: statusClassOf(state.statusKind), role: 'status' }, state.status),
       ])
     }
 

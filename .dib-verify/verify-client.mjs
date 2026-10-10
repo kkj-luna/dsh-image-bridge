@@ -357,10 +357,11 @@ globalThis.fetch = async (url, init) => {
   const body = JSON.parse(String(init?.body ?? '{}'))
   rpcCalls.push({ url: String(url), method: body.method, payload: body.payload ?? {} })
   // test 的返回体按 Host 的新契约带上 models（在 value.models 这一层）。
+  const okTest = { ok: true, value: { ok: true, message: '连接成功：GET .../models → 200', models: ALL_MODELS } }
   const result = body.method === 'models'
     ? { ok: true, value: { models: ALL_MODELS } }
     : body.method === 'test'
-      ? { ok: true, value: { ok: true, message: '连接成功：GET .../models → 200', models: ALL_MODELS } }
+      ? (testResultOverride ?? okTest)
       : { ok: true, value: { ok: true, message: 'HTTP 200' } }
   return {
     ok: true,
@@ -368,6 +369,8 @@ globalThis.fetch = async (url, init) => {
     json: async () => ({ type: 'server-response', rpcId: body.rpcId, result }),
   }
 }
+/** 需要验证"失败落到对应卡片"的用例会临时把它设成失败的返回体，用完置回 null。 */
+let testResultOverride = null
 const logPayloads = () => JSON.stringify(rpcCalls.filter((call) => call.url.endsWith('/log')))
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
 
@@ -780,7 +783,7 @@ check(
   '状态小字就在名称下方（同一个 identity 列里、紧随名称之后）',
   (() => {
     const identity = cardTree.nodes.find((node) => node.props?.className === 'dib-card-identity')
-    const children = Array.isArray(identity?.props?.children) ? identity.props.children : []
+    const children = (Array.isArray(identity?.props?.children) ? identity.props.children : []).filter(Boolean)
     return children.length === 2
       && children[0]?.props?.className === 'dib-card-name'
       && children[1]?.props?.className === 'dib-card-status'
@@ -788,9 +791,104 @@ check(
   JSON.stringify(cardTextOf(cardTree)).slice(0, 160),
 )
 
+/* 失败原因挂到对应的那张卡片上（A 家失败不会串到 B 家） */
+/* 注意：React 不会把 key 放进 props，所以按卡片名称来定位是哪一张卡。 */
+const findClassIn = (node, className) => {
+  let found
+  walk(node, (item) => {
+    if (found === undefined && item !== null && typeof item === 'object' && item.props?.className === className) found = item
+  })
+  return found
+}
+const reasonTextOf = (tree, cardName) => {
+  const shell = cardShellOf(tree).find((node) => {
+    const nameNode = findClassIn(node, 'dib-card-name')
+    return nameNode !== undefined && textOfElement(nameNode).trim() === cardName
+  })
+  const reason = shell === undefined ? undefined : findClassIn(shell, 'dib-card-reason')
+  return reason === undefined ? '' : textOfElement(reason).trim()
+}
+const reasonStatusClassOf = (tree) => tree.nodes.filter((node) => node.props?.className === 'dib-card-status').map((node) => textOfElement(node).trim())
+
+/* 两家服务商：只让第一家测试失败，看原因落在谁身上 */
+const reasonZhipu = { ...providerRecord, models: ALL_MODELS }
+const reasonOpenai = {
+  id: 'openai',
+  label: 'OpenAI',
+  baseUrl: 'https://api.openai.com/v1',
+  keyRef: 'DSH_IMAGE_BRIDGE_KEY_OPENAI',
+  models: ['gpt-image-1'],
+  imageModel: 'gpt-image-1',
+  editModel: '',
+}
+rpcCalls.length = 0
+const reasonBundle = sectionWithRecording({ providers: [reasonZhipu, reasonOpenai], activeProviderId: 'zhipu', size: '1024x1024' })
+const reasonSession = createSession(reasonBundle.component, {
+  t: undefined,
+  close: () => {},
+  __initial: { phase: 'loading' },
+})
+await sleep(30)
+let reasonTree = reasonSession.tree()
+// 载入是异步的：等到卡片真的渲染出来再点，避免点到"加载中"那一版。
+for (let round = 0; round < 5 && reasonTree.buttons.length === 0; round += 1) {
+  await sleep(20)
+  reasonTree = reasonSession.tree()
+}
+testResultOverride = { ok: true, value: { ok: false, message: '401 密钥被拒绝' } }
+const reasonCardTestButtons = () => reasonTree.buttons.filter((button) => textOfElement(button) === '测试')
+const firstCardTest = reasonCardTestButtons()[0]
+const beforeClickCalls = rpcCalls.length
+firstCardTest?.props.onClick()
+await sleep(30)
+reasonTree = reasonSession.tree()
+const afterFirstTree = reasonTree
+const reasonDebug = {
+  callsAfterClick: rpcCalls.length - beforeClickCalls,
+  methods: rpcCalls.map((call) => call.method).slice(-3),
+}
+check(
+  '测试失败的原因只出现在这一张卡片上（另一家仍是已连接、没有那一行）',
+  firstCardTest !== undefined
+    && reasonTextOf(afterFirstTree, '智谱') === '连接失败：401 密钥被拒绝'
+    && reasonTextOf(afterFirstTree, 'OpenAI') === ''
+    && reasonStatusClassOf(afterFirstTree).join(',') === '连接失败,已连接',
+  JSON.stringify({ ...reasonDebug, zhipu: reasonTextOf(afterFirstTree, '智谱'), openai: reasonTextOf(afterFirstTree, 'OpenAI'), statuses: reasonStatusClassOf(afterFirstTree) }).slice(0, 320),
+)
+check(
+  '卡片状态小字仍保留三态且与状态灯同源（本次改动没有破坏它）',
+  reasonStatusClassOf(afterFirstTree).join(',') === '连接失败,已连接'
+    && dotClassOf(afterFirstTree) === 'dib-dot dib-dot-fail'
+    && cardStatusTextOf(cardTree) === '已连接'
+    && cardStatusTextOf(idleTree) === '未测试',
+  JSON.stringify({ statuses: reasonStatusClassOf(afterFirstTree), dot: dotClassOf(afterFirstTree) }).slice(0, 160),
+)
+check(
+  '成功时不出现失败原因那一行（状态小字「已连接」已经说清了）',
+  reasonTextOf(cardTree, '智谱') === '' && cardStatusTextOf(cardTree) === '已连接',
+  JSON.stringify({ reason: reasonTextOf(cardTree, '智谱') }),
+)
+
+/*
+ * 两家各自失败、原因不同：第二条不能盖到第一条上，也不能互相复制——
+ * 这条专门盯"失败原因是不是真的按 provider 归属"。
+ */
+testResultOverride = { ok: true, value: { ok: false, message: '连接超时' } }
+reasonCardTestButtons()[1]?.props.onClick()
+await sleep(30)
+reasonTree = reasonSession.tree()
+testResultOverride = null
+check(
+  '两家各自失败时，失败原因各归各家（不会串台、也不会互相覆盖）',
+  reasonTextOf(reasonTree, '智谱') === '连接失败：401 密钥被拒绝'
+    && reasonTextOf(reasonTree, 'OpenAI') === '连接失败：连接超时'
+    && reasonStatusClassOf(reasonTree).join(',') === '连接失败,连接失败',
+  JSON.stringify({ zhipu: reasonTextOf(reasonTree, '智谱'), openai: reasonTextOf(reasonTree, 'OpenAI'), statuses: reasonStatusClassOf(reasonTree) }).slice(0, 220),
+)
+
 /* 底部状态行：成功不渲染，失败仍然显示 */
 const saveSizeButtonOf = (tree) => tree.nodes.find((node) => node.type === 'button' && textOfElement(node).trim() === '保存尺寸')
-const statusRowOf = (tree) => tree.nodes.find((node) => node.type === 'p' && node.props?.role === 'status')
+const statusRowsOf = (tree) => tree.nodes.filter((node) => node.type === 'p' && node.props?.role === 'status')
 
 const okStatusBundle = sectionWithRecording({ size: '1024x1024' })
 const okStatusSession = createSession(okStatusBundle.component, {
@@ -802,12 +900,26 @@ let okStatusTree = okStatusSession.tree()
 okStatusSession.click(saveSizeButtonOf(okStatusTree))
 await sleep(30)
 okStatusTree = okStatusSession.tree()
+const cfgOf = (tree) => tree.nodes.find((node) => node.props?.className === 'dib-cfg')
+const atPageBottomOf = (tree, node) => (Array.isArray(cfgOf(tree)?.props?.children) ? cfgOf(tree).props.children : []).some((child) => child === node)
+const bottomChildOf = (tree) => {
+  const children = (Array.isArray(cfgOf(tree)?.props?.children) ? cfgOf(tree).props.children : []).filter(Boolean)
+  return children[children.length - 1]
+}
+const sizeControlsOf = (tree) => tree.nodes.find((node) => node.props?.className === 'dib-size-controls')
+const routesFooterOf = (tree) => tree.nodes.find((node) => node.props?.className === 'dib-footer')
 check(
-  '保存成功后底部不再渲染那句绿色成功文案（状态行整行不出现）',
-  okStatusSession.tree().text.includes('已保存') === false
-    && statusRowOf(okStatusTree) === undefined
+  '保存尺寸的反馈仍在，且紧邻按钮（在那一行 controls 里），不在页面底部容器里',
+  statusRowsOf(okStatusTree).length === 1
+    && textOfElement(statusRowsOf(okStatusTree)[0]).trim() === '已保存'
+    && String(statusRowsOf(okStatusTree)[0]?.props?.className ?? '').includes('dib-status-inline')
+    && (sizeControlsOf(okStatusTree)?.props?.children ?? []).includes(statusRowsOf(okStatusTree)[0])
+    && atPageBottomOf(okStatusTree, statusRowsOf(okStatusTree)[0]) === false
     && okStatusBundle.updates.length === 1,
-  JSON.stringify({ row: statusRowOf(okStatusTree) === undefined ? null : textOfElement(statusRowOf(okStatusTree)), updates: okStatusBundle.updates.length }),
+  JSON.stringify({
+    row: statusRowsOf(okStatusTree).map((node) => textOfElement(node).trim()),
+    cls: statusRowsOf(okStatusTree).map((node) => node.props?.className),
+  }).slice(0, 220),
 )
 
 const failStatusBundle = sectionWithRecording({ size: '1024x1024' }, { updateFails: true, updateError: '保存失败：配置不可写' })
@@ -821,11 +933,21 @@ failStatusSession.click(saveSizeButtonOf(failStatusTree))
 await sleep(30)
 failStatusTree = failStatusSession.tree()
 check(
-  '失败时底部仍然显示错误文案（保留"为什么失败"，只是不再报喜）',
-  statusRowOf(failStatusTree) !== undefined
-    && textOfElement(statusRowOf(failStatusTree)).trim() === '保存失败：配置不可写'
-    && String(statusRowOf(failStatusTree)?.props?.className ?? '').includes('dib-status-error'),
-  JSON.stringify({ row: statusRowOf(failStatusTree) === undefined ? null : textOfElement(statusRowOf(failStatusTree)), cls: statusRowOf(failStatusTree)?.props?.className ?? null }).slice(0, 200),
+  '失败时的反馈也没有丢：仍然显示错误文案，而且就在按钮旁边（不在页面底部）',
+  statusRowsOf(failStatusTree).length === 1
+    && textOfElement(statusRowsOf(failStatusTree)[0]).trim() === '保存失败：配置不可写'
+    && String(statusRowsOf(failStatusTree)[0]?.props?.className ?? '').includes('dib-status-error')
+    && (sizeControlsOf(failStatusTree)?.props?.children ?? []).includes(statusRowsOf(failStatusTree)[0])
+    && atPageBottomOf(failStatusTree, statusRowsOf(failStatusTree)[0]) === false,
+  JSON.stringify({ row: statusRowsOf(failStatusTree).map((node) => textOfElement(node).trim()), cls: statusRowsOf(failStatusTree)[0]?.props?.className ?? null }).slice(0, 200),
+)
+check(
+  '页面底部不再有任何状态提示（`.dib-cfg` 的最后一个子节点不是状态行）',
+  statusRowsOf(okStatusTree).every((row) => atPageBottomOf(okStatusTree, row) === false)
+    && statusRowsOf(failStatusTree).every((row) => atPageBottomOf(failStatusTree, row) === false)
+    && bottomChildOf(okStatusTree)?.props?.role !== 'status'
+    && bottomChildOf(failStatusTree)?.props?.role !== 'status',
+  JSON.stringify({ bottom: bottomChildOf(okStatusTree)?.props?.className ?? null, bottomRole: bottomChildOf(okStatusTree)?.props?.role ?? null }).slice(0, 200),
 )
 
 /* 编辑面板：字段 + 两个动作按钮 */
@@ -1402,6 +1524,7 @@ saveRoutesTree = saveRoutesSession.tree()
 const routeSaveButton = saveRoutesTree.nodes.find((node) => node.type === 'button' && node.props?.['data-dib-action'] === 'save-routes')
 saveRoutesSession.click(routeSaveButton)
 await sleep(30)
+const routesSavedTree = saveRoutesSession.tree()
 const routesPatch = saveRoutesBundle.updates[0]?.patch
 check(
   '保存后 modelRoutes.generate.primary 同时带正确的 providerId 与 model',
@@ -1415,6 +1538,17 @@ check(
     // activeProviderId 仍然原样写回：界面不再有切换入口，但 Host 的三级回退要用它。
     && routesPatch.activeProviderId === 'zhipu',
   JSON.stringify(routesPatch ?? null).slice(0, 320),
+)
+check(
+  '保存模型设置的反馈同样紧邻它的按钮（在模型区块的 footer 里，不在页面底部）',
+  (() => {
+    const row = statusRowsOf(routesSavedTree)[0]
+    return row !== undefined
+      && textOfElement(row).trim() === '模型设置已保存'
+      && (routesFooterOf(routesSavedTree)?.props?.children ?? []).includes(row)
+      && atPageBottomOf(routesSavedTree, row) === false
+  })(),
+  JSON.stringify({ rows: statusRowsOf(routesSavedTree).map((node) => textOfElement(node).trim()) }).slice(0, 200),
 )
 
 /* ⑥ 手动输入：providerId 取当前生效服务商，模型名写进对应槽位 */
