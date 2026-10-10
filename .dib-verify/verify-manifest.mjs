@@ -105,14 +105,48 @@ check(
   manifest.files?.includes('cordis.patch.yml') === true,
   JSON.stringify(manifest.files),
 )
+/*
+ * 默认地址必须是公开端点——但**只查默认值本身**，不要拿整个 index.js 去 grep `127.0.0.1`。
+ *
+ * 早先这条是 `!/127\.0\.0\.1|localhost/.test(host)`：Host 后来加了"拒绝把服务商地址配成
+ * 本机/内网"的安全校验（`host === 'localhost'`、`::1`、`.local`…），文件里出现这些字面量
+ * 是**功能本身**，那条全文件 grep 就成了误报。真正要保证的是"**默认值**不是本机地址"，
+ * 所以这里按缩进取出顶层 `baseUrl` 的 default 值来判断（顶层字段缩进 2 空格，服务商
+ * 数组里的字段缩进 6 空格，不会被误取）。
+ */
+const topLevelBaseUrlDefault = new RegExp('(?:^|\\n) {2}baseUrl: z[\\s\\S]{0,240}?\\.default\\(\'([^\']*)\'\\)', 'u').exec(host)?.[1] ?? ''
 check(
-  'Host schema 的默认地址是公开端点（新装用户不会指向本机 mock）',
-  /baseUrl[\s\S]{0,120}?\.default\('https:\/\/api\.openai\.com\/v1'\)/u.test(host)
-    && !/127\.0\.0\.1|localhost/iu.test(host),
-  (/baseUrl[\s\S]{0,120}?\.default\('[^']*'\)/u.exec(host) ?? ['(未找到)'])[0].slice(0, 160),
+  'Host schema 顶层 baseUrl 的默认值是公开端点（新装用户不会指向本机 mock）',
+  topLevelBaseUrlDefault === 'https://api.openai.com/v1'
+    && !/^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])/iu.test(topLevelBaseUrlDefault)
+    && !/^https?:\/\/(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/u.test(topLevelBaseUrlDefault),
+  `default=${topLevelBaseUrlDefault || '(未找到)'}`,
 )
 
 /* ---------------------------------------------- 跨文件一致性 */
+
+/*
+ * 「主模型超时」默认值必须三处一致：client.js 的常量、Host 的常量、Host schema 的 default。
+ *
+ * 为什么需要这条：界面里输入框留空时，客户端会**把默认值显式写进用户配置**（而不是不写这个
+ * 字段），所以两半的默认值一旦不同，"留空 = 用 Host 默认值"就不再成立——用户会拿到一个
+ * 与 schema 文档不同的超时。15000 → 90000 那次改动就是这样：Host 先改、客户端的断言还写死
+ * 15000，于是套件报了 2 条红（实现是对的，是断言过时）。
+ *
+ * 现在客户端的期望值改成从 client.js 源码读——修掉了漂移，但也让那条断言变成了**同义反复**
+ * （拿 client.js 的值去验 client.js 写出的值，改成 1 也能过）。真正的不变量是"两侧相等"，
+ * 由这条断言钉住；数值本身也一并钉住，改默认值时必须过来一起改并说明理由。
+ */
+const clientFallbackMs = Number(/const DEFAULT_FALLBACK_MS = (\d+)/u.exec(client)?.[1] ?? Number.NaN)
+const hostFallbackMs = Number(/const DEFAULT_FALLBACK_AFTER_MS = (\d+)/u.exec(host)?.[1] ?? Number.NaN)
+const schemaFallbackMs = Number(/fallbackAfterMs: z\.number\(\)\.default\((\d+)\)/u.exec(host)?.[1] ?? Number.NaN)
+check(
+  '主模型超时默认值三处一致（client.js / Host 常量 / Host schema），且是约定的 90000',
+  clientFallbackMs === hostFallbackMs
+    && hostFallbackMs === schemaFallbackMs
+    && clientFallbackMs === 90000,
+  JSON.stringify({ client: clientFallbackMs, host: hostFallbackMs, schema: schemaFallbackMs }),
+)
 
 const settingsNs = /const SETTINGS_NS = '([^']+)'/u.exec(client)?.[1] ?? ''
 check('补丁行 id 等于客户端写入的设置命名空间', rowId === settingsNs, `patch id=${rowId} client SETTINGS_NS=${settingsNs}`)

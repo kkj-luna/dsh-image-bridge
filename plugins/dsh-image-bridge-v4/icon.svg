@@ -1,12 +1,26 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="Image Bridge" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="Image Bridge">
   <!--
-    单色线条图标：只用 currentColor，随主题着色；没有硬编码颜色、没有内联样式表、不引外部资源。
-    语义 = 图片 + 桥：一个画框（图片）里画着太阳与一座拱桥（桥面 / 拱 / 桥墩落在画框底边上）。
+    插件列表/市场里显示的图标：**蓝底白图**，与外壳里其它插件的观感一致。
+
+    底色用官方调色板里的品牌蓝 `--dsw-static-deepseek-500`（#4176e6，浅色主题下
+    `--dsw-alias-state-business-primary` 就是它）；图形是白色描边，因此在浅色底与深色底
+    上都能看清。XML 良构、没有内联样式表、不引外部资源。
+
+    注意分工：
+      · 本文件（icon.svg）是**品牌图标**，允许带颜色——插件列表读的就是它；
+      · 设置页左侧导航那一行**不读这里的颜色**：它用 client.js 里内联的 `GLYPH_SHAPES`
+        几何数据 + CSS mask-image（mask 只读 alpha，颜色来自 currentColor），
+        所以内联图形必须保持 currentColor / fill=none。
+      · 两处的**几何数据必须逐条一致**（验收里有跨文件断言盯着），所以下面这组
+        图形元素的几何值任何一处都不要单独改。
   -->
-  <rect x="3" y="4" width="18" height="16" rx="3" />
-  <circle cx="8.2" cy="8.8" r="1.5" />
-  <path d="M4.6 16.6h14.8" />
-  <path d="M7.6 16.6c0-2.5 1.9-4.2 4.4-4.2s4.4 1.7 4.4 4.2" />
-  <path d="M7.6 16.6V20" />
-  <path d="M16.4 16.6V20" />
+  <rect x="0" y="0" width="24" height="24" rx="5.5" fill="#4176e6" />
+  <g id="dib-icon-glyph" fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="4" width="18" height="16" rx="3" />
+    <circle cx="8.2" cy="8.8" r="1.5" />
+    <path d="M4.6 16.6h14.8" />
+    <path d="M7.6 16.6c0-2.5 1.9-4.2 4.4-4.2s4.4 1.7 4.4 4.2" />
+    <path d="M7.6 16.6V20" />
+    <path d="M16.4 16.6V20" />
+  </g>
 </svg>

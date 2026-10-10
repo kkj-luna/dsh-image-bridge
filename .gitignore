@@ -24,4 +24,6 @@ Thumbs.db
 
 # 一次性诊断探针（开发期排查用，不入库）
 .dib-verify/probe-*.mjs
+# 同上，外加一次性诊断脚本；沙箱内不许删文件，用忽略规则挡住即可
+.dib-verify/*.tmp.mjs
 .dib-mut/
