@@ -657,26 +657,72 @@ check(
 )
 check('未配置提供商时给出空态提示', emptyTree.text.includes('还没有配置模型提供商'), emptyTree.text.slice(0, 160))
 
-/* 卡片列表：名称 / 当前模型 / 状态点 / 编辑 */
+/* 卡片列表：单行结构 + 连接状态灯（正文已收进编辑浮层） */
 const cardBundle = sectionWithRecording({ size: '1024x1024' })
+/* 本次会话测过且成功 → 绿灯 */
 const cardTree = pageWith(cardBundle, { providers: [providerRecord], activeProviderId: 'zhipu', testState: { zhipu: 'ok' }, keyConfigured: { zhipu: true } })
+/* 本次会话测试失败 → 红灯（哪怕之前存过模型列表） */
 const failTree = pageWith(cardBundle, { providers: [providerRecord], activeProviderId: 'zhipu', testState: { zhipu: 'fail' } })
-const idleTree = pageWith(cardBundle, { providers: [providerRecord], activeProviderId: 'zhipu' })
+/* 从未测过、也没有模型列表 → 灰灯 */
+const idleTree = pageWith(cardBundle, { providers: [{ ...providerRecord, models: [] }], activeProviderId: 'zhipu' })
+/* 从未测过，但已经保存过模型列表 → 绿灯（重新载入页面后依然成立） */
+const persistedTree = pageWith(cardBundle, { providers: [providerRecord], activeProviderId: 'zhipu' })
+const cardShellOf = (tree) => tree.nodes.filter((node) => node.props?.className === 'dib-card')
+const dotClassOf = (tree) => tree.classes.find((value) => value.startsWith('dib-dot')) ?? ''
+const cardTextOf = (tree) => {
+  const shell = cardShellOf(tree)[0]
+  return shell === undefined ? '' : textOfElement(shell).replace(/\s+/gu, ' ').trim()
+}
+const cardTextsOf = (tree) => cardShellOf(tree).map((shell) => textOfElement(shell).replace(/\s+/gu, ' ').trim())
+
 check(
-  '卡片显示名称、当前模型与编辑按钮',
-  hasClass(cardTree, 'dib-card') && cardTree.text.includes('智谱') && cardTree.text.includes('cogview-4') && buttonByText(cardTree, '编辑') !== undefined,
-  cardTree.text.slice(0, 200),
+  '卡片仍是单行：[状态灯] 名称 [按钮]，正文容器已消失',
+  cardShellOf(cardTree).length === 1
+    && Array.isArray(cardShellOf(cardTree)[0].props.children)
+    && cardShellOf(cardTree)[0].props.children.length === 1
+    && hasClass(cardTree, 'dib-card-head')
+    && !hasClass(cardTree, 'dib-card-body')
+    && !hasClass(cardTree, 'dib-card-sub'),
+  JSON.stringify({ cards: cardShellOf(cardTree).length, children: cardShellOf(cardTree)[0]?.props?.children?.length ?? null }),
 )
 check(
-  '连接状态点区分成功 / 失败 / 未测试',
-  hasClass(cardTree, 'dib-dot-ok') && hasClass(failTree, 'dib-dot-fail')
-    && hasClass(idleTree, 'dib-dot') && !hasClass(idleTree, 'dib-dot-ok') && !hasClass(idleTree, 'dib-dot-fail'),
-  JSON.stringify({ ok: cardTree.classes, fail: failTree.classes, idle: idleTree.classes }).slice(0, 240),
+  '卡片上有状态灯、名称与「测试」「编辑」「删除」三个按钮',
+  hasClass(cardTree, 'dib-dot')
+    && cardTextOf(cardTree).includes('智谱')
+    && buttonByText(cardTree, '测试') !== undefined
+    && buttonByText(cardTree, '编辑') !== undefined
+    && buttonByText(cardTree, '删除') !== undefined,
+  cardTree.buttonTexts.join(','),
 )
 check(
-  '卡片标出当前使用的提供商与密钥状态',
-  cardTree.text.includes('当前使用') && cardTree.text.includes('密钥已配置') && idleTree.text.includes('密钥未配置'),
-  cardTree.text.slice(0, 200),
+  '卡片上不再有「当前使用」徽标与「设为当前」按钮',
+  !cardTextOf(cardTree).includes('当前使用')
+    && !cardTextOf(cardTree).includes('设为当前')
+    && cardTree.buttons.every((button) => !textOfElement(button).includes('设为当前'))
+    && !hasClass(cardTree, 'dib-card-tag-on'),
+  JSON.stringify({ text: cardTextOf(cardTree) }).slice(0, 160),
+)
+check(
+  '卡片正文那四行不再渲染（生图模型 / 改图模型 / 接口地址 / 密钥状态）',
+  !cardTextOf(cardTree).includes('生图模型')
+    && !cardTextOf(cardTree).includes('改图模型')
+    && !cardTextOf(cardTree).includes('密钥')
+    && !cardTextOf(cardTree).includes('open.bigmodel.cn')
+    && !hasClass(cardTree, 'dib-card-body'),
+  JSON.stringify({ text: cardTextOf(cardTree) }).slice(0, 160),
+)
+check(
+  '连接状态灯三色：本次测试成功=绿、本次失败=红、从未测过且没有模型列表=灰',
+  dotClassOf(cardTree) === 'dib-dot dib-dot-ok'
+    && dotClassOf(failTree) === 'dib-dot dib-dot-fail'
+    && dotClassOf(idleTree) === 'dib-dot',
+  JSON.stringify({ ok: dotClassOf(cardTree), fail: dotClassOf(failTree), idle: dotClassOf(idleTree) }),
+)
+check(
+  '绿灯在重新载入页面后依然成立：没有测试记录、但保存过模型列表的也是绿灯',
+  dotClassOf(persistedTree) === 'dib-dot dib-dot-ok'
+    && persistedTree.nodes.some((node) => node.props?.['aria-label'] === '已获取到可用模型列表'),
+  JSON.stringify({ persisted: dotClassOf(persistedTree) }),
 )
 
 /* 编辑面板：字段 + 两个动作按钮 */
@@ -1214,7 +1260,9 @@ check(
     && routesPatch.modelRoutes?.generate?.fallback?.providerId === 'zhipu'
     && routesPatch.modelRoutes?.generate?.fallback?.model === 'wan2.7-image'
     && routesPatch.modelRoutes?.edit?.primary?.providerId === ''
-    && routesPatch.fallbackAfterMs === 15000,
+    && routesPatch.fallbackAfterMs === 15000
+    // activeProviderId 仍然原样写回：界面不再有切换入口，但 Host 的三级回退要用它。
+    && routesPatch.activeProviderId === 'zhipu',
   JSON.stringify(routesPatch ?? null).slice(0, 320),
 )
 
@@ -1523,7 +1571,7 @@ check(
   logPayloads().slice(0, 240),
 )
 
-/* 切换当前使用的提供商 */
+/* 卡片上不再有「设为当前」入口；activeProviderId 仍是保存时的字段（三级回退要用） */
 const switchBundle = sectionWithRecording({ size: '1024x1024' })
 const secondProvider = {
   id: 'openai',
@@ -1535,19 +1583,30 @@ const secondProvider = {
   editModel: '',
 }
 const switchTree = pageWith(switchBundle, { providers: [providerRecord, secondProvider], activeProviderId: 'zhipu' })
-const useButton = buttonByText(switchTree, '设为当前')
 check(
-  '非当前提供商的卡片上有「设为当前」按钮',
-  useButton !== undefined && switchTree.text.includes('当前使用'),
-  switchTree.buttonTexts.join(','),
+  '两张卡片都没有「设为当前」入口（切换入口已下线，activeProviderId 仍由保存写回）',
+  switchTree.buttons.every((button) => !textOfElement(button).includes('设为当前'))
+    && !switchTree.text.includes('设为当前')
+    && cardTextsOf(switchTree).length === 2
+    && cardTextsOf(switchTree)[0].includes('智谱')
+    && cardTextsOf(switchTree)[1].includes('OpenAI'),
+  JSON.stringify({ cards: cardTextsOf(switchTree) }).slice(0, 200),
 )
-useButton?.props.onClick()
-await sleep(30)
 check(
-  '「设为当前」把 activeProviderId 落盘，且不动 providers',
-  switchBundle.updates.length === 1 && switchBundle.updates[0].patch.activeProviderId === 'openai'
-    && switchBundle.updates[0].patch.providers === undefined,
-  JSON.stringify(switchBundle.updates).slice(0, 240),
+  '「手动输入…」提示里的服务商名字非空（activeProviderId 没命中时回退 providers[0]）',
+  (() => {
+    // 故意不给 activeProviderId：Host 与界面都回退到 providers[0]，手动输入才有名字可用。
+    const tree = pageWith(cardBundle, { providers: [{ ...providerRecord, models: [] }], activeProviderId: '' })
+    const node = tree.nodes.find((entry) => entry.type === 'p' && entry.props?.id === 'dib-route-generate-primary-hint')
+    const text = node === undefined ? '' : textOfElement(node).trim()
+    return text === '手动填写的模型走当前生效服务商：智谱'
+      && !text.includes('当前没有生效的服务商')
+  })(),
+  (() => {
+    const tree = pageWith(cardBundle, { providers: [{ ...providerRecord, models: [] }], activeProviderId: '' })
+    const node = tree.nodes.find((entry) => entry.type === 'p' && entry.props?.id === 'dib-route-generate-primary-hint')
+    return node === undefined ? '(缺)' : textOfElement(node).trim()
+  })(),
 )
 
 /* 卡片上的「测试」同样要带这张卡片自己的 keyRef */

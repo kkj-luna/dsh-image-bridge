@@ -177,7 +177,7 @@ window.__ModuleLoader__.load({
         'label.model': '模型',
         'label.file': '文件',
         'nav': '生图桥',
-        'intro': '把外部生图模型接给当前模型使用：添加模型提供商，并选一个当前使用的，模型就能调用生图与改图能力。',
+        'intro': '把外部生图模型接给当前模型使用：先添加模型提供商（测试连接、获取模型），再在下面的「模型」区块里为生图与修图各指定一个模型。',
         'loading': '正在载入当前配置…',
         'unavailable': '配置界面暂时不可用（未能连上 Host 的配置服务）。',
         'loadFailed': '读取配置失败：',
@@ -187,8 +187,6 @@ window.__ModuleLoader__.load({
         'remove': '删除',
         'removeConfirm': '确认删除',
         'cancel': '取消',
-        'setActive': '设为当前',
-        'activeTag': '当前使用',
         'legacyTag': '现有配置',
         'legacyProviderName': '默认提供商',
         'test': '测试连接',
@@ -199,6 +197,7 @@ window.__ModuleLoader__.load({
         'dot.ok': '最近一次测试连接成功',
         'dot.fail': '最近一次测试连接失败',
         'dot.untested': '尚未测试连接',
+        'dot.connected': '已获取到可用模型列表',
         'editorAdd': '添加模型提供商',
         'editorEdit': '编辑模型提供商',
         'keyNote': 'API Key 保存在凭据服务里，不会写进配置文件，也不会回传浏览器。',
@@ -232,8 +231,6 @@ window.__ModuleLoader__.load({
         'noModelsYet': '还没有获取到模型列表：先点「测试连接」或「获取可用模型」，也可以直接填写模型名。',
         'none': '未选择',
         'inheritImage': '沿用生图模型',
-        'keyConfigured': '密钥已配置',
-        'keyMissing': '密钥未配置',
         'keyUnavailable': '凭据服务不可用，无法保存 API Key。',
         'needBaseUrl': '请先填写接口地址。',
         'size': '默认尺寸',
@@ -272,7 +269,6 @@ window.__ModuleLoader__.load({
         'saving': '保存中…',
         'saved': '已保存。',
         'savedKey': '密钥已保存。',
-        'activeSwitched': '已切换当前提供商。',
         'removed': '已删除该提供商。',
       },
       en: {
@@ -287,7 +283,7 @@ window.__ModuleLoader__.load({
         'label.model': 'Model',
         'label.file': 'File',
         'nav': 'Image Bridge',
-        'intro': 'Bridges an external image model into the current model: add a provider and pick the active one, then the model can generate and edit images.',
+        'intro': 'Bridges an external image model into the current model: add a provider (test the connection, fetch its models), then pick the models for generation and editing in the "Models" block below.',
         'loading': 'Loading current settings…',
         'unavailable': 'Configuration is unavailable (the Host configuration service is not reachable).',
         'loadFailed': 'Reading the configuration failed: ',
@@ -297,8 +293,6 @@ window.__ModuleLoader__.load({
         'remove': 'Delete',
         'removeConfirm': 'Confirm delete',
         'cancel': 'Cancel',
-        'setActive': 'Use this one',
-        'activeTag': 'In use',
         'legacyTag': 'Existing config',
         'legacyProviderName': 'Default provider',
         'test': 'Test connection',
@@ -309,6 +303,7 @@ window.__ModuleLoader__.load({
         'dot.ok': 'The last connection test succeeded',
         'dot.fail': 'The last connection test failed',
         'dot.untested': 'Not tested yet',
+        'dot.connected': 'Model list already fetched',
         'editorAdd': 'Add model provider',
         'editorEdit': 'Edit model provider',
         'keyNote': 'The API key lives in the credential service: it is never written to the config file and never sent back to the browser.',
@@ -342,8 +337,6 @@ window.__ModuleLoader__.load({
         'noModelsYet': 'No model list yet: run "Test connection" or "Fetch models" first — you can also type a model name.',
         'none': 'not selected',
         'inheritImage': 'reuse the image model',
-        'keyConfigured': 'Key configured',
-        'keyMissing': 'No key configured',
         'keyUnavailable': 'The credential service is unavailable, so the API key cannot be stored.',
         'needBaseUrl': 'Fill in the API base URL first.',
         'size': 'Default size',
@@ -382,7 +375,6 @@ window.__ModuleLoader__.load({
         'saving': 'Saving…',
         'saved': 'Saved.',
         'savedKey': 'Key stored.',
-        'activeSwitched': 'Active provider switched.',
         'removed': 'Provider deleted.',
       },
     }
@@ -435,9 +427,6 @@ window.__ModuleLoader__.load({
       '.dib-card-tag{flex:none;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-xs);color:var(--dsw-alias-label-secondary);padding:1px 6px;font-size:11px;line-height:16px;white-space:nowrap}',
       '.dib-card-tag-on{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary)}',
       '.dib-card-actions{display:inline-flex;align-items:center;gap:4px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}',
-      '.dib-card-body{display:flex;flex-direction:column;gap:2px}',
-      '.dib-card-sub{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-      '.dib-card-url{color:var(--dsw-alias-label-secondary)}',
       '.dib-dot{flex:none;display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-state-idle-primary)}',
       '.dib-dot-ok{background:var(--dsw-alias-state-success-primary)}',
       '.dib-dot-fail{background:var(--dsw-alias-state-error-primary)}',
@@ -955,6 +944,21 @@ window.__ModuleLoader__.load({
         if (typeof model === 'string' && model !== '' && !seen.includes(model)) seen.push(model)
       }
       return seen
+    }
+
+    /**
+     * 卡片的连接状态灯。
+     *
+     * - `fail`：**本次会话**里测试/获取失败过（只记在内存里，不写进配置）；
+     * - `ok`：本次会话测过且成功，或者这家 provider **已经保存过模型列表**
+     *   （`models` 非空 = 曾经成功拉到过），所以重新载入页面之后绿灯依然成立；
+     * - `idle`：从未成功、也没测过——灰灯。
+     */
+    function providerSignalOf(provider, testState) {
+      const tested = testState !== null && typeof testState === 'object' ? testState[provider?.id] : undefined
+      if (tested === 'fail') return 'fail'
+      if (tested === 'ok') return 'ok'
+      return Array.isArray(provider?.models) && provider.models.length > 0 ? 'ok' : 'idle'
     }
 
     /**
@@ -1630,23 +1634,12 @@ window.__ModuleLoader__.load({
         })
       }, [state.legacy, state.testState, patch])
 
-      /** 切换当前使用的提供商：只写 activeProviderId，立刻落盘。 */
-      const activate = React.useCallback(async (id) => {
-        const current = remotes.current
-        const settings = current === null || current === undefined ? undefined : current.settings
-        if (settings === undefined) return
-        patch({ phase: 'switching', status: '', statusKind: 'info' })
-        try {
-          const written = await settings.update(SETTINGS_NS, { activeProviderId: id }, undefined)
-          const failure = failureOf(written)
-          if (failure !== null) throw new Error(failure)
-          patch({ phase: 'idle', activeProviderId: id, status: trRef.current('activeSwitched'), statusKind: 'ok' })
-          report('info', '已切换当前提供商', JSON.stringify({ activeProviderId: id }))
-        } catch (error) {
-          report('error', '切换当前提供商失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
-          patch({ phase: 'idle', status: messageOf(error), statusKind: 'error' })
-        }
-      }, [patch])
+      /*
+       * 卡片上不再有「设为当前」入口：主用/备用模型已经按角色带上了 providerId，
+       * "当前生效服务商"对用户不再有意义。**`activeProviderId` 本身不删**——Host 的
+       * 三级回退（activeProviderId → providers[0] → 旧字段）仍然依赖它，只是界面不再提供
+       * 切换入口；保存时依旧原样写回。
+       */
 
       /** 删除提供商：从列表里移除并落盘；密钥留在凭据服务里（不替用户做破坏性清理）。 */
       const removeProvider = React.useCallback(async (provider) => {
@@ -1857,12 +1850,19 @@ window.__ModuleLoader__.load({
       const disabled = state.writable === false
       const busy = state.phase !== 'idle'
 
-      /** 一张提供商卡片。纯函数：不持有状态，出错只会影响这张。 */
+      /**
+       * 一张提供商卡片：**单行** —— [状态灯] 名称 [测试/编辑/删除]。
+       *
+       * 卡片正文（生图/改图模型、接口地址、密钥状态）已经去掉：那些信息在「编辑」浮层里
+       * 仍可看可改，主页只保留一眼能扫完的一行（对齐官方「设置 → 模型」页的观感）。
+       * 纯函数：不持有状态，出错只会影响这张。
+       */
       const cardOf = (provider) => {
-        const outcome = state.testState[provider.id]
-        const dotClass = outcome === 'ok' ? 'dib-dot dib-dot-ok' : outcome === 'fail' ? 'dib-dot dib-dot-fail' : 'dib-dot'
-        const dotTitle = outcome === 'ok' ? tr('dot.ok') : outcome === 'fail' ? tr('dot.fail') : tr('dot.untested')
-        const active = state.activeProviderId === provider.id
+        const signal = providerSignalOf(provider, state.testState)
+        const dotClass = signal === 'ok' ? 'dib-dot dib-dot-ok' : signal === 'fail' ? 'dib-dot dib-dot-fail' : 'dib-dot'
+        const dotTitle = signal === 'ok'
+          ? state.testState[provider.id] === 'ok' ? tr('dot.ok') : tr('dot.connected')
+          : signal === 'fail' ? tr('dot.fail') : tr('dot.untested')
         const confirming = state.confirmDelete === provider.id
         const name = provider.label !== '' ? provider.label : provider.legacy === true ? tr('legacyProviderName') : provider.id
         return h('li', { key: provider.id, className: 'dib-card' }, [
@@ -1870,7 +1870,6 @@ window.__ModuleLoader__.load({
             h('span', { key: 'dot', className: dotClass, title: dotTitle, 'aria-label': dotTitle, role: 'img' }),
             h('span', { key: 'name', className: 'dib-card-name', title: provider.id }, name),
             provider.legacy === true ? h('span', { key: 'legacy', className: 'dib-card-tag' }, tr('legacyTag')) : null,
-            active ? h('span', { key: 'active', className: 'dib-card-tag dib-card-tag-on' }, tr('activeTag')) : null,
             h('div', { key: 'actions', className: 'dib-card-actions' }, [
               h('button', {
                 key: 'test',
@@ -1879,13 +1878,6 @@ window.__ModuleLoader__.load({
                 disabled: disabled || busy,
                 onClick: () => { void testProvider(provider) },
               }, state.busyId === provider.id ? tr('testing') : tr('testShort')),
-              active ? null : h('button', {
-                key: 'use',
-                type: 'button',
-                className: 'dib-mini',
-                disabled: disabled || busy,
-                onClick: () => { void activate(provider.id) },
-              }, tr('setActive')),
               h('button', {
                 key: 'edit',
                 type: 'button',
@@ -1917,12 +1909,6 @@ window.__ModuleLoader__.load({
               }, tr('cancel')) : null,
             ]),
           ]),
-          h('div', { key: 'body', className: 'dib-card-body' }, [
-            h('span', { key: 'image', className: 'dib-card-sub' }, `${tr('imageModel')}：${provider.imageModel === '' ? tr('none') : provider.imageModel}`),
-            h('span', { key: 'edit', className: 'dib-card-sub' }, `${tr('editModel')}：${provider.editModel === '' ? tr('inheritImage') : provider.editModel}`),
-            provider.baseUrl === '' ? null : h('span', { key: 'url', className: 'dib-card-sub dib-card-url', title: provider.baseUrl }, provider.baseUrl),
-            h('span', { key: 'key', className: 'dib-card-sub' }, state.keyConfigured[provider.id] === true ? tr('keyConfigured') : tr('keyMissing')),
-          ]),
         ])
       }
 
@@ -1953,9 +1939,15 @@ window.__ModuleLoader__.load({
       const routeItemOf = (id) => modelRoutesOf(state.routes, state.activeProviderId)[id.split('.')[0]][id.split('.')[1]]
       const connected = state.providers.filter((provider) => Array.isArray(provider.models) && provider.models.length > 0)
       const hasConnected = connected.length > 0
-      const activeProvider = state.providers.find((provider) => provider.id === state.activeProviderId)
+      /*
+       * 「手动输入…」提示里的服务商名。
+       *
+       * `activeProviderId` 没命中时按 Host 的同一套回退取 `providers[0]`——所以只要还留着
+       * 至少一家服务商，这个名字就不会是空的（Host 那边解析手动输入的凭据也是这么回退的）。
+       */
+      const activeProvider = state.providers.find((provider) => provider.id === state.activeProviderId) ?? state.providers[0]
       const activeName = activeProvider === undefined
-        ? state.activeProviderId === '' ? '' : state.activeProviderId
+        ? ''
         : activeProvider.label !== '' ? activeProvider.label : activeProvider.id
       const activeLabel = activeName === '' ? tr('route.noActive') : activeName
       const routed = { generate: routeItemOf('generate.primary'), edit: routeItemOf('edit.primary') }
