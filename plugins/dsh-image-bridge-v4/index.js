@@ -21,6 +21,7 @@
  * @module dsh-image-bridge
  */
 import { appendFile, mkdir, writeFile } from 'node:fs/promises'
+import diagnostics from 'node:diagnostics_channel'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -144,7 +145,7 @@ export const Config = z === undefined ? undefined : z.object({
     .default({})
     .volatile()
     .description('生图/修图的模型路由：每项 { providerId, model }，可跨服务商选择；fallback 是主用失败或超时后的备用模型。'),
-  fallbackAfterMs: z.number().default(15000).volatile().description('主模型从发起请求到拿到响应头的预算（毫秒）；超过就中止并改用备用模型。整次调用的上限仍是 timeoutMs。'),
+  fallbackAfterMs: z.number().default(90000).volatile().description('主模型「请求发出后」多久没拿到响应头就改用备用模型（毫秒）。连接耗时不计入这个预算；整次调用的上限仍是 timeoutMs。同步生图接口常常要几十秒，这个值别设太小。'),
 })
 
 /** API Key 在 credentials 服务里的引用名（同时作为环境变量回退名）。 */
@@ -159,8 +160,21 @@ const CREDENTIAL_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
 /** 拉取模型列表的超时毫秒数；列表接口只是给设置页选模型用，不能久等。 */
 const MODELS_TIMEOUT_MS = 15000
 
-/** 主模型"多久没拿到响应头就换备用"的默认预算；设置页可改写（0/负数视为未设）。 */
-const DEFAULT_FALLBACK_AFTER_MS = 15000
+/**
+ * 主模型"请求发出后多久还没拿到响应头就换备用"的默认预算。
+ *
+ * 为什么是 90000 而不是更小：同步生图接口憋几十秒是常态（实测跨境到阿里云 MaaS 的
+ * qwen-image-3.0 用了 42–61 秒才回响应头），15 秒级的预算会让正常的慢生成被误判成失败、
+ * 白白切到备用。这里的语义是"值不值得再等"，不是"服务商坏了"——真正的总上限由 timeoutMs 管。
+ * 设置页可改写（留空或不合法即用这个默认值）。
+ */
+const DEFAULT_FALLBACK_AFTER_MS = 90000
+
+/** 超时后那次探活的超时：健康检查必须快，慢的探活本身没有诊断价值。 */
+const PROVIDER_PROBE_TIMEOUT_MS = 4000
+
+/** 连接阶段的宽限：只为防止"一直连不上"拖到 timeoutMs 上限，不参与响应头预算。 */
+const CONNECT_GRACE_MS = 10000
 
 /** 设置页「测试连接」用的环回 RPC 通道。 */
 const RPC_CHANNEL = '/dsh-image-bridge'
@@ -452,7 +466,12 @@ function normalizedConfig(config) {
     providers: Array.isArray(providers) ? providers.map((raw) => normalizeProvider(raw, taken)) : [],
     activeProviderId: nonEmptyString(value.activeProviderId),
     modelRoutes: normalizedRoutes(value.modelRoutes),
-    fallbackAfterMs: Number.isFinite(plainValueOf(value.fallbackAfterMs)) && plainValueOf(value.fallbackAfterMs) > 0
+    /*
+     * 只接受**正整数**毫秒——与客户端 `parseFallbackMs` 同一口径。
+     * 早先这里是 `Number.isFinite(...) && > 0`，于是 Host 认 1.5，而客户端要整数：
+     * 手改配置写个浮点，工具会照它执行，界面却把它洗成默认值，两边看到的不是同一个数。
+     */
+    fallbackAfterMs: Number.isInteger(plainValueOf(value.fallbackAfterMs)) && plainValueOf(value.fallbackAfterMs) > 0
       ? plainValueOf(value.fallbackAfterMs)
       : DEFAULT_FALLBACK_AFTER_MS,
   }
@@ -580,7 +599,21 @@ async function resolveModelRoute({ ctx, config, route }) {
   const model = nonEmptyString(route?.model)
   if (providerId === '' || model === '') return { kind: 'none' }
   const provider = (Array.isArray(config.providers) ? config.providers : []).find((item) => item.id === providerId)
-  if (provider === undefined) return { kind: 'none' }
+  if (provider === undefined) {
+    /*
+     * 路由配着，但它点名的那家服务商**不在了**（改过名字、删过卡片、手改过配置）。
+     *
+     * 这里绝不能返回 'none' 让调用方静默掉到下一档：下一档用的是「当前生效服务商」的
+     * imageModel，于是会出现"拿 A 家的模型名去问 B 家的地址"——真机上就是这么炸的：
+     * 路由里是 id `other`、卡片实际叫 `others`，结果把 A 家的模型名发到 B 家，
+     * 换回一句 `404 Model not exist`，排查时完全看不出真正的错在哪。
+     * 明确报错比一个看起来像"服务商拒绝了这个模型"的 404 有用得多。
+     */
+    return {
+      kind: 'unavailable',
+      message: `模型路由指向的服务商「${providerId}」不在服务商列表里（可能是改过名字或删掉了这张卡片），没有发出任何请求。请在「设置 → 生图桥」的「模型」区块里重新选一次模型。`,
+    }
+  }
   if (provider.baseUrl === '') {
     return { kind: 'unavailable', message: `模型路由指向的服务商「${provider.label}」没有填写接口地址（baseUrl）。` }
   }
@@ -614,25 +647,46 @@ async function keyForEndpoint(ctx, endpoint) {
 async function imageAttemptPlan({ ctx, config, role, requestedModel }) {
   const routes = config.modelRoutes[role]
   const primaryRoute = await resolveModelRoute({ ctx, config, route: routes.primary })
-  if (primaryRoute.kind === 'unavailable') throw new Error(primaryRoute.message)
+  const fallbackRoute = await resolveModelRoute({ ctx, config, route: routes.fallback })
+  const fallback = fallbackRoute.kind === 'ready' ? fallbackRoute.endpoint : undefined
+  const fallbackNote = fallbackRoute.kind === 'unavailable' ? fallbackRoute.message : undefined
 
+  /*
+   * 主用**构造期**就会失败的情况：路由指向的服务商不在、缺地址、缺凭据，或显式给了 model
+   * 但当前生效服务商拿不到密钥。
+   *
+   * 这类失败**不能直接 throw**：备用已经配好并可用时，它本来能救这次调用——"网络失败换备用"
+   * 的承诺必须在"配置失败"上同样成立，否则用户会看到"配了备用却从不上场"。
+   * 所以先把失败原因收下来，等备用解析完再决定：有可用备用 → 只用备用并带上原因；
+   * 一个都不剩 → 明确报出来（不发任何请求）。
+   */
+  let primaryFailure
   let primary
-  if (requestedModel !== '') {
+  if (primaryRoute.kind === 'unavailable') {
+    primaryFailure = primaryRoute.message
+  } else if (requestedModel !== '') {
     const endpoint = endpointFor(config, role)
-    primary = { ...endpoint, model: requestedModel, apiKey: await keyForEndpoint(ctx, endpoint) }
+    try {
+      primary = { ...endpoint, model: requestedModel, apiKey: await keyForEndpoint(ctx, endpoint) }
+    } catch (error) {
+      primaryFailure = error instanceof Error ? error.message : String(error)
+    }
   } else if (primaryRoute.kind === 'ready') {
     primary = primaryRoute.endpoint
   } else {
     const endpoint = endpointFor(config, role)
-    primary = { ...endpoint, apiKey: await keyForEndpoint(ctx, endpoint) }
+    try {
+      primary = { ...endpoint, apiKey: await keyForEndpoint(ctx, endpoint) }
+    } catch (error) {
+      primaryFailure = error instanceof Error ? error.message : String(error)
+    }
   }
 
-  const fallbackRoute = await resolveModelRoute({ ctx, config, route: routes.fallback })
-  return {
-    primary,
-    ...(fallbackRoute.kind === 'ready' ? { fallback: fallbackRoute.endpoint } : {}),
-    ...(fallbackRoute.kind === 'unavailable' ? { fallbackNote: fallbackRoute.message } : {}),
+  if (primaryFailure !== undefined) {
+    if (fallback !== undefined) return { primary: undefined, fallback, primaryNote: primaryFailure, fallbackNote }
+    throw new Error(`${primaryFailure}${fallbackNote === undefined ? '' : `（备用模型也不可用：${fallbackNote}）`}`)
   }
+  return { primary, ...(fallback === undefined ? {} : { fallback }), ...(fallbackNote === undefined ? {} : { fallbackNote }) }
 }
 
 /**
@@ -680,8 +734,99 @@ function authHeaders(apiKey) {
   return apiKey === '' ? {} : { authorization: `Bearer ${apiKey}` }
 }
 
-async function readJsonResponse(response) {
-  const text = await response.text()
+/** 下载服务商返回的图片时的上限与超时：与改图上传的 20MiB 对齐，避免被超大响应打爆内存。 */
+const IMAGE_DOWNLOAD_MAX_BYTES = 20 * 1024 * 1024
+const IMAGE_DOWNLOAD_TIMEOUT_MS = 15000
+
+/**
+ * 服务商返回的图片地址能不能去取？
+ *
+ * 只允许 `http` / `https`，并拒绝环回与私有网段。理由：这个 URL 是**对方给的**，
+ * 无条件去 fetch 就等于替它发内网请求（SSRF）——云元数据地址 `169.254.169.254`、
+ * 局域网设备、本机服务都能被它借我们的进程探一遍；`file:` 之类的协议更不该碰。
+ * 注意这是纵深防御：真实生图服务商给的都是公网 https 地址，拦掉这些不影响正常使用。
+ */
+function imageUrlRejection(url) {
+  let parsed
+  try {
+    parsed = new URL(url)
+  } catch {
+    return '地址不是合法的 URL'
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return `不支持的协议 ${parsed.protocol}`
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/gu, '')
+  if (host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host.endsWith('.local')) {
+    return '指向本机/本地网络'
+  }
+  if (/^(127\.|10\.|192\.168\.|169\.254\.|0\.)/u.test(host)) return '指向私有网段'
+  if (/^172\.(1[6-9]|2[0-9]|3[01])\./u.test(host)) return '指向私有网段'
+  if (/^(fe80:|fc|fd|::ffff:127\.)/iu.test(host)) return '指向私有网段'
+  return undefined
+}
+
+/**
+ * 服务商填的接口地址能不能用？
+ *
+ * 与图片地址**刻意不同**：这里只校验协议，**允许**本机与私网。
+ * 因为这是用户自己在设置页填的、明确的意思表示——本地生图服务（Ollama、LM Studio、
+ * 本地 mock、内网网关）都是正当用法，本机 Harness 的配置里就有一个 `http://127.0.0.1:...`
+ * 的常规配置。SSRF 的风险面在"别人给的地址"（见 imageUrlRejection），不在用户自己的地址。
+ * 返回 `undefined` 表示通过。
+ */
+function baseUrlRejection(baseUrl) {
+  let parsed
+  try {
+    parsed = new URL(baseUrl)
+  } catch {
+    return '不是合法的 URL（应形如 https://api.example.com/v1）'
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return `不支持的协议 ${parsed.protocol}`
+  if (parsed.hostname === '') return '缺少主机名'
+  return undefined
+}
+
+
+/** 生图接口 JSON 回包的上限：防止服务商返回无界正文把内存吃光（正常回包远小于它）。 */
+const JSON_RESPONSE_MAX_BYTES = 32 * 1024 * 1024
+
+/**
+ * 读取响应正文，带**上限**与**取消**。
+ *
+ * 响应头到手只是"对方开始答了"，正文可能几 MB、也可能永远不结束。旧实现直接 `text()`：
+ * 既没有上限（恶意/故障服务商可以让内存放大），也不理 `exec.signal`（用户取消后照样读到底）。
+ * 这里用 Promise.race 把正文读取和取消信号赛跑——不改动 fetch 语义，也不依赖流的中断细节。
+ */
+async function readCappedText(response, { signal, limitBytes = JSON_RESPONSE_MAX_BYTES } = {}) {
+  const declared = Number(response.headers?.get?.('content-length'))
+  if (Number.isFinite(declared) && declared > limitBytes) {
+    throw new Error(`接口回包声明 ${declared} 字节，超过 ${limitBytes} 字节上限`)
+  }
+  let onAbort
+  const aborted = new Promise((_resolve, reject) => {
+    if (signal === undefined || signal === null) return
+    if (signal.aborted === true) {
+      reject(new Error('已被调用方取消'))
+      return
+    }
+    onAbort = () => reject(new Error('已被调用方取消'))
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  try {
+    const text = await Promise.race([
+      response.text(),
+      aborted,
+    ])
+    if (typeof text === 'string' && text.length > limitBytes) {
+      throw new Error(`接口回包超过 ${limitBytes} 字节上限`)
+    }
+    return text
+  } finally {
+    if (onAbort !== undefined && signal !== undefined && signal !== null) signal.removeEventListener('abort', onAbort)
+  }
+}
+
+async function readJsonResponse(response, signal) {
+  const text = await readCappedText(response, { signal })
   if (!response.ok) {
     throw new Error(`图片接口返回 ${response.status} ${response.statusText}：${truncate(text) || '(空响应)'}`)
   }
@@ -698,9 +843,48 @@ async function bytesOfItem(item, signal) {
     return new Uint8Array(Buffer.from(item.b64_json, 'base64'))
   }
   if (typeof item.url === 'string' && item.url.length > 0) {
-    const response = await fetchResilient(item.url, {}, signal)
-    if (!response.ok) throw new Error(`下载生成的图片失败：${response.status} ${response.statusText}`)
-    return new Uint8Array(await response.arrayBuffer())
+    // 这个地址是服务商给的，不是我们选的：先过 SSRF 白名单，再限时限长。
+    const rejection = imageUrlRejection(item.url)
+    if (rejection !== undefined) {
+      throw new Error(`下载生成的图片失败：服务商返回的图片地址${rejection}，已拒绝请求（${truncate(item.url)}）`)
+    }
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new Error(`download-timeout`)), IMAGE_DOWNLOAD_TIMEOUT_MS)
+    const forward = () => controller.abort(signal?.reason)
+    if (signal !== undefined && signal !== null) signal.addEventListener('abort', forward, { once: true })
+    try {
+      const response = await fetchResilient(item.url, { signal: controller.signal }, controller.signal)
+      if (!response.ok) throw new Error(`下载生成的图片失败：${response.status} ${response.statusText}`)
+      const declared = Number(response.headers.get('content-length'))
+      if (Number.isFinite(declared) && declared > IMAGE_DOWNLOAD_MAX_BYTES) {
+        throw new Error(`下载生成的图片失败：响应声明 ${declared} 字节，超过 ${IMAGE_DOWNLOAD_MAX_BYTES} 字节上限`)
+      }
+      // 分块读取并在累计超限时立刻中止：只信 content-length 挡不住不报长度的服务端。
+      const reader = response.body?.getReader()
+      if (reader === undefined) return new Uint8Array(await response.arrayBuffer())
+      const chunks = []
+      let total = 0
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done === true) break
+        total += value.length
+        if (total > IMAGE_DOWNLOAD_MAX_BYTES) {
+          await reader.cancel().catch(() => {})
+          throw new Error(`下载生成的图片失败：响应超过 ${IMAGE_DOWNLOAD_MAX_BYTES} 字节上限`)
+        }
+        chunks.push(value)
+      }
+      const merged = new Uint8Array(total)
+      let offset = 0
+      for (const chunk of chunks) {
+        merged.set(chunk, offset)
+        offset += chunk.length
+      }
+      return merged
+    } finally {
+      clearTimeout(timer)
+      if (signal !== undefined && signal !== null) signal.removeEventListener('abort', forward)
+    }
   }
   return undefined
 }
@@ -846,13 +1030,15 @@ function describeSignal(signal) {
  */
 async function fetchResilient(url, init, signal) {
   try {
-    return await fetch(url, init)
+    // 首次**带上**调用方的信号：不然取消/超时根本传不到网络层，这里只会打印一句"已中止"。
+    return await fetch(url, signal === undefined || signal === null ? init : { ...init, signal })
   } catch (error) {
     const first = describeFetchFailure(error, url)
     const state = describeSignal(signal)
     if (signal !== undefined && signal !== null && signal.aborted === true) {
       throw new Error(`${first}（exec.signal ${state}）`)
     }
+    // 只有在"没人要求中止"时才去掉信号重试一次；此时放弃信号不违背取消语义。
     const retryInit = { ...init }
     delete retryInit.signal
     try {
@@ -864,6 +1050,110 @@ async function fetchResilient(url, init, signal) {
 }
 
 /**
+ * "这次请求真正发出去了"的时刻。
+ *
+ * 为什么需要它：`fetch()` 一调用就要先解析 DNS、建 TCP、握 TLS，这些时间**不是**服务商
+ * 的响应时间。旧实现从调用 fetch 起就开始算预算，于是连接慢（跨境、代理、冷连接）会白白
+ * 吃掉"多久没响应就换备用"的额度，甚至出现"请求还没送到就已经超时"——报的却是服务商超时。
+ *
+ * 取值来源是 undici 自己的诊断通道（`node:diagnostics_channel`，Node 内置、不引第三方依赖）：
+ * `undici:request:bodySent` 在请求体写完、请求真正上线时触发。实测（跨境到阿里云 MaaS）：
+ * 请求发出 @381ms、响应头 @60818ms —— 连接只占 0.6%，服务商处理占了 99.4%。
+ *
+ * 用途是**诊断与推迟起算**，不是安全边界：拿不到事件时（通道被改名、非 fetch 路径）就
+ * 退化回"从调用开始算"，也就是旧行为，绝不会因此不设预算。
+ */
+let lastRequestSentAt = 0
+/**
+ * 请求发出事件的序号：发出时递增。
+ *
+ * 为什么用序号而不是"比较时间戳"：同毫秒内 `bodySent` 可能正好等于本次尝试的开始时刻，
+ * 用 `>` 比较会把"已发出"判成"没发出"（真机上就这样：startedAt 与 moduleSentAt 逐毫秒相同）。
+ * 任何基于"时间差"的推断，在计时器分辨率面前都是不可靠的；序号没有这个问题。
+ * 极小的残留可能：并发多请求时序号会跟着最后一个事件走，那种情况下预算只会更宽松、不会误杀。
+ */
+let requestSentSeq = 0
+try {
+  diagnostics.subscribe('undici:request:bodySent', () => {
+    lastRequestSentAt = Date.now()
+    requestSentSeq += 1
+  })
+} catch {
+  // 订阅失败（旧 Node、通道缺失）只意味着退回旧行为，不是错误。
+}
+
+/**
+ * 只读诊断：最近一次"请求真正发出"的时刻（`0` = 没拿到，此时预算退回从调用开始算）。
+ *
+ * 导出它是为了**可验证**：响应头预算是否有正确跳过"发出前"的时间，断言必须能读到这个值，
+ * 否则测试只能间接猜（"连接慢"这类用例很容易造不出效果却看起来通过）。
+ * 也供维护者手工核对通道在当前 Node 上是否可用。
+ */
+export function lastRequestSentMoment() {
+  return lastRequestSentAt
+}
+
+/** 只读诊断：最近一次预算判定的原始数值，用来解释"为什么判成了连接阶段"。 */
+export function lastBudgetVerdict() {
+  return lastBudgetVerdictValue
+}
+
+let lastBudgetVerdictValue = null
+
+/** 响应头预算的判定依据：以"请求发出时刻"为基准的**固定**截止时刻，连接阶段另有宽限上限。 */
+function headerBudgetOf({ budgetMs, startedAt, connectGraceMs }) {
+  /** 本次尝试开始时的发出事件序号：只有它变大，才说明"这一次的请求确实发出去了"。 */
+  const startSeq = requestSentSeq
+  return {
+    /**
+     * 请求真正发出的时刻（0 = 还没发出）。
+     *
+     * **必须惰性读取**：构造预算的那一刻请求必然还没发出去（`lastRequestSentAt` 还是旧值或 0），
+     * 若在这里快照一次，之后永远读不到"已发出"，每次超时都会被判成"发出前"——第一版就是这么错的。
+     *
+     * 判定用**事件序号**而不是"比较时间戳"：请求常常与本次尝试落在同一毫秒，用 `>` 比较会把
+     * "已发出"误判成"没发出"（真机上就是：startedAt 与 moduleSentAt 逐毫秒相同）——第二版错在这里。
+     * 任何基于时间差的推断都受计时器分辨率摆布，序号不会。
+     * 极小残留：并发多请求时序号跟着最后一个事件走，那种情况下预算只会更宽松，不会误杀。
+     */
+    requestSentAt() {
+      if (requestSentSeq > startSeq) {
+        // 事件时刻可能早于 startedAt 同毫秒，夹到 startedAt，保证"发出后"从不为负。
+        return lastRequestSentAt > 0 ? Math.max(lastRequestSentAt, startedAt) : startedAt
+      }
+      // 序号没动：订阅不可用（序号恒为 0）时退回"时间戳不早于开始"的宽松判定。
+      return requestSentSeq === 0 && lastRequestSentAt >= startedAt ? lastRequestSentAt : 0
+    },
+    /** 请求已发出后还剩多少毫秒（未发出时视为无限，交给连接宽限管）。 */
+    remaining() {
+      const sentAt = this.requestSentAt()
+      return sentAt === 0 ? Number.POSITIVE_INFINITY : Math.max(0, budgetMs - (Date.now() - sentAt))
+    },
+    /** 发出前的等待用了多少毫秒（未发出时返回已等待时长）。 */
+    connectMs() {
+      const sentAt = this.requestSentAt()
+      return Math.round((sentAt === 0 ? Date.now() : sentAt) - startedAt)
+    },
+    /**
+     * 计时器该定多久。
+     *
+     * 关键是"截止时刻固定、不随事件刷新"：
+     *   已发出 → 发出时刻 + 预算；
+     *   未发出 → 开始 + min(连接宽限, 预算)。
+     * 若按"每次重算剩余量"来重置计时器，连接宽限会把服务商的慢响应也当成连接时间，
+     * 等于把预算悄悄放宽到宽限值——那也是被测试抓到过的一版错误。
+     */
+    nextDelayMs() {
+      const sentAt = this.requestSentAt()
+      const deadline = sentAt === 0
+        ? startedAt + Math.min(connectGraceMs, budgetMs)
+        : sentAt + budgetMs
+      return Math.max(1, deadline - Date.now())
+    },
+  }
+}
+
+/**
  * 一次"到响应头为止"的请求尝试。
  *
  * 两个中止来源：`exec.signal`（调用方取消）与 `fallbackAfterMs` 预算（响应头超时）。
@@ -871,18 +1161,50 @@ async function fetchResilient(url, init, signal) {
  * 改用备用模型；超时才轮到备用上场。预算只算到拿到响应头为止：头一到就撤销计时器，
  * 之后读 body 不受它限制（整次调用的上限仍由工具的 timeoutMs 管）。
  *
+ * **预算从"请求真正发出"起算**（见 headerBudgetOf）：DNS / TCP / TLS 不占额度，且截止时刻
+ * 固定不随事件刷新。连接阶段另有 `connectGraceMs` 上限（且不超过预算本身），只为防止
+ * "一直连不上"把整次调用拖到 timeoutMs；正常的跨境连接（实测 381ms）远低于它。
+ *
  * 网络层失败保留既有的"去掉 exec.signal 重试一次"兜底（fetchResilient 的行为），
  * 但重试时换成只带预算的信号——否则"多久没响应头就换人"会在重试路径上失效。
  *
  * @returns {{kind:'response', response}|{kind:'timeout'|'cancelled'|'failed', error}}
  */
-async function attemptWithHeaderBudget({ url, init, signal, budgetMs }) {
+async function attemptWithHeaderBudget({ url, init, signal, budgetMs, connectGraceMs = 10000 }) {
   const budget = new AbortController()
+  const startedAt = Date.now()
   let expired = false
-  const timer = setTimeout(() => {
+  let timer
+  const headerBudget = headerBudgetOf({ budgetMs, startedAt, connectGraceMs })
+  const arm = () => {
+    clearTimeout(timer)
+    timer = setTimeout(fire, Math.max(1, headerBudget.nextDelayMs()))
+  }
+  function fire() {
+    lastBudgetVerdictValue = {
+      startedAt,
+      moduleSentAt: lastRequestSentAt,
+      seenSentAt: headerBudget.requestSentAt(),
+      now: Date.now(),
+      budgetMs,
+      connectMs: headerBudget.connectMs(),
+    }
+    // 还没发出去 = 连接阶段超了宽限：如实说是连接没建立，别说成"服务商没响应"。
+    if (headerBudget.requestSentAt() === 0) {
+      expired = true
+      budget.abort(new Error('connect-timeout'))
+      return
+    }
+    const left = headerBudget.remaining()
+    if (left > 0) {
+      // 计时器在"请求发出"的同一瞬间先响了：按剩余额度重新计时，不误判超时。
+      timer = setTimeout(fire, left)
+      return
+    }
     expired = true
     budget.abort(new Error('header-timeout'))
-  }, budgetMs)
+  }
+  arm()
   const forwardAbort = () => budget.abort(signal?.reason)
   const callerAborted = () => signal !== undefined && signal !== null && signal.aborted === true
   if (callerAborted()) budget.abort(signal.reason)
@@ -895,12 +1217,12 @@ async function attemptWithHeaderBudget({ url, init, signal, budgetMs }) {
       const first = describeFetchFailure(error, url)
       // 先看取消：调用方要求停止时，任何"重试/换人"都是错的。
       if (callerAborted()) return { kind: 'cancelled', error: new Error(`${first}（exec.signal ${describeSignal(signal)}）`) }
-      if (expired) return { kind: 'timeout', error: new Error(`${first}（超过 ${budgetMs}ms 仍未拿到响应头）`) }
+      if (expired) return { kind: 'timeout', error: new Error(timeoutNote(first, headerBudget, budgetMs)) }
       try {
         response = await fetch(url, { ...init, signal: budget.signal })
       } catch (retryError) {
         if (callerAborted()) return { kind: 'cancelled', error: new Error(`${first}（exec.signal ${describeSignal(signal)}）`) }
-        if (expired) return { kind: 'timeout', error: new Error(`${first}（超过 ${budgetMs}ms 仍未拿到响应头）`) }
+        if (expired) return { kind: 'timeout', error: new Error(timeoutNote(first, headerBudget, budgetMs)) }
         return { kind: 'failed', error: new Error(`${first}（exec.signal ${describeSignal(signal)}）；去掉信号重试仍失败：${describeFetchFailure(retryError, url)}`) }
       }
     }
@@ -909,6 +1231,14 @@ async function attemptWithHeaderBudget({ url, init, signal, budgetMs }) {
     clearTimeout(timer)
     if (signal !== undefined && signal !== null) signal.removeEventListener('abort', forwardAbort)
   }
+}
+
+/** 超时文案：请求发出后超时算服务商问题，连接阶段超时算连接问题，两者不能混为一谈。 */
+function timeoutNote(first, headerBudget, budgetMs) {
+  if (headerBudget.requestSentAt() === 0) {
+    return `${first}（连接阶段超过 ${Math.round(headerBudget.connectMs())}ms 仍未把请求发出去；响应头预算 ${budgetMs}ms 不包含连接时间）`
+  }
+  return `${first}（请求发出后超过 ${budgetMs}ms 仍未拿到响应头；连接耗时 ${headerBudget.connectMs()}ms 不计入这个预算）`
 }
 
 /** 按端点拼出一次生图/改图请求：生图走 JSON，改图走 multipart。 */
@@ -932,6 +1262,43 @@ function imageRequestSpec({ endpoint, kind, prompt, size, model, n, file }) {
 }
 
 /**
+ * 超时之后的一次探活：这家服务商现在是活的吗？
+ *
+ * 为什么需要它：客户端**看不到对方有没有收到请求**——HTTP 没有"已收到"确认，1xx 中间响应
+ * 在 fetch 里也拿不到（实测 `103 Early Hints` 不触发任何回调）。所以"响应头超时"这一条
+ * 错误信息本身分不清两种完全不同的处境：
+ *   - 服务商已经挂了 / 地址不通：再等多久都没用，应该马上去修配置；
+ *   - 服务商正在慢慢生成（同步接口憋几十秒很常见，实测 42–61 秒）：只是我们等不了。
+ * 探活能给出可操作的区分：打一个**便宜且不产生生图费用**的 `GET {baseUrl}/models`，
+ * 通了就说明"服务在、密钥有效"，问题在"这次生成太慢"。
+ *
+ * 刻意保守：任何 HTTP 响应都算"活着"（404/401 也说明服务器在应答）；探活自身失败或超时
+ * 只作为**软提示**附在错误后面，绝不改变原先的失败判定，也不影响是否换备用。
+ */
+async function probeProviderAlive(endpoint, signal) {
+  if (endpoint === undefined || typeof endpoint.baseUrl !== 'string' || endpoint.baseUrl === '') return ''
+  const budget = new AbortController()
+  const forward = () => budget.abort(signal?.reason)
+  signal?.addEventListener?.('abort', forward, { once: true })
+  const timer = setTimeout(() => budget.abort(new Error('probe-timeout')), PROVIDER_PROBE_TIMEOUT_MS)
+  const startedAt = Date.now()
+  try {
+    const response = await fetch(`${endpoint.baseUrl}/models`, {
+      method: 'GET',
+      headers: authHeaders(endpoint.apiKey),
+      signal: budget.signal,
+    })
+    return `（超时后探活：${endpoint.baseUrl}/models ${Date.now() - startedAt}ms 内应答 HTTP ${response.status}——服务商是活的、密钥有效，这次只是生成慢；可把「主模型超时」调大）`
+  } catch (error) {
+    if (signal !== undefined && signal !== null && signal.aborted === true) return ''
+    return `（超时后探活：${endpoint.baseUrl}/models 也连不上——服务商当前不可达，不只是这次慢：${describeFetchFailure(error, `${endpoint.baseUrl}/models`)}）`
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener?.('abort', forward)
+  }
+}
+
+/**
  * 一次取图尝试：只负责"发出请求并拿到可用图片"。
  *
  * 网络失败、响应头超时、非 2xx（含回包不是 JSON）、以及**回包正常但解析不出任何可用图片**
@@ -941,11 +1308,19 @@ function imageRequestSpec({ endpoint, kind, prompt, size, model, n, file }) {
  */
 async function requestImagesOnce({ endpoint, kind, prompt, size, model, n, file, signal, budgetMs }) {
   const spec = imageRequestSpec({ endpoint, kind, prompt, size, model, n, file })
-  const attempt = await attemptWithHeaderBudget({ url: spec.url, init: spec.init, signal, budgetMs })
+  const attempt = await attemptWithHeaderBudget({ url: spec.url, init: spec.init, signal, budgetMs, connectGraceMs: CONNECT_GRACE_MS })
+  if (attempt.kind === 'timeout') {
+    // 只在"发出去了但没回头"时探活：连接阶段超时已经说清是连不上，再探一次没有新信息。
+    if (!attempt.error.message.includes('连接阶段')) {
+      const note = await probeProviderAlive(endpoint, signal)
+      if (note !== '') return { kind: 'timeout', error: new Error(`${attempt.error.message}${note}`) }
+    }
+    return attempt
+  }
   if (attempt.kind !== 'response') return attempt
   let payload
   try {
-    payload = await readJsonResponse(attempt.response)
+    payload = await readJsonResponse(attempt.response, signal)
   } catch (error) {
     return { kind: 'failed', error: error instanceof Error ? error : new Error(String(error)) }
   }
@@ -968,25 +1343,44 @@ async function requestImagesOnce({ endpoint, kind, prompt, size, model, n, file,
  * @returns {{ images, endpoint, warning? }}
  */
 async function requestImagesWithFallback({ plan, label, kind, prompt, size, n, file, signal, budgetMs }) {
+  /*
+   * 主用可能在**构造期**就不可用（路由指向的服务商不在、缺地址、缺凭据）。
+   * imageAttemptPlan 把这种失败收在 `primaryNote` 里并保留备用：备用可用就直接走备用，
+   * 不能因为主用没构造出来就丢掉整次调用。
+   */
   const primary = plan.primary
-  const first = await requestImagesOnce({ endpoint: primary, kind, prompt, size, model: primary.model, n, file, signal, budgetMs })
-  if (first.kind === 'images') return { ...first, endpoint: primary }
-  if (first.kind === 'cancelled') throw first.error
+  let first
+  let primaryLabel
+  if (primary === undefined) {
+    primaryLabel = '主用模型'
+    first = { kind: 'failed', error: new Error(plan.primaryNote ?? '主用模型不可用') }
+  } else {
+    primaryLabel = `「${primary.model}」`
+    first = await requestImagesOnce({ endpoint: primary, kind, prompt, size, model: primary.model, n, file, signal, budgetMs })
+    if (first.kind === 'images') return { ...first, endpoint: primary }
+    if (first.kind === 'cancelled') throw first.error
+  }
   if (plan.fallback === undefined) {
     const note = plan.fallbackNote === undefined ? '' : `（备用模型不可用：${plan.fallbackNote}）`
-    throw new Error(`${label}「${primary.model}」失败：${first.error.message}${note}`)
+    throw new Error(`${label}${primaryLabel === '主用模型' ? '' : primaryLabel}失败：${first.error.message}${note}`)
   }
   const fallback = plan.fallback
   const second = await requestImagesOnce({ endpoint: fallback, kind, prompt, size, model: fallback.model, n, file, signal, budgetMs })
   if (second.kind === 'images') {
+    /*
+     * 主用是构造期失败（路由失效/缺地址/缺凭据）时，文案里不能写"模型「undefined」失败"——
+     * 那种半截话正是这次真机事故里最误导人的地方。直接用失败原因本身。
+     */
     return {
       ...second,
       endpoint: fallback,
-      warning: `${label}「${primary.model}」未能成功（${first.error.message}），已改用备用模型「${fallback.model}」。`,
+      warning: primary === undefined
+        ? `${label}：${first.error.message}，已改用备用模型「${fallback.model}」。`
+        : `${label}${primaryLabel}未能成功（${first.error.message}），已改用备用模型「${fallback.model}」。`,
     }
   }
   if (second.kind === 'cancelled') throw second.error
-  throw new Error(`${label}「${primary.model}」失败：${first.error.message}；备用模型「${fallback.model}」也失败：${second.error.message}`)
+  throw new Error(`${label}${primaryLabel}失败：${first.error.message}；备用模型「${fallback.model}」也失败：${second.error.message}`)
 }
 
 /**
@@ -1160,7 +1554,8 @@ async function fetchModelsPayload({ baseUrl, apiKey, timeoutMessage }) {
     }
     let text
     try {
-      text = await response.text()
+      // 正文读取也受同一个超时控制：旧实现只给响应头限时，正文一旦不结束就挂死。
+      text = await readCappedText(response, { signal: controller.signal, limitBytes: JSON_RESPONSE_MAX_BYTES })
     } catch (error) {
       if (controller.signal.aborted) throw new Error(timeoutMessage(url))
       throw new Error(`读取模型列表响应失败：${error instanceof Error ? error.message : String(error)}`)
@@ -1584,8 +1979,22 @@ function registerTestRoute(ctx, applyConfig) {
               ? '本次请求没有可用的 API Key：请先在这张卡片上填入密钥并保存，再点「测试连接」或「获取可用模型」。'
               : `凭据 ${keyRef} 里还没有保存密钥：请在「设置 → 生图桥」里为这家服务商填入 API Key 并保存后重试。`)
           }
-          const fallbackBaseUrl = provider !== undefined && provider.baseUrl !== '' ? provider.baseUrl : live.baseUrl
-          const baseUrl = typeof payload.baseUrl === 'string' && payload.baseUrl.trim() !== '' ? payload.baseUrl.trim() : fallbackBaseUrl
+          /*
+           * 地址**同样不回退**。
+           *
+           * 回退密钥是"把 A 的密钥发到 B 的地址"，回退地址则是它的镜像版：新建卡片只填了
+           * 密钥就点「测试连接」→ 拿 `url-A + key-B` 去发 `GET /models`，既把 B 的密钥
+           * 交给了 A 的地址，又把 A 的响应当成了 B 的诊断。两个字段必须来自同一次填写。
+           */
+          const declaredBaseUrl = typeof payload.baseUrl === 'string' ? payload.baseUrl.trim() : ''
+          if (declaredBaseUrl === '') {
+            throw new Error('本次请求没有可用的接口地址：请先在这张卡片上填写接口地址并保存，再点「测试连接」或「获取可用模型」。')
+          }
+          const urlRejection = baseUrlRejection(declaredBaseUrl)
+          if (urlRejection !== undefined) {
+            throw new Error(`接口地址不可用：${urlRejection}（${truncate(declaredBaseUrl)}）。请填写服务商的 https 公网地址。`)
+          }
+          const baseUrl = declaredBaseUrl
           if (endpoint === 'models') {
             response.end(envelopeOf2(message.rpcId, { ok: true, value: { models: await listModels({ baseUrl, apiKey, keyRef }) } }))
             return
