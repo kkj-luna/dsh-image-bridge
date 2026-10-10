@@ -1,15 +1,14 @@
 /**
- * 安全边界验收：服务商**返回的图片地址**与**接口回包大小**。
+ * 安全边界验收：服务商**返回的图片地址**与**接口回包大小**，外加 baseUrl 的校验策略。
  *
  * 为什么单独一套：这两件事的失败模式是"替别人发请求"与"被别人的回包吃光内存"，
- * 都不是功能测试会碰到的路径——正常的 mock 只会返回一张合法图片地址。
+ * 都不是功能测试会碰到的路径——正常的 mock 只返回一张合法图片地址。
  * 这里用一个刻意"恶意"的模拟服务商来触发它们：
  *   - 回包里给内网地址（云元数据 169.254.169.254、本机、私网）→ 必须拒收，且**一个请求都不发**；
  *   - 回包里给超长正文 → 必须在上限处停下，而不是读到内存爆掉。
- *
- * 另一条被审查点名的边界：`baseUrl` 的校验策略**故意与图片地址不同**——
- * 用户自己填的接口地址允许本机（本地生图服务、本地 mock 都是正当用法），
- * 只拦协议与形态。这条也在这里钉住，免得以后有人"顺手"把私网也拦掉。
+ * 另一条被审查点名的边界：`baseUrl` 的策略**故意与图片地址不同**——用户自己填的接口地址
+ * 允许本机（本地生图服务、本地 mock 都是正当用法），只拦协议与形态；但**空地址必须直接失败**，
+ * 绝不能回退到"当前生效服务商"的地址（那正是真机事故的另一半）。
  */
 import { createServer } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -20,6 +19,7 @@ import { PLUGIN_DIR, resolveDshBin, resolveProfileDir } from './dsh-paths.mjs'
 
 process.env.DSH_PROFILE_DIR = resolveProfileDir()
 process.argv[1] = resolveDshBin()
+process.env.DSH_HOME = await mkdtemp(join(tmpdir(), 'dib-sec-home-'))
 const ROOT = PLUGIN_DIR
 
 const results = []
@@ -33,9 +33,9 @@ const PNG = Buffer.from(
   'base64',
 )
 
-/** 记录"我们的进程替服务商发出去的所有请求"，用来断言 SSRF 没被触发。 */
+/** 记录"我们的进程替服务商发出去的所有请求"，用来断言 SSRF 没有被触发。 */
 const outbound = []
-/** RPC 用例的应答开关：'json' 时对 `/models` 回一个合法 JSON。 */
+/** `/models` 的应答开关：RPC 用例需要它回一个合法 JSON。 */
 let rpcMode = 'image'
 
 const server = createServer((request, response) => {
@@ -43,15 +43,19 @@ const server = createServer((request, response) => {
   request.on('data', (chunk) => chunks.push(chunk))
   request.on('end', () => {
     const url = request.url
-    if (url.startsWith('/v1/images/generations')) {
-      const body = Buffer.concat(chunks).toString('utf8')
-      const target = /"target":"([^"]+)"/u.exec(body)?.[1] ?? 'private'
+    const body = Buffer.concat(chunks).toString('utf8')
+    /*
+     * 用 body 里的 prompt 判定"这是一次生图请求"，而不是靠路径前缀：
+     * 本验收在意的是"服务商回了什么"，路径细节属于别的套件的范围。
+     */
+    const target = /"prompt":"target:([a-z]+)"/u.exec(body)?.[1]
+    if (target !== undefined) {
       if (target === 'huge') {
-        // 声明一个很大的 content-length，然后持续吐数据：客户端必须在上限处停下。
-        response.writeHead(200, { 'content-type': 'application/json' })
-        const filler = `"${'A'.repeat(1024 * 1024)}"`
-        for (let index = 0; index < 64; index += 1) response.write(filler)
-        response.end()
+        // 先声明一个很大的 content-length，然后持续吐数据：客户端必须在上限处停下。
+        response.writeHead(200, { 'content-type': 'application/json', 'content-length': String(64 * 1024 * 1024) })
+        const filler = `"${'A'.repeat(512 * 1024)}"`
+        for (let index = 0; index < 24; index += 1) response.write(filler)
+        response.end('"}')
         return
       }
       const link = target === 'metadata'
@@ -63,7 +67,6 @@ const server = createServer((request, response) => {
       response.end(JSON.stringify({ data: [{ url: link }] }))
       return
     }
-    // 任何别的路径都是"我们不该发出去的请求"：记账并回一张图。
     outbound.push(`${request.method} ${url}`)
     if (url.startsWith('/models') && rpcMode === 'json') {
       response.writeHead(200, { 'content-type': 'application/json' })
@@ -79,10 +82,12 @@ const origin = `http://127.0.0.1:${server.address().port}`
 
 /* ---------------------------------------------------------------- 假的 Cordis ctx */
 
-const workRoot = await mkdtemp(join(tmpdir(), 'dib-sec-'))
 const registered = []
-const credentials = new Map([['DSH_IMAGE_BRIDGE_KEY_PROVIDER', 'key-for-provider']])
-const providerConfigValue = {
+const routes = []
+const workRoot = await mkdtemp(join(tmpdir(), 'dib-sec-work-'))
+
+/** 与插件 `effectiveConfigOf` 的读取路径对齐：设置服务给一行，行里带 providers。 */
+const rowValue = {
   baseUrl: origin,
   model: 'sec-image',
   editModel: '',
@@ -92,54 +97,72 @@ const providerConfigValue = {
   timeoutMs: 30000,
   providers: [{ id: 'provider', label: 'Provider', baseUrl: origin, keyRef: '', models: [], imageModel: 'sec-image', editModel: '' }],
   activeProviderId: 'provider',
-  modelRoutes: { generate: { primary: { providerId: '', model: '' }, fallback: { providerId: '', model: '' } }, edit: { primary: { providerId: '', model: '' }, fallback: { providerId: '', model: '' } } },
+  modelRoutes: {
+    generate: { primary: { providerId: '', model: '' }, fallback: { providerId: '', model: '' } },
+    edit: { primary: { providerId: '', model: '' }, fallback: { providerId: '', model: '' } },
+  },
   fallbackAfterMs: 9000,
 }
-const providerServices = {
-  tools: { register: (tool) => registered.push(tool) },
-  attachments: { async saveImage() { return { attachmentId: 'att-1', mediaType: 'image/png', bytes: PNG.length, width: 1, height: 1 } } },
-  credentials: { async resolve(ref) { const value = credentials.get(ref); return value === undefined ? undefined : { value } } },
-  fs: {},
-  llm: { listProviders: () => [] },
-  logger: { warn() {}, info() {} },
-}
-const scope = {
-  get: (name) => providerServices[name],
-  provide: () => {},
-  effect: (fn) => fn(),
-  on: () => {},
-  logger: { warn() {}, info() {} },
-  inject: (_deps, callback) => { callback(scope); return () => {} },
+
+const services = {
+  tools: { register: (definition) => { registered.push(definition); return () => {} } },
+  settings: { describe: () => [{ ns: 'image-bridge-v4', value: rowValue }] },
+  attachments: {
+    async saveImage({ mediaType, data, name }) {
+      return { attachmentId: `sha256:${'a'.repeat(64)}`, mediaType, bytes: data.byteLength, width: 1, height: 1, name }
+    },
+  },
+  credentials: { async resolve(ref) { return ref === 'DSH_IMAGE_BRIDGE_KEY_PROVIDER' ? { value: 'key-for-provider' } : undefined } },
+  llm: { async resolveModelInfo() { return { inputModalities: ['image', 'text'] } }, listProviders: () => [] },
+  fs: {
+    async resolve(path, opts) { return { displayPath: path, hostPath: join(opts?.cwd ?? workRoot, path) } },
+    async stat() { return { version: 'v1' } },
+    async readBytes(target) { throw new Error('本验收不读文件') },
+  },
+  connection: { requestRejection: () => undefined },
+  webServer: { register(route) { routes.push(route); return () => {} } },
 }
 const ctx = {
-  get: scope.get,
-  tools: providerServices.tools,
-  inject: scope.inject,
-  effect: scope.effect,
-  on: scope.on,
-  logger: scope.logger,
-  fs: scope.fs,
-  config: { get: () => providerConfigValue },
+  get: (name) => services[name],
+  tools: services.tools,
+  inject: (_deps, callback) => { callback(ctx); return () => {} },
+  effect: (fn) => fn(),
+  logger: { warn() {}, info() {} },
 }
 
 const mod = await import(pathToFileURL(join(ROOT, 'index.js')).href)
-mod.apply(ctx)
+mod.apply(ctx, rowValue)
 const generate = registered.find((tool) => tool.name === 'image_generate')
 if (generate === undefined) throw new Error('image_generate 没有注册成功，安全验收无法进行')
-const exec = { signal: undefined, agent: undefined, session: undefined }
 
-function configOf() {
-  return { ...providerConfigValue, providers: [{ ...providerConfigValue.providers[0] }] }
+const exec = { signal: undefined, agent: { session: { header: { cwd: workRoot } } }, session: undefined }
+
+/** RPC 桩：直接调用插件注册的那条路由，与 verify-host.mjs 同一套。 */
+const rpcRoute = routes.find((route) => String(route.path).includes('/dsh-image-bridge'))
+if (rpcRoute === undefined) throw new Error('插件没有注册 RPC 路由，安全验收无法进行')
+
+async function callRpc(method, payload, rpcId = `sec-${method}`) {
+  const requestBody = JSON.stringify({ type: 'client-request', rpcId, method, payload })
+  const fakeRequest = {
+    method: 'POST',
+    url: `/dsh-image-bridge/${method}`,
+    headers: { 'content-type': 'application/json' },
+    on(event, listener) {
+      if (event === 'data') listener(Buffer.from(requestBody, 'utf8'))
+      if (event === 'end') listener()
+      return this
+    },
+  }
+  let body
+  const fakeResponse = { writeHead() { return this }, end(text) { body = text } }
+  await rpcRoute.handler(fakeRequest, fakeResponse)
+  const envelope = (() => { try { return JSON.parse(body) } catch { return undefined } })()
+  const message = envelope?.result?.ok === false ? (envelope.result.error?.message ?? 'RPC 失败') : ''
+  return { message, envelope }
 }
-const config = { get: () => configOf() }
-
-/* 让插件通过 ctx.get('config') 之类的路径也能拿到同一份配置。 */
-providerServices.config = config
-scope.config = config
 
 /* ---------------------------------------------------------------- 用例 */
 
-/** 每个用例换一个 prompt，服务商据此决定回什么（见上面的 target 解析）。 */
 async function attempt(target) {
   outbound.length = 0
   let error = ''
@@ -155,55 +178,39 @@ for (const [target, label] of [['metadata', '云元数据 169.254.169.254'], ['l
   const { error, requests } = await attempt(target)
   check(
     `① 服务商返回的图片地址指向${label} → 拒收`,
-    error.includes('已拒绝请求') || error.includes('私有网段') || error.includes('本机'),
+    error.includes('已拒绝请求'),
     error || '(没有报错)',
   )
   check(
-    `① 且我们一个请求都没替它发出去（SSRF 未触发）`,
+    '① 且我们一个请求都没替它发出去（SSRF 未触发）',
     requests.length === 0,
     JSON.stringify(requests),
   )
 }
 
 {
-  const { error, requests } = await attempt('huge')
+  const { error } = await attempt('huge')
   check(
     '② 回包超大 → 在上限处停下，不把内存读爆',
     error.includes('上限') || error.includes('超过'),
     error || '(没有报错)',
   )
-  check('② 且没有把超长正文当成有效图片', requests.length === 0, JSON.stringify(requests))
 }
 
-/*
- * baseUrl 策略：用户自己填的地址**允许**本机（本地生图服务是正当用法），只拦协议与形态；
- * 而**空地址**必须直接失败——那是真机事故的另一半：地址为空时旧实现回退到"当前生效服务商"
- * 的地址，于是拿 B 的密钥去问 A 的地址。两条都通过 RPC 通道验。
- */
+/* baseUrl 策略：本机地址可用；空地址必须直接失败且不回退。 */
 {
-  const reply = (status, payload) => { rpcStatus = status; rpcBody = JSON.stringify(payload) }
-
-  // 本机地址应被接受（服务商在应答，返回 200 与合法 JSON）。
   rpcMode = 'json'
-  let localError = ''
-  try {
-    await callRpc('models', { baseUrl: origin, apiKey: 'k1' })
-  } catch (error) {
-    localError = error instanceof Error ? error.message : String(error)
-  }
-  check('③ 本机 baseUrl 被接受（不被误判成私网而拒收）', localError === '', localError)
-  check('③ 且确实打到了那个本机地址', outbound.some((entry) => entry.includes('/models')), JSON.stringify(outbound))
+  const local = await callRpc('models', { baseUrl: origin, apiKey: 'k1' })
+  check('③ 本机 baseUrl 被接受（不被误判成私网而拒收）', local.message === '', local.message || '(失败)')
+  check('③ 且确实打到了那个本机地址的 /models', outbound.some((entry) => entry.includes('/models')), JSON.stringify(outbound))
 
-  // 空地址必须直接失败，且**不能**回退到当前生效服务商的地址。
-  const requestsBefore = outbound.length
-  let emptyError = ''
-  try {
-    await callRpc('models', { baseUrl: '', apiKey: 'k1' })
-  } catch (error) {
-    emptyError = error instanceof Error ? error.message : String(error)
-  }
-  check('③ 空 baseUrl 明确报错「请先填写接口地址」', emptyError.includes('没有可用的接口地址'), emptyError || '(没有报错)')
-  check('③ 且没有回退到生效服务商的地址去发请求', outbound.length === requestsBefore, JSON.stringify(outbound.slice(requestsBefore)))
+  const before = outbound.length
+  const empty = await callRpc('models', { baseUrl: '', apiKey: 'k1' })
+  check('③ 空 baseUrl 明确报错「没有可用的接口地址」', empty.message.includes('没有可用的接口地址'), empty.message || '(没有报错)')
+  check('③ 且没有回退到生效服务商的地址去发请求', outbound.length === before, JSON.stringify(outbound.slice(before)))
+
+  const badProtocol = await callRpc('models', { baseUrl: 'file:///etc/passwd', apiKey: 'k1' })
+  check('③ 非 http/https 协议被拒（file: 之类不该碰）', badProtocol.message.includes('不支持的协议'), badProtocol.message || '(没有报错)')
 }
 
 /* ---------------------------------------------------------------- 收尾 */

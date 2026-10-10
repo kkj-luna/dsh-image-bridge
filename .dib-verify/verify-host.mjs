@@ -956,6 +956,64 @@ check(
   `host=${ruleOf(hostSlugBody)} client=${ruleOf(clientSlugBody)}`,
 )
 
+/*
+ * provider.id 的**派生表**：README 承诺的"纯中文名折叠为空 → 改用地址主机名 → 再不行用
+ * provider"此前零覆盖，这里用真实 apply 写出的启动自述把它钉住。
+ * 这几条同时是 id 稳定性的基础——凭据名由 id 派生，派生一变，老密钥就失联。
+ */
+async function idsFromApply(providers, tag) {
+  const home = await mkdtemp(join(tmpdir(), `dib-ids-${tag}-`))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+  const row = {
+    baseUrl: 'https://fallback.example/v1',
+    model: 'm',
+    providers,
+    activeProviderId: providers[0]?.id ?? '',
+    modelRoutes: { generate: { primary: { providerId: '', model: '' }, fallback: { providerId: '', model: '' } }, edit: { primary: { providerId: '', model: '' }, fallback: { providerId: '', model: '' } } },
+    fallbackAfterMs: 9000,
+  }
+  const idServices = {
+    tools: { register: () => () => {} },
+    settings: { describe: () => [{ ns: 'image-bridge-v4', value: row }] },
+    attachments: {}, credentials: { async resolve() { return undefined } },
+    llm: { async resolveModelInfo() { return {} } },
+    fs: {}, connection: { requestRejection: () => undefined }, webServer: { register: () => () => {} },
+  }
+  const idCtx = { get: (name) => idServices[name], tools: idServices.tools, inject: (_deps, callback) => { callback(idCtx); return () => {} }, effect: (fn) => fn(), logger: { warn() {}, info() {} } }
+  const idMod = await import(`${pathToFileURL(`${ROOT}/index.js`).href}?ids=${tag}`)
+  idMod.apply(idCtx, row)
+  await new Promise((done) => setTimeout(done, 120))
+  let ids = []
+  try {
+    const written = JSON.parse(await readFile(join(home, 'dsh-image-bridge-startup.json'), 'utf8'))
+    ids = (written.config?.providers ?? []).map((provider) => provider.id)
+  } catch {
+    ids = []
+  }
+  process.env.DSH_HOME = previousHome
+  await rm(home, { recursive: true, force: true })
+  return ids
+}
+
+const idCases = [
+  ['纯中文名 + 公网地址 → 用主机名', [{ label: '智谱', baseUrl: 'https://open.bigmodel.cn/api/paas/v4' }], ['open-bigmodel-cn']],
+  ['纯中文名 + 本机地址 → 用主机名', [{ label: '智谱', baseUrl: 'http://127.0.0.1:8799/v1' }], ['127-0-0-1']],
+  ['纯中文名且无地址 → provider 兜底', [{ label: '智谱' }], ['provider']],
+  ['英文名 → 折叠成连字符', [{ label: 'My Vendor' }], ['my-vendor']],
+  ['无名 + 地址 → 用主机名', [{ baseUrl: 'https://api.example.com/v1' }], ['api-example-com']],
+  ['超长名 → 截断 40 字符', [{ label: 'a'.repeat(60) }], ['a'.repeat(40)]],
+  ['重名 → 追加 -2', [{ label: 'same' }, { label: 'same' }], ['same', 'same-2']],
+]
+for (const [label, providers, expected] of idCases) {
+  const actual = await idsFromApply(providers, String(expected[0]).slice(0, 8).replace(/[^a-z0-9]/gu, '') || 'case')
+  check(
+    `provider.id 派生：${label}`,
+    JSON.stringify(actual) === JSON.stringify(expected),
+    `实际=${JSON.stringify(actual)} 期望=${JSON.stringify(expected)}`,
+  )
+}
+
 /* ------------------------------------------------------------------ *
  * 三级回退与启动自述
  *

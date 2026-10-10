@@ -198,10 +198,11 @@ DSH_IMAGE_BRIDGE_KEY_<ID>     ID = provider.id 转大写、非字母数字一律
 
 超时后 Host 会自动**探活**（`GET {baseUrl}/models`，4 秒内）：通了就在错误里说明"服务商是活的、密钥有效，这次只是生成慢，可把主模型超时调大"；不通就说明"当前不可达，不只是这次慢"。探活**只加提示、不改变是否换备用**。
 
-### 两条安全约束（有意为之）
+### 三条安全约束（有意为之）
 
-1. **没有显式密钥就不发请求。** 「测试连接 / 获取可用模型」只认请求里显式给的 `apiKey`，或合法 `keyRef` 指向的凭据；两者都没有时 Host **一个字节都不发**，绝不回退到当前生效服务商的密钥——否则会把 A 的密钥发到 B 的地址上。工具调用同理，密钥只在它自己的 ref 下解析，**刻意不跨名字回退**。
-2. **删除提供商不清理凭据。** 删除是配置操作，不该顺手毁掉一份可能要复用的密钥。确实想清掉，就自己从 `$DSH_HOME/.credentials.yaml` 删掉那一行。
+1. **没有显式密钥就不发请求。** 「测试连接 / 获取可用模型」只认请求里显式给的 `apiKey`，或合法 `keyRef` 指向的凭据；两者都没有时 Host **一个字节都不发**，绝不回退到当前生效服务商的密钥——否则会把 A 的密钥发到 B 的地址上。地址同理**不回退**：只填了密钥没填地址时直接报错，不会拿别家的地址配上你这把密钥。工具调用同理，密钥只在它自己的 ref 下解析，**刻意不跨名字回退**。
+2. **服务商返回的图片地址要过关。** 有些接口不是回图片数据，而是回一个让客户端去下载的 URL。那个地址是**对方给的**，所以只允许 `http`/`https`，并拒绝环回与私有网段（云元数据 `169.254.169.254`、`10.x`、`192.168.x` 等）——否则一个被控制的服务商就能借你的进程去探内网。回包正文也有上限（32 MiB），下载的图片同样限时限长（15 秒、20 MiB）。注意这**只约束对方给的地址**：你自己在设置页填的接口地址允许本机（本地生图服务、本地 mock 都是正当用法），只要协议是 http/https。
+3. **删除提供商不清理凭据。** 删除是配置操作，不该顺手毁掉一份可能要复用的密钥。确实想清掉，就自己从 `$DSH_HOME/.credentials.yaml` 删掉那一行。
 
 ### 图片去哪了
 
@@ -285,12 +286,13 @@ dsh-image-bridge-v4/
 └── icon.svg            插件图标
 ```
 
-回归测试在仓库根目录的 `.dib-verify/`，**无需联网、无需真实密钥**，共 346 条断言：
+回归测试在仓库根目录的 `.dib-verify/`，**无需联网、无需真实密钥**，共 376 条断言：
 
 ```bash
-node .dib-verify/verify-manifest.mjs   # 35
-node .dib-verify/verify-client.mjs     # 150
-node .dib-verify/verify-host.mjs       # 129
+node .dib-verify/verify-manifest.mjs   # 36
+node .dib-verify/verify-client.mjs     # 157
+node .dib-verify/verify-host.mjs       # 139
+node .dib-verify/verify-security.mjs   # 12
 node .dib-verify/verify-resolve.mjs    # 8
 node .dib-verify/verify-upgrade.mjs    # 24
 ```

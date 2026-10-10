@@ -74,14 +74,15 @@ Three self-diagnostics land in `$DSH_HOME/`:
 ## Tests
 
 ```sh
-node .dib-verify/verify-manifest.mjs   # 35   manifest and cross-file consistency
-node .dib-verify/verify-client.mjs     # 150  client registration and component rendering
-node .dib-verify/verify-host.mjs       # 129  host end to end
+node .dib-verify/verify-manifest.mjs   # 36   manifest and cross-file consistency
+node .dib-verify/verify-client.mjs     # 157  client registration and component rendering
+node .dib-verify/verify-host.mjs       # 139  host end to end
+node .dib-verify/verify-security.mjs   # 12   security boundaries (SSRF refusal, response cap)
 node .dib-verify/verify-resolve.mjs    # 8    dependency resolution robustness
 node .dib-verify/verify-upgrade.mjs    # 24   user config survives an upgrade
 ```
 
-**346 assertions**, no network and no real API key needed. The cross-process end-to-end run additionally needs the local mock service:
+**376 assertions**, no network and no real API key needed. The cross-process end-to-end run additionally needs the local mock service:
 
 ```sh
 node .dib-verify/mock-image-api.mjs 8799   # in a second terminal
