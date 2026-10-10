@@ -222,17 +222,11 @@ window.__ModuleLoader__.load({
         'hiddenModels': '已隐藏非生图模型：',
         'close': '关闭',
         'refetchModels': '重新获取可用模型',
-        'useAsImage': '生图',
-        'useAsImageTitle': '设为生图模型',
-        'useAsEdit': '改图',
-        'useAsEditTitle': '设为改图模型',
         'pickedImage': '当前生图模型',
         'pickedEdit': '当前改图模型',
         'imageModel': '生图模型',
-        'imageModel.hint': '从上面获取到的模型里选；列表里没有就选「手动输入…」。',
         'imageModel.placeholder': '例如 gpt-image-1',
         'editModel': '改图模型',
-        'editModel.hint': '留空表示沿用生图模型。',
         'editModel.placeholder': '留空表示沿用生图模型',
         'manualOption': '手动输入…',
         'noModelsYet': '还没有获取到模型列表：先点「测试连接」或「获取可用模型」，也可以直接填写模型名。',
@@ -245,6 +239,26 @@ window.__ModuleLoader__.load({
         'size': '默认尺寸',
         'size.hint': '对所有提供商生效，例如 1024x1024、1024x1536、1536x1024。',
         'saveSize': '保存尺寸',
+        'routes.title': '模型',
+        'routes.hint': '生图与修图各有一个主模型和一个备用模型：选项来自所有已获取过模型列表的服务商（按服务商分组）。备用模型在主模型超时或连接失败时自动接管。',
+        'routes.none': '先添加并测试连接一个模型提供商。',
+        'routes.showAll': '显示全部模型',
+        'route.generate.primary': '生图模型',
+        'route.generate.fallback': '生图备用模型',
+        'route.edit.primary': '修图模型',
+        'route.edit.fallback': '修图备用模型',
+        'route.unset': '未设置',
+        'route.noFallback': '不设置备用',
+        'route.primaryHint': '工具调用时优先使用它。',
+        'route.fallbackHint': '主模型超过下面的超时时间仍未返回，或连接失败，就自动改用它。',
+        'route.manualHint': '手动填写的模型走当前生效服务商',
+        'route.noActive': '当前没有生效的服务商',
+        'routes.save': '保存模型设置',
+        'routes.saved': '模型设置已保存。',
+        'fallbackAfterMs': '主模型超时(毫秒)',
+        'fallbackAfterMs.hint': '主模型超过这个时间仍未返回响应，或连接失败，就自动改用备用模型；留空表示用默认 15000。',
+        'fallbackAfterMs.placeholder': '15000',
+        'fallbackInvalid': '主模型超时必须是正整数毫秒数（也可以留空用默认值）。',
         'save': '保存',
         'saving': '保存中…',
         'saved': '已保存。',
@@ -309,17 +323,11 @@ window.__ModuleLoader__.load({
         'hiddenModels': 'Hidden non-image models:',
         'close': 'Close',
         'refetchModels': 'Refetch available models',
-        'useAsImage': 'Generate',
-        'useAsImageTitle': 'Use as the image model',
-        'useAsEdit': 'Edit',
-        'useAsEditTitle': 'Use as the edit model',
         'pickedImage': 'Current image model',
         'pickedEdit': 'Current edit model',
         'imageModel': 'Image model',
-        'imageModel.hint': 'Pick from the models fetched above; choose "Type a model name…" if it is not listed.',
         'imageModel.placeholder': 'e.g. gpt-image-1',
         'editModel': 'Edit model',
-        'editModel.hint': 'Leave blank to reuse the image model.',
         'editModel.placeholder': 'Blank reuses the image model',
         'manualOption': 'Type a model name…',
         'noModelsYet': 'No model list yet: run "Test connection" or "Fetch models" first — you can also type a model name.',
@@ -332,6 +340,26 @@ window.__ModuleLoader__.load({
         'size': 'Default size',
         'size.hint': 'Applies to every provider, e.g. 1024x1024, 1024x1536, 1536x1024.',
         'saveSize': 'Save size',
+        'routes.title': 'Models',
+        'routes.hint': 'Generation and editing each have a primary and a fallback model. Options come from every provider whose model list has been fetched, grouped by provider; the fallback takes over when the primary times out or fails to connect.',
+        'routes.none': 'Add a model provider and test the connection first.',
+        'routes.showAll': 'Show all models',
+        'route.generate.primary': 'Image model',
+        'route.generate.fallback': 'Image fallback model',
+        'route.edit.primary': 'Edit model',
+        'route.edit.fallback': 'Edit fallback model',
+        'route.unset': 'Not set',
+        'route.noFallback': 'No fallback',
+        'route.primaryHint': 'Used first when the tools call the API.',
+        'route.fallbackHint': 'Used automatically when the primary exceeds the timeout below or fails to connect.',
+        'route.manualHint': 'A manually typed model goes through the active provider',
+        'route.noActive': 'there is no active provider right now',
+        'routes.save': 'Save model settings',
+        'routes.saved': 'Model settings saved.',
+        'fallbackAfterMs': 'Primary model timeout (ms)',
+        'fallbackAfterMs.hint': 'Switch to the fallback model when the primary takes longer than this or fails to connect; blank means the default 15000.',
+        'fallbackAfterMs.placeholder': '15000',
+        'fallbackInvalid': 'The timeout must be a positive whole number of milliseconds (or blank for the default).',
         'save': 'Save',
         'saving': 'Saving…',
         'saved': 'Saved.',
@@ -432,6 +460,11 @@ window.__ModuleLoader__.load({
       '.dib-model-row{display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:var(--dsw-radius-md)}',
       '.dib-model-row:hover{background:var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-bg-layer-2))}',
       '.dib-model-id{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary)}',
+      /* 主页的模型区块 */
+      '.dib-routes{display:flex;flex-direction:column;gap:4px;margin-top:16px;padding-top:16px;border-top:0.5px solid var(--dsw-alias-border-l2)}',
+      '.dib-section-title{margin:0 0 4px;font-size:14px;font-weight:500;line-height:22px;color:var(--dsw-alias-label-primary)}',
+      '.dib-routes .dib-field{padding:10px 0}',
+      '.dib-toggle-row{display:flex;align-items:center;gap:8px;padding:8px 0}',
       /* 全局默认值 */
       '.dib-defaults{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:16px;padding-top:16px;border-top:0.5px solid var(--dsw-alias-border-l2)}',
       '.dib-defaults .dib-field-hint{flex:1 1 100%}',
@@ -900,10 +933,92 @@ window.__ModuleLoader__.load({
     /**
      * 「手动输入…」在下拉里的取值。
      *
-     * 用一个不可能与模型名混淆的保留值：它只活在下拉里，永远不会被写进
-     * imageModel / editModel——选中它只是把文本框露出来。
+     * 用一个不可能与模型名混淆的保留值：它只活在下拉里，永远不会被写进配置——选中它只是
+     * 把文本框露出来。
      */
     const MANUAL_MODEL_VALUE = '__dib_manual__'
+
+    /** 主模型超时的默认值（毫秒），与 Host 侧 Config 的默认值一致。 */
+    const DEFAULT_FALLBACK_MS = 15000
+
+    /** 四个模型槽位。`modelRoutes` 就是按这个结构写进配置的。 */
+    const ROUTE_IDS = ['generate.primary', 'generate.fallback', 'edit.primary', 'edit.fallback']
+
+    /** 下拉里「服务商 + 模型」的合成取值：同一模型名可能出现在两家服务商上。 */
+    function routeValueOf(providerId, model) {
+      return providerId === '' || model === '' ? '' : `${providerId}::${model}`
+    }
+
+    /** 拆开合成取值；形状不对时返回空，等价于「未设置」。 */
+    function splitRouteValue(value) {
+      const text = typeof value === 'string' ? value : ''
+      const at = text.indexOf('::')
+      if (at <= 0) return { providerId: '', model: '' }
+      return { providerId: text.slice(0, at), model: text.slice(at + 2) }
+    }
+
+    /** 一个槽位的记录：从配置里读到的任意形状都归一成同一套字段。 */
+    function normalizeRouteItem(raw) {
+      const value = raw !== null && typeof raw === 'object' ? raw : {}
+      return {
+        providerId: typeof value.providerId === 'string' ? value.providerId : '',
+        model: typeof value.model === 'string' ? value.model : '',
+        manual: false,
+        manualText: '',
+      }
+    }
+
+    /** 从配置里读四个槽位。 */
+    function routesOf(value) {
+      const source = value !== null && typeof value === 'object' && value.modelRoutes !== null && typeof value.modelRoutes === 'object' ? value.modelRoutes : {}
+      const routes = {}
+      for (const id of ROUTE_IDS) {
+        const [role, slot] = id.split('.')
+        const branch = source[role] !== null && typeof source[role] === 'object' ? source[role] : {}
+        routes[id] = normalizeRouteItem(branch[slot])
+      }
+      return routes
+    }
+
+    /** 超时输入框里的初始文本：读不到或不是正整数就用默认值。 */
+    function fallbackDraftOf(value) {
+      const raw = value !== null && typeof value === 'object' ? value.fallbackAfterMs : undefined
+      return typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? String(raw) : String(DEFAULT_FALLBACK_MS)
+    }
+
+    /** 校验超时输入：空串用默认值；非法返回 undefined（调用方据此拒绝保存）。 */
+    function parseFallbackMs(draft) {
+      const text = typeof draft === 'string' ? draft.trim() : ''
+      if (text === '') return DEFAULT_FALLBACK_MS
+      if (!/^[0-9]+$/u.test(text)) return undefined
+      const value = Number(text)
+      return Number.isInteger(value) && value > 0 ? value : undefined
+    }
+
+    /**
+     * 把四个槽位的界面状态折算成配置里的 `modelRoutes`。
+     *
+     * 手动输入的槽位只记了模型名，服务商取**当前生效的那一家**——界面旁边也写明了这一点，
+     * 免得用户以为手填的名字会自己找服务商。
+     */
+    function modelRoutesOf(routes, activeProviderId) {
+      const source = routes !== null && typeof routes === 'object' ? routes : {}
+      const item = (id) => {
+        const route = source[id] !== null && typeof source[id] === 'object' ? source[id] : {}
+        if (route.manual === true) {
+          const model = typeof route.manualText === 'string' ? route.manualText.trim() : ''
+          return model === '' ? { providerId: '', model: '' } : { providerId: activeProviderId, model }
+        }
+        return {
+          providerId: typeof route.providerId === 'string' ? route.providerId : '',
+          model: typeof route.model === 'string' ? route.model : '',
+        }
+      }
+      return {
+        generate: { primary: item('generate.primary'), fallback: item('generate.fallback') },
+        edit: { primary: item('edit.primary'), fallback: item('edit.fallback') },
+      }
+    }
 
     /** 状态文案的样式类。 */
     function statusClassOf(kind) {
@@ -955,6 +1070,11 @@ window.__ModuleLoader__.load({
      * 设置页那棵树卸载重建，也就不存在 hook 顺序问题；浮层自己则在打开时挂载、
      * 关闭时卸载。
      *
+     * 这里只负责**服务商本身**：名称、接口地址、API Key、测试连接、获取可用模型。
+     * 「用哪个模型」已经搬到设置页主页的模型区块（`modelRoutes`），浮层不再持有那份
+     * 状态——测试连接/获取模型拿到的列表在这里只作展示：让用户确认 Key 能用、看到这
+     * 一家有哪些模型，顺带标出哪些正被主页选为生图/修图模型。
+     *
      * `initial` 是打开时带进来的记录（也是进程外验证的注入点）：运行时的提供商记录里
      * 永远不含 API Key，`keyDraft` 只可能来自用户在输入框里的输入。
      */
@@ -965,16 +1085,11 @@ window.__ModuleLoader__.load({
       const [state, setState] = React.useState({
         label: typeof initial.label === 'string' ? initial.label : '',
         baseUrl: typeof initial.baseUrl === 'string' ? initial.baseUrl : '',
-        imageModel: typeof initial.imageModel === 'string' ? initial.imageModel : '',
-        editModel: typeof initial.editModel === 'string' ? initial.editModel : '',
         models: uniqueModels(Array.isArray(initial.models) ? initial.models : []),
         keyDraft: typeof initial.keyDraft === 'string' ? initial.keyDraft : '',
         testState: typeof initial.testState === 'string' ? initial.testState : 'untested',
         // 「显示全部模型」：默认只列生图模型，打开后连语言模型一起列出来。
         showAll: initial.showAll === true,
-        // 「手动输入…」：选中它才露出文本框（进程外验证也会用这两个字段摆状态）。
-        imageManual: initial.imageManual === true,
-        editManual: initial.editManual === true,
         phase: 'idle',
         status: '',
         statusKind: 'info',
@@ -1120,8 +1235,10 @@ window.__ModuleLoader__.load({
           baseUrl,
           keyRef: typeof initial.keyRef === 'string' ? initial.keyRef : '',
           models: state.models,
-          imageModel: state.imageModel.trim(),
-          editModel: state.editModel.trim(),
+          // 模型选择已经搬到主页的 modelRoutes；这里原样保留记录上的两个字段（它们是
+          // 没有配 route 时的回退来源），不要因为浮层改版把已有值抹掉。
+          imageModel: typeof initial.imageModel === 'string' ? initial.imageModel : '',
+          editModel: typeof initial.editModel === 'string' ? initial.editModel : '',
         }, state.keyDraft)
       }
 
@@ -1170,13 +1287,20 @@ window.__ModuleLoader__.load({
       rows.push(h('p', { key: 'note', className: 'dib-editor-note' }, tr('keyNote')))
 
       /*
-       * 只显示生图模型。
+       * 这一家的模型列表：**只作展示**。
        *
-       * 用户的 Key 实测有 176 个模型，绝大多数是语言模型，全铺出来等于没有列表
-       * （判定规则见 isImageModel）。当前已选中的两个模型即使不像生图也保留在列表里
-       * ——否则用户手填的位置会「消失」，看不到自己选的是哪一个。
+       * 用户要的是"确认这个 Key 能用、能看到有哪些模型"，选择用哪个模型的活儿已经搬到
+       * 设置页主页的模型区块。所以这里没有「生图 / 改图」按钮，只在被主页选中的模型上
+       * 打一个标记——同一个 `modelRoutes`，两处显示不会互相矛盾。
+       *
+       * 过滤规则与主页一致（默认只列生图模型），勾「显示全部模型」看全部。
        */
-      const imageModels = state.models.filter((model) => isImageModel(model) || model === state.imageModel || model === state.editModel)
+      const routed = props.routed !== null && props.routed !== undefined && typeof props.routed === 'object' ? props.routed : {}
+      const isRouted = (role, model) => {
+        const item = routed[role]
+        return item !== null && typeof item === 'object' && item.providerId === initial.id && item.model === model
+      }
+      const imageModels = state.models.filter((model) => isImageModel(model) || isRouted('generate', model) || isRouted('edit', model))
       const visibleModels = state.showAll ? state.models : imageModels
       const hiddenCount = state.models.length - imageModels.length
 
@@ -1190,6 +1314,7 @@ window.__ModuleLoader__.load({
             h('label', { key: 'toggle', className: 'dib-toggle' }, [
               h('input', {
                 key: 'box',
+                id: 'dib-editor-showall',
                 type: 'checkbox',
                 checked: state.showAll,
                 disabled: locked,
@@ -1199,83 +1324,15 @@ window.__ModuleLoader__.load({
             ]),
           ]),
           hiddenCount > 0 ? h('p', { key: 'hidden', className: 'dib-field-hint' }, `${tr('hiddenModels')} ${hiddenCount}`) : null,
-          h('ul', { key: 'list', className: 'dib-model-list' }, visibleModels.map((model) => {
-            const asImage = state.imageModel === model
-            const asEdit = state.editModel === model
-            return h('li', { key: model, className: 'dib-model-row' }, [
-              h('span', { key: 'id', className: 'dib-model-id', title: model }, model),
-              asImage ? h('span', { key: 'picked-image', className: 'dib-card-tag dib-card-tag-on' }, tr('pickedImage')) : null,
-              asEdit ? h('span', { key: 'picked-edit', className: 'dib-card-tag dib-card-tag-on' }, tr('pickedEdit')) : null,
-              h('button', {
-                key: 'image',
-                type: 'button',
-                className: asImage ? 'dib-mini dib-mini-on' : 'dib-mini',
-                'aria-pressed': asImage ? 'true' : 'false',
-                title: tr('useAsImageTitle'),
-                disabled: locked,
-                // 同时清掉「手动输入」：下面那份列表与上面的下拉读写的都是 state.imageModel，
-                // 点这里之后下拉必须跟着跳到这个模型，两处状态不允许分裂。
-                onClick: () => patch({ imageModel: asImage ? '' : model, imageManual: false }),
-              }, tr('useAsImage')),
-              h('button', {
-                key: 'edit',
-                type: 'button',
-                className: asEdit ? 'dib-mini dib-mini-on' : 'dib-mini',
-                'aria-pressed': asEdit ? 'true' : 'false',
-                title: tr('useAsEditTitle'),
-                disabled: locked,
-                onClick: () => patch({ editModel: asEdit ? '' : model, editManual: false }),
-              }, tr('useAsEdit')),
-            ])
-          })),
+          h('ul', { key: 'list', className: 'dib-model-list' }, visibleModels.map((model) => h('li', { key: model, className: 'dib-model-row' }, [
+            h('span', { key: 'id', className: 'dib-model-id', title: model }, model),
+            isRouted('generate', model) ? h('span', { key: 'picked-image', className: 'dib-card-tag dib-card-tag-on' }, tr('pickedImage')) : null,
+            isRouted('edit', model) ? h('span', { key: 'picked-edit', className: 'dib-card-tag dib-card-tag-on' }, tr('pickedEdit')) : null,
+          ]))),
         ]))
+      } else {
+        rows.push(h('p', { key: 'nomodels', className: 'dib-field-hint' }, tr('noModelsYet')))
       }
-
-      /*
-       * 模型字段：下拉选择 + 手动输入。
-       *
-       * 选项就是上面那份列表（默认只列生图模型，勾了「显示全部模型」就是全部），末尾多一个
-       * 「手动输入…」——选中它才露出文本框。当前值一定会出现在选项里，否则受控下拉会显示成
-       * 空白；没获取过模型时下拉禁用，同时强制走手动输入，保证没网没密钥也能把卡片配完。
-       */
-      const hasModels = state.models.length > 0
-      const imageOptions = uniqueModels([...visibleModels, state.imageModel])
-      const editOptions = uniqueModels([...visibleModels, state.editModel])
-      const imageManual = state.imageManual === true || !hasModels
-      const editManual = state.editManual === true || !hasModels
-
-      /** 一个「下拉 + 可选手动输入」的字段。 */
-      const modelField = (selectId, inputId, label, hint, valueKey, manualFlagKey, manual, options, emptyLabel) => {
-        const nodes = []
-        nodes.push(h('div', { key: 'field', className: 'dib-field' }, [
-          h('label', { key: 'label', className: 'dib-label', htmlFor: selectId }, label),
-          h('select', {
-            key: 'select',
-            id: selectId,
-            className: 'dib-input dib-select',
-            value: manual ? MANUAL_MODEL_VALUE : state[valueKey],
-            disabled: locked || !hasModels,
-            onChange: (event) => {
-              const next = event !== null && event.target !== null && typeof event.target.value === 'string' ? event.target.value : ''
-              if (next === MANUAL_MODEL_VALUE) patch({ [manualFlagKey]: true })
-              else patch({ [manualFlagKey]: false, [valueKey]: next })
-            },
-          }, [
-            h('option', { key: 'empty', value: '' }, emptyLabel),
-            ...options.map((model) => h('option', { key: model, value: model }, model)),
-            h('option', { key: 'manual', value: MANUAL_MODEL_VALUE }, tr('manualOption')),
-          ]),
-          h('p', { key: 'hint', id: `${selectId}-hint`, className: 'dib-field-hint' }, hint),
-        ]))
-        if (manual) {
-          nodes.push(field(inputId, tr('manualOption'), hint, state[valueKey], locked, (value) => patch({ [valueKey]: value }), { placeholder: valueKey === 'imageModel' ? tr('imageModel.placeholder') : tr('editModel.placeholder') }))
-        }
-        return nodes
-      }
-
-      if (!hasModels) rows.push(h('p', { key: 'nomodels', className: 'dib-field-hint' }, tr('noModelsYet')))
-      for (const node of modelField('dib-provider-image-model-select', 'dib-provider-image-model', tr('imageModel'), tr('imageModel.hint'), 'imageModel', 'imageManual', imageManual, imageOptions, tr('none'))) rows.push(node)
-      for (const node of modelField('dib-provider-edit-model-select', 'dib-provider-edit-model', tr('editModel'), tr('editModel.hint'), 'editModel', 'editManual', editManual, editOptions, tr('inheritImage'))) rows.push(node)
 
       const body = h('div', { key: 'body', className: 'dib-editor-body' }, rows)
       const footer = h('div', { key: 'footer', className: 'dib-editor-footer' }, [
@@ -1324,6 +1381,10 @@ window.__ModuleLoader__.load({
         keyConfigured: {},
         testState: {},
         legacy: { baseUrl: '', model: '', editModel: '' },
+        // 四个模型槽位（生图/修图 × 主/备）与主模型超时。
+        routes: routesOf({}),
+        routesShowAll: false,
+        fallbackDraft: String(DEFAULT_FALLBACK_MS),
         editor: null,
         confirmDelete: '',
         busyId: '',
@@ -1337,6 +1398,8 @@ window.__ModuleLoader__.load({
       if (merged.keyConfigured === null || typeof merged.keyConfigured !== 'object') merged.keyConfigured = base.keyConfigured
       if (merged.testState === null || typeof merged.testState !== 'object') merged.testState = base.testState
       if (merged.legacy === null || typeof merged.legacy !== 'object') merged.legacy = base.legacy
+      if (merged.routes === null || typeof merged.routes !== 'object') merged.routes = base.routes
+      if (typeof merged.fallbackDraft !== 'string') merged.fallbackDraft = base.fallbackDraft
       return merged
     }
 
@@ -1346,6 +1409,16 @@ window.__ModuleLoader__.load({
       const [state, setState] = React.useState(() => initialStateOf(props.__initial))
 
       const patch = React.useCallback((next) => setState((current) => ({ ...current, ...next })), [])
+
+      /** 只改四个模型槽位里的一个，其余三个原样保留。 */
+      const patchRoute = React.useCallback((id, next) => {
+        setState((current) => {
+          const routes = { ...(current.routes ?? {}) }
+          const route = routes[id] !== null && typeof routes[id] === 'object' ? routes[id] : {}
+          routes[id] = { ...route, ...next }
+          return { ...current, routes }
+        })
+      }, [])
 
       /*
        * 文案函数每次渲染都是新的：把它放进 ref，effect 就能安全地用它，
@@ -1431,6 +1504,7 @@ window.__ModuleLoader__.load({
               activeProviderId,
               models: providers.map((provider) => provider.models.length),
               keyConfigured: Object.keys(keyConfigured).filter((id) => keyConfigured[id] === true).length,
+              fallbackAfterMs: value.fallbackAfterMs === undefined ? null : value.fallbackAfterMs,
             }))
             patch({
               phase: 'idle',
@@ -1439,6 +1513,8 @@ window.__ModuleLoader__.load({
               activeProviderId,
               size: typeof value.size === 'string' ? value.size : '',
               keyConfigured,
+              routes: routesOf(value),
+              fallbackDraft: fallbackDraftOf(value),
               legacy: {
                 baseUrl: typeof value.baseUrl === 'string' ? value.baseUrl : '',
                 model: typeof value.model === 'string' ? value.model : '',
@@ -1575,7 +1651,14 @@ window.__ModuleLoader__.load({
           else next.push(record)
           const activeProviderId = state.activeProviderId === '' ? id : state.activeProviderId
 
-          const written = await settings.update(SETTINGS_NS, { providers: next, activeProviderId }, undefined)
+          // 模型设置与提供商一起落盘：一次 patch 里带上完整的四项，避免只写一半把
+          // 已经配好的路由/超时留在旧值上。非法超时按默认值写，绝不写非法数据。
+          const written = await settings.update(SETTINGS_NS, {
+            providers: next,
+            activeProviderId,
+            modelRoutes: modelRoutesOf(state.routes, activeProviderId),
+            fallbackAfterMs: parseFallbackMs(state.fallbackDraft) ?? DEFAULT_FALLBACK_MS,
+          }, undefined)
           const failure = failureOf(written)
           if (failure !== null) throw new Error(failure)
 
@@ -1615,7 +1698,42 @@ window.__ModuleLoader__.load({
           report('error', '提供商保存失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
           patch({ phase: 'idle', status: messageOf(error), statusKind: 'error' })
         }
-      }, [state.providers, state.activeProviderId, state.keyConfigured, patch])
+      }, [state.providers, state.activeProviderId, state.keyConfigured, state.routes, state.fallbackDraft, patch])
+
+      /**
+       * 保存主页的模型设置：四个槽位 + 主模型超时。
+       *
+       * 超时非法时**直接拒绝保存**（界面给出原因），不会把非法值写进配置——空串则按
+       * 默认 15000 写。
+       */
+      const saveRoutes = React.useCallback(async () => {
+        const current = remotes.current
+        const settings = current === null || current === undefined ? undefined : current.settings
+        if (settings === undefined) return
+        const fallbackAfterMs = parseFallbackMs(state.fallbackDraft)
+        if (fallbackAfterMs === undefined) {
+          patch({ status: trRef.current('fallbackInvalid'), statusKind: 'error' })
+          report('warn', '模型设置未保存：超时不是正整数', JSON.stringify({ length: state.fallbackDraft.length }))
+          return
+        }
+        patch({ phase: 'saving', status: '', statusKind: 'info' })
+        try {
+          const modelRoutes = modelRoutesOf(state.routes, state.activeProviderId)
+          const written = await settings.update(SETTINGS_NS, {
+            providers: state.providers.map(plainProvider),
+            activeProviderId: state.activeProviderId,
+            modelRoutes,
+            fallbackAfterMs,
+          }, undefined)
+          const failure = failureOf(written)
+          if (failure !== null) throw new Error(failure)
+          patch({ phase: 'idle', fallbackDraft: String(fallbackAfterMs), status: trRef.current('routes.saved'), statusKind: 'ok' })
+          report('info', '模型设置已保存', JSON.stringify({ modelRoutes, fallbackAfterMs }))
+        } catch (error) {
+          report('error', '模型设置保存失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
+          patch({ phase: 'idle', status: messageOf(error), statusKind: 'error' })
+        }
+      }, [state.routes, state.fallbackDraft, state.providers, state.activeProviderId, patch])
 
       /** 全局默认尺寸：对所有提供商生效，单独保存。 */
       const saveSize = React.useCallback(async () => {
@@ -1756,6 +1874,135 @@ window.__ModuleLoader__.load({
         : editor.initial
       const editorId = editorTarget !== null && editorTarget !== undefined && typeof editorTarget.id === 'string' ? editorTarget.id : ''
 
+      /*
+       * 模型区块：四个槽位（生图/修图 × 主/备）+ 主模型超时。
+       *
+       * 选项是**所有已获取过模型列表的服务商的并集**（每个 provider 记录里存着它的
+       * models），按服务商分组（optgroup 标签用服务商名）。每一项写进配置时同时带上
+       * providerId 与 model——跨服务商选模型必须知道用哪家的地址与凭据。
+       */
+      const routeItemOf = (id) => modelRoutesOf(state.routes, state.activeProviderId)[id.split('.')[0]][id.split('.')[1]]
+      const connected = state.providers.filter((provider) => Array.isArray(provider.models) && provider.models.length > 0)
+      const hasConnected = connected.length > 0
+      const activeProvider = state.providers.find((provider) => provider.id === state.activeProviderId)
+      const activeName = activeProvider === undefined
+        ? state.activeProviderId === '' ? '' : state.activeProviderId
+        : activeProvider.label !== '' ? activeProvider.label : activeProvider.id
+      const activeLabel = activeName === '' ? tr('route.noActive') : activeName
+      const routed = { generate: routeItemOf('generate.primary'), edit: routeItemOf('edit.primary') }
+
+      /** 某个槽位的选项分组：只列有模型的服务商，当前值一定补进去（受控下拉不能空白）。 */
+      const groupsFor = (id) => {
+        const selected = routeItemOf(id)
+        const groups = []
+        for (const provider of state.providers) {
+          const models = Array.isArray(provider.models) ? provider.models : []
+          if (models.length === 0) continue
+          const visible = models.filter((model) => state.routesShowAll || isImageModel(model))
+          if (selected.providerId === provider.id && selected.model !== '' && !visible.includes(selected.model)) visible.push(selected.model)
+          const unique = uniqueModels(visible)
+          if (unique.length > 0) groups.push({ provider, models: unique })
+        }
+        return groups
+      }
+
+      const routeField = (id) => {
+        const route = state.routes[id] !== null && typeof state.routes[id] === 'object' ? state.routes[id] : {}
+        const manual = route.manual === true || !hasConnected
+        const selectId = `dib-route-${id.replace('.', '-')}`
+        const inputId = `${selectId}-manual`
+        const selected = routeItemOf(id)
+        const fallbackSlot = id.endsWith('.fallback')
+        const nodes = [h('div', { key: 'field', className: 'dib-field' }, [
+          h('label', { key: 'label', className: 'dib-label', htmlFor: selectId }, tr(`route.${id}`)),
+          h('select', {
+            key: 'select',
+            id: selectId,
+            className: 'dib-input dib-select',
+            'data-dib-route': id,
+            value: manual ? MANUAL_MODEL_VALUE : routeValueOf(route.providerId, route.model),
+            disabled: disabled || !hasConnected,
+            onChange: (event) => {
+              const next = event !== null && event.target !== null && typeof event.target.value === 'string' ? event.target.value : ''
+              if (next === MANUAL_MODEL_VALUE) {
+                patchRoute(id, { manual: true })
+                return
+              }
+              const picked = splitRouteValue(next)
+              patchRoute(id, { manual: false, providerId: picked.providerId, model: picked.model })
+            },
+          }, [
+            h('option', { key: 'unset', value: '' }, fallbackSlot ? tr('route.noFallback') : tr('route.unset')),
+            ...groupsFor(id).map((group) => h('optgroup', {
+              key: `g:${group.provider.id}`,
+              label: group.provider.label !== '' ? group.provider.label : group.provider.id,
+            }, group.models.map((model) => h('option', {
+              key: `${group.provider.id}:${model}`,
+              value: routeValueOf(group.provider.id, model),
+              'data-provider': group.provider.id,
+              'data-model': model,
+            }, model)))),
+            h('option', { key: 'manual', value: MANUAL_MODEL_VALUE }, tr('manualOption')),
+          ]),
+          h('p', { key: 'hint', id: `${selectId}-hint`, className: 'dib-field-hint' }, manual
+            ? `${tr('route.manualHint')}：${activeLabel}`
+            : fallbackSlot ? tr('route.fallbackHint') : tr('route.primaryHint')),
+        ])]
+        if (manual) {
+          nodes.push(field(inputId, tr('manualOption'), `${tr('route.manualHint')}：${activeLabel}`, typeof route.manualText === 'string' ? route.manualText : '', disabled, (value) => patchRoute(id, { manualText: value }), {
+            placeholder: id.startsWith('generate') ? tr('imageModel.placeholder') : tr('editModel.placeholder'),
+          }))
+        }
+        return h('div', { key: id, className: 'dib-route-group' }, nodes)
+      }
+
+      const routesBlock = h('div', { key: 'routes', className: 'dib-routes' }, [
+        h('h3', { key: 'title', className: 'dib-section-title' }, tr('routes.title')),
+        h('p', { key: 'hint', className: 'dib-field-hint' }, tr('routes.hint')),
+        hasConnected ? null : h('p', { key: 'none', className: 'dib-field-hint' }, tr('routes.none')),
+        ...ROUTE_IDS.map(routeField),
+        h('div', { key: 'showall', className: 'dib-toggle-row' }, [
+          h('label', { key: 'toggle', className: 'dib-toggle' }, [
+            h('input', {
+              key: 'box',
+              id: 'dib-routes-showall',
+              type: 'checkbox',
+              checked: state.routesShowAll,
+              disabled,
+              onChange: (event) => patch({ routesShowAll: event !== null && event.target !== null && event.target.checked === true }),
+            }),
+            h('span', { key: 'text' }, tr('routes.showAll')),
+          ]),
+        ]),
+        h('div', { key: 'timeout', className: 'dib-field' }, [
+          h('label', { key: 'label', className: 'dib-label', htmlFor: 'dib-fallback-ms' }, tr('fallbackAfterMs')),
+          h('input', {
+            key: 'input',
+            id: 'dib-fallback-ms',
+            className: 'dib-input dib-input-narrow',
+            type: 'text',
+            inputMode: 'numeric',
+            placeholder: tr('fallbackAfterMs.placeholder'),
+            value: state.fallbackDraft,
+            disabled,
+            spellCheck: false,
+            autoComplete: 'off',
+            onChange: (event) => patch({ fallbackDraft: event.target.value }),
+          }),
+          h('p', { key: 'hint', className: 'dib-field-hint' }, tr('fallbackAfterMs.hint')),
+        ]),
+        h('div', { key: 'footer', className: 'dib-footer' }, [
+          h('button', {
+            key: 'save',
+            type: 'button',
+            className: 'dib-btn',
+            'data-dib-action': 'save-routes',
+            disabled: disabled || busy,
+            onClick: () => { void saveRoutes() },
+          }, tr('routes.save')),
+        ]),
+      ])
+
       return h('div', { className: 'dib-cfg' }, [
         h('p', { key: 'intro', className: 'dib-cfg-intro' }, tr('intro')),
         state.providers.length === 0 ? null : h('ul', { key: 'list', className: 'dib-list' }, state.providers.map(cardOf)),
@@ -1773,6 +2020,8 @@ window.__ModuleLoader__.load({
             t: props.t,
             initial: editorTarget,
             keyConfigured: editorId !== '' && state.keyConfigured[editorId] === true,
+            // 浮层只展示模型、不再选择；把主页的路由结果传进去，让列表能标出"正被用"的那几个。
+            routed,
             disabled,
             busy: state.phase === 'saving',
             onCancel: () => {
@@ -1782,6 +2031,7 @@ window.__ModuleLoader__.load({
             },
             onSubmit: (draft, keyDraft) => { void submitProvider(draft, keyDraft) },
           }),
+        routesBlock,
         h('div', { key: 'defaults', className: 'dib-defaults' }, [
           h('label', { key: 'label', className: 'dib-label', htmlFor: 'dib-size' }, tr('size')),
           h('input', {

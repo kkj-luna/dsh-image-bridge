@@ -611,6 +611,42 @@ const pageWith = (bundle, initial) => treeOf(invoke(bundle.component, {
   __initial: { phase: 'idle', ...initial },
 }).element)
 
+/** 模型行里的模型名（span.dib-model-id 的文本）。 */
+const rowIdOf = (row) => {
+  const children = Array.isArray(row?.props?.children) ? row.props.children : []
+  const span = children.find((child) => child !== null && typeof child === 'object' && child.props?.className === 'dib-model-id')
+  return span === undefined ? '' : textOfElement(span).trim()
+}
+const modelIdsOf = (tree) => tree.nodes.filter((node) => node.props?.className === 'dib-model-row').map(rowIdOf)
+
+/** 一个模型槽位（与 client.js 里 routes 的字段形状一致）。 */
+const routeItem = (providerId, model, extra) => ({ providerId, model, manual: false, manualText: '', ...(extra ?? {}) })
+/** 四个槽位的初始状态，可覆盖任意槽。 */
+const routesSeed = (overrides) => ({
+  'generate.primary': routeItem('', ''),
+  'generate.fallback': routeItem('', ''),
+  'edit.primary': routeItem('', ''),
+  'edit.fallback': routeItem('', ''),
+  ...(overrides ?? {}),
+})
+/** 打开编辑浮层时带进去的记录（可覆盖任何字段）。 */
+const editorInitialFor = (models, extra) => ({
+  id: 'zhipu',
+  keyRef: 'DSH_IMAGE_BRIDGE_KEY_ZHIPU',
+  label: '智谱',
+  baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+  models,
+  imageModel: 'qwen-image-3.0-pro',
+  editModel: '',
+  ...(extra ?? {}),
+})
+/** 渲染一个打开着编辑浮层的设置页；`models` 与 `extra` 直接进 `initial`。 */
+const editorWith = (models, extra) => pageWith(cardBundle, {
+  providers: [providerRecord],
+  activeProviderId: 'zhipu',
+  editor: { mode: 'edit', initial: editorInitialFor(models, extra) },
+})
+
 /* 空列表：虚线「添加」入口 */
 const emptyBundle = sectionWithRecording({ size: '1024x1024' })
 const emptyTree = pageWith(emptyBundle, { providers: [], activeProviderId: '' })
@@ -649,9 +685,9 @@ const editorInitial = {
   keyRef: 'DSH_IMAGE_BRIDGE_KEY_ZHIPU',
   label: '智谱',
   baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-  models: ['m-alpha', 'm-beta'],
-  imageModel: 'm-alpha',
-  editModel: 'm-beta',
+  models: ALL_MODELS,
+  imageModel: 'qwen-image-3.0-pro',
+  editModel: '',
 }
 const editorTree = pageWith(cardBundle, {
   providers: [providerRecord],
@@ -670,23 +706,38 @@ check(
   editorTree.buttonTexts.join(','),
 )
 
-/* 模型选择列表 */
-const modelRows = editorTree.nodes.filter((node) => node.props?.className === 'dib-model-row')
-const rowButtons = (row) => (row === undefined ? [] : row.props.children.filter((child) => child !== null && typeof child === 'object' && child.type === 'button'))
-const alphaRow = modelRows.find((row) => textOfElement(row).includes('m-alpha'))
-const betaRow = modelRows.find((row) => textOfElement(row).includes('m-beta'))
+/* 模型列表（浮层里）：只作展示，选择已经搬到主页的模型区块 */
 check(
-  '拉取到模型后以可选列表呈现，每个模型两个角色按钮',
-  hasClass(editorTree, 'dib-model-list') && modelRows.length === 2 && rowButtons(alphaRow).length === 2 && rowButtons(betaRow).length === 2,
-  `rows=${modelRows.length}`,
+  '浮层里仍列出这家服务商的模型，默认只列生图模型',
+  hasClass(editorTree, 'dib-model-list') && modelIdsOf(editorTree).length === IMAGE_MODELS.length
+    && IMAGE_MODELS.every((model) => modelIdsOf(editorTree).includes(model))
+    && NON_IMAGE_MODELS.every((model) => !modelIdsOf(editorTree).includes(model)),
+  `rows=${modelIdsOf(editorTree).length}`,
 )
 check(
-  '列表标出当前生图 / 改图模型（aria-pressed 反映选择）',
-  rowButtons(alphaRow)[0]?.props['aria-pressed'] === 'true'
-    && rowButtons(alphaRow)[1]?.props['aria-pressed'] === 'false'
-    && rowButtons(betaRow)[0]?.props['aria-pressed'] === 'false'
-    && rowButtons(betaRow)[1]?.props['aria-pressed'] === 'true',
-  JSON.stringify(rowButtons(alphaRow).map((button) => button.props['aria-pressed'])),
+  '浮层里不再有「生图 / 改图」选择按钮（选哪个模型只在主页做）',
+  editorTree.buttons.every((button) => !['生图', '改图'].includes(textOfElement(button).trim())),
+  editorTree.buttonTexts.join(','),
+)
+const routedRowOf = (tree, model) => tree.nodes.filter((node) => node.props?.className === 'dib-model-row').find((row) => rowIdOf(row) === model)
+const routedTree = pageWith(cardBundle, {
+  providers: [providerRecord],
+  activeProviderId: 'zhipu',
+  routes: routesSeed({
+    'generate.primary': routeItem('zhipu', 'qwen-image-3.0'),
+    'edit.primary': routeItem('zhipu', 'wan2.7-image'),
+  }),
+  editor: { mode: 'edit', initial: editorInitialFor(ALL_MODELS) },
+})
+check(
+  '浮层行标出主页当前选中的生图 / 改图模型（同一份 modelRoutes，两处不分裂）',
+  textOfElement(routedRowOf(routedTree, 'qwen-image-3.0')).includes('当前生图模型')
+    && textOfElement(routedRowOf(routedTree, 'wan2.7-image')).includes('当前改图模型')
+    && !textOfElement(routedRowOf(routedTree, 'qwen-image-2.1-pro')).includes('当前生图模型'),
+  JSON.stringify({
+    image: textOfElement(routedRowOf(routedTree, 'qwen-image-3.0')).slice(0, 60),
+    edit: textOfElement(routedRowOf(routedTree, 'wan2.7-image')).slice(0, 60),
+  }),
 )
 
 /* 两个动作按钮真的走 Host RPC */
@@ -726,31 +777,6 @@ check(
 /* ------------------------------------------------------------------ *
  * 浮层界面 + 测试连接自动带出模型 + 生图模型筛选（真实夹具逐条比对）
  * ------------------------------------------------------------------ */
-
-/** 模型行里的模型名（span.dib-model-id 的文本）。 */
-const rowIdOf = (row) => {
-  const children = Array.isArray(row?.props?.children) ? row.props.children : []
-  const span = children.find((child) => child !== null && typeof child === 'object' && child.props?.className === 'dib-model-id')
-  return span === undefined ? '' : textOfElement(span).trim()
-}
-const modelIdsOf = (tree) => tree.nodes.filter((node) => node.props?.className === 'dib-model-row').map(rowIdOf)
-/** 打开编辑浮层时带进去的记录（可覆盖任何字段）。 */
-const editorInitialFor = (models, extra) => ({
-  id: 'zhipu',
-  keyRef: 'DSH_IMAGE_BRIDGE_KEY_ZHIPU',
-  label: '智谱',
-  baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-  models,
-  imageModel: 'qwen-image-3.0-pro',
-  editModel: '',
-  ...(extra ?? {}),
-})
-/** 渲染一个打开着编辑浮层的设置页；`models` 与 `extra` 直接进 `initial`。 */
-const editorWith = (models, extra) => pageWith(cardBundle, {
-  providers: [providerRecord],
-  activeProviderId: 'zhipu',
-  editor: { mode: 'edit', initial: editorInitialFor(models, extra) },
-})
 
 /* ① 独立浮层：遮罩 + 居中卡片 + 标题 + 关闭/取消 */
 check(
@@ -868,117 +894,214 @@ check(
  * 生图 / 改图模型字段：下拉选择 + 手动输入 + 与列表同步
  * ------------------------------------------------------------------ */
 
-const IMAGE_SELECT = 'dib-provider-image-model-select'
-const EDIT_SELECT = 'dib-provider-edit-model-select'
-
-/* ① 下拉选项就是筛选后的生图模型 */
-const dropTree = editorWith(ALL_MODELS)
-const dropImageOptions = modelOptionsOf(dropTree, IMAGE_SELECT)
-const dropEditOptions = modelOptionsOf(dropTree, EDIT_SELECT)
-check(
-  '两个下拉的选项等于筛选后的生图模型（9 个，11 个语言/向量/语音模型不在里面）',
-  dropImageOptions.length === IMAGE_MODELS.length
-    && IMAGE_MODELS.every((model) => dropImageOptions.includes(model))
-    && NON_IMAGE_MODELS.every((model) => !dropImageOptions.includes(model))
-    && dropEditOptions.length === IMAGE_MODELS.length
-    && NON_IMAGE_MODELS.every((model) => !dropEditOptions.includes(model)),
-  JSON.stringify({ image: dropImageOptions.length, edit: dropEditOptions.length, leaked: NON_IMAGE_MODELS.filter((m) => dropImageOptions.includes(m)) }).slice(0, 260),
-)
-check(
-  '下拉自带空选项与「手动输入…」，选中值来自同一份状态',
-  optionValuesOf(selectById(dropTree, IMAGE_SELECT)).includes('')
-    && optionValuesOf(selectById(dropTree, IMAGE_SELECT)).includes(MANUAL_MODEL_VALUE)
-    && optionValuesOf(selectById(dropTree, EDIT_SELECT)).includes(MANUAL_MODEL_VALUE)
-    && selectById(dropTree, IMAGE_SELECT)?.props.value === 'qwen-image-3.0-pro'
-    && selectById(dropTree, EDIT_SELECT)?.props.value === ''
-    && selectById(dropTree, IMAGE_SELECT)?.props.disabled === false,
-  JSON.stringify({
-    image: selectById(dropTree, IMAGE_SELECT)?.props.value,
-    edit: selectById(dropTree, EDIT_SELECT)?.props.value,
-    imageOptions: optionValuesOf(selectById(dropTree, IMAGE_SELECT)).length,
-  }).slice(0, 240),
-)
-
-/* ② 勾「显示全部模型」后下拉选项扩展为全部 */
-const fullDropTree = editorWith(ALL_MODELS, { showAll: true })
-const fullDropOptions = modelOptionsOf(fullDropTree, IMAGE_SELECT)
-check(
-  '勾上「显示全部模型」后下拉选项扩展为全部 20 个',
-  fullDropOptions.length === ALL_MODELS.length && NON_IMAGE_MODELS.every((model) => fullDropOptions.includes(model)),
-  JSON.stringify({ options: fullDropOptions.length }).slice(0, 160),
-)
-
-/* ③ 没获取过模型时下拉禁用、给提示，手填通道仍在 */
-const noModelsDropTree = editorWith([], { imageModel: '', editModel: '' })
-check(
-  '还没获取到模型时两个下拉禁用、给一行提示，手动输入仍然可用',
-  selectById(noModelsDropTree, IMAGE_SELECT)?.props.disabled === true
-    && selectById(noModelsDropTree, EDIT_SELECT)?.props.disabled === true
-    && noModelsDropTree.text.includes('还没有获取到模型列表')
-    && inputById(noModelsDropTree, 'dib-provider-image-model') !== undefined
-    && inputById(noModelsDropTree, 'dib-provider-edit-model') !== undefined,
-  JSON.stringify({
-    imageDisabled: selectById(noModelsDropTree, IMAGE_SELECT)?.props.disabled ?? null,
-    hint: noModelsDropTree.text.includes('还没有获取到模型列表'),
-  }).slice(0, 200),
-)
-
-/* ④ 选「手动输入…」→ 出现文本框 → 手填的值真的写进 imageModel（走保存落盘验证） */
-const manualBundle = sectionWithRecording({ size: '1024x1024' })
-const manualSession = createSession(manualBundle.component, {
+const ROUTE_SELECTS = {
+  'generate.primary': 'dib-route-generate-primary',
+  'generate.fallback': 'dib-route-generate-fallback',
+  'edit.primary': 'dib-route-edit-primary',
+  'edit.fallback': 'dib-route-edit-fallback',
+}
+const openaiProvider = {
+  id: 'openai',
+  label: 'OpenAI',
+  baseUrl: 'https://api.openai.com/v1',
+  keyRef: 'DSH_IMAGE_BRIDGE_KEY_OPENAI',
+  models: ['gpt-image-1', 'dall-e-3', 'gpt-4o'],
+  imageModel: 'gpt-image-1',
+  editModel: '',
+}
+const zhipuFull = { ...providerRecord, models: ALL_MODELS }
+/** 主页（不开浮层）的模型路由视图：两家服务商，各自的模型列表都已获取过。 */
+const routesPageWith = (bundle, extra) => treeOf(invoke(bundle.component, {
   t: undefined,
   close: () => {},
-  __initial: { phase: 'idle', providers: [providerRecord], activeProviderId: 'zhipu', editor: { mode: 'edit', initial: editorInitialFor(ALL_MODELS) } },
-})
-let manualTree = manualSession.tree()
-manualSession.change(selectById(manualTree, IMAGE_SELECT), MANUAL_MODEL_VALUE)
-manualTree = manualSession.tree()
-const manualInput = inputById(manualTree, 'dib-provider-image-model')
+  __initial: { phase: 'idle', providers: [zhipuFull, openaiProvider], activeProviderId: 'zhipu', ...extra },
+}).element)
+
+/* ① 四个下拉存在，选项是所有服务商模型的并集，按服务商分组 */
+const routesBundle = sectionWithRecording({ size: '1024x1024' })
+const routesTree = routesPageWith(routesBundle, {})
+const generateSelect = selectById(routesTree, ROUTE_SELECTS['generate.primary'])
+const generateGroups = (generateSelect?.props.children ?? []).filter((child) => child !== null && typeof child === 'object' && child.type === 'optgroup')
+const generateOptionNames = generateGroups.flatMap((group) => group.props.children.map((option) => option.props['data-model']))
 check(
-  '选「手动输入…」后下拉切到保留值，并出现手填文本框',
-  selectById(manualTree, IMAGE_SELECT)?.props.value === MANUAL_MODEL_VALUE && manualInput !== undefined,
-  JSON.stringify({ value: selectById(manualTree, IMAGE_SELECT)?.props.value ?? null, input: manualInput !== undefined }),
+  '主页四个下拉都在：生图 / 生图备用 / 修图 / 修图备用',
+  Object.values(ROUTE_SELECTS).every((id) => selectById(routesTree, id) !== undefined)
+    && selectById(routesTree, ROUTE_SELECTS['generate.fallback']) !== undefined
+    && selectById(routesTree, ROUTE_SELECTS['edit.fallback']) !== undefined,
+  Object.values(ROUTE_SELECTS).map((id) => `${id}:${selectById(routesTree, id) !== undefined}`).join(','),
 )
-manualSession.change(manualInput, 'my-own-image-model')
-manualTree = manualSession.tree()
-manualSession.submit(manualTree.forms[0])
-await sleep(30)
-const manualSaved = manualBundle.updates[0]?.patch?.providers?.[0]
 check(
-  '手填的模型名写进 imageModel（保存的 providers 里就是它）',
-  manualSaved !== undefined && manualSaved.imageModel === 'my-own-image-model',
-  JSON.stringify(manualSaved ?? null).slice(0, 240),
+  '选项是所有服务商模型的并集，且按服务商分组（optgroup 标签 = 服务商名）',
+  generateGroups.length === 2
+    && generateGroups.map((group) => group.props.label).join(',') === '智谱,OpenAI'
+    && generateOptionNames.join(',') === 'qwen-image-2.1-pro,qwen-image-3.0-pro,qwen-image-3.0,qwen-image-2.0-pro,qwen-image-2.0-2026-03-03,qwen-image-2.0-pro-2026-04-22,wan2.7-image,wan2.7-image-pro,z-image-turbo,gpt-image-1,dall-e-3',
+  JSON.stringify({ groups: generateGroups.map((group) => group.props.label), options: generateOptionNames.length }).slice(0, 240),
+)
+check(
+  '选项里每项都带 providerId 与 model（跨服务商选择知道用哪家的地址与凭据）',
+  generateGroups.every((group) => group.props.children.every((option) => typeof option.props['data-provider'] === 'string' && option.props['data-provider'] !== '' && typeof option.props['data-model'] === 'string' && option.props.value === `${option.props['data-provider']}::${option.props['data-model']}`)),
+  JSON.stringify(generateGroups[1]?.props.children[0]?.props ?? null).slice(0, 200),
 )
 
-/* ⑤ 点列表行的「生图」按钮 → 上方下拉同步（两处不分裂） */
-const syncBundle = sectionWithRecording({ size: '1024x1024' })
-const syncSession = createSession(syncBundle.component, {
-  t: undefined,
-  close: () => {},
-  __initial: { phase: 'idle', providers: [providerRecord], activeProviderId: 'zhipu', editor: { mode: 'edit', initial: editorInitialFor(ALL_MODELS, { imageModel: '' }) } },
-})
-let syncTree = syncSession.tree()
-syncSession.change(selectById(syncTree, IMAGE_SELECT), MANUAL_MODEL_VALUE)
-syncTree = syncSession.tree()
-const wasManual = inputById(syncTree, 'dib-provider-image-model') !== undefined
-const targetRow = syncTree.nodes
-  .filter((node) => node.props?.className === 'dib-model-row')
-  .find((row) => rowIdOf(row) === 'qwen-image-3.0')
-const rowImageButton = targetRow?.props?.children.find((child) => child !== null && typeof child === 'object' && child.type === 'button' && textOfElement(child).trim() === '生图')
-syncSession.click(rowImageButton)
-const syncedTree = syncSession.tree()
+/* ② 默认只含生图模型；勾「显示全部模型」后含语言模型 */
 check(
-  '点列表行的「生图」后，上方生图下拉同步为该模型（并从手动输入切回来）',
-  wasManual
-    && rowImageButton !== undefined
-    && selectById(syncedTree, IMAGE_SELECT)?.props.value === 'qwen-image-3.0'
-    && inputById(syncedTree, 'dib-provider-image-model') === undefined,
+  '默认只含生图模型（11 个语言/向量/语音模型一个都不在）',
+  generateOptionNames.length === IMAGE_MODELS.length + 2
+    && NON_IMAGE_MODELS.every((model) => !generateOptionNames.includes(model))
+    && !generateOptionNames.includes('gpt-4o'),
+  JSON.stringify({ count: generateOptionNames.length, leaked: NON_IMAGE_MODELS.filter((m) => generateOptionNames.includes(m)) }).slice(0, 200),
+)
+const routesAllTree = routesPageWith(routesBundle, { routesShowAll: true })
+const allOptionNames = (selectById(routesAllTree, ROUTE_SELECTS['generate.primary'])?.props.children ?? [])
+  .filter((child) => child !== null && typeof child === 'object' && child.type === 'optgroup')
+  .flatMap((group) => group.props.children.map((option) => option.props['data-model']))
+check(
+  '勾「显示全部模型」后选项含语言模型（并集 + 语言模型）',
+  NON_IMAGE_MODELS.every((model) => allOptionNames.includes(model)) && allOptionNames.includes('gpt-4o') && allOptionNames.length === ALL_MODELS.length + 3,
+  JSON.stringify({ count: allOptionNames.length }).slice(0, 160),
+)
+
+/* ③ 默认选中值来自 modelRoutes；手动输入通道带 providerId = 当前生效服务商 */
+const selectedRoutesTree = routesPageWith(routesBundle, {
+  routes: routesSeed({ 'generate.primary': routeItem('openai', 'dall-e-3'), 'generate.fallback': routeItem('zhipu', 'wan2.7-image') }),
+})
+check(
+  '选中值回填到对应下拉（含「哪家服务商」）',
+  selectById(selectedRoutesTree, ROUTE_SELECTS['generate.primary'])?.props.value === 'openai::dall-e-3'
+    && selectById(selectedRoutesTree, ROUTE_SELECTS['generate.fallback'])?.props.value === 'zhipu::wan2.7-image'
+    && selectById(selectedRoutesTree, ROUTE_SELECTS['edit.primary'])?.props.value === '',
   JSON.stringify({
-    wasManual,
-    value: selectById(syncedTree, IMAGE_SELECT)?.props.value ?? null,
-    manualStillOpen: inputById(syncedTree, 'dib-provider-image-model') !== undefined,
+    primary: selectById(selectedRoutesTree, ROUTE_SELECTS['generate.primary'])?.props.value ?? null,
+    fallback: selectById(selectedRoutesTree, ROUTE_SELECTS['generate.fallback'])?.props.value ?? null,
   }),
 )
+
+/* ④ 没有任何已连接的模型时：四个下拉禁用 + 一行提示 */
+const noConnectedTree = routesPageWith(routesBundle, { providers: [{ ...providerRecord, models: [] }] })
+check(
+  '没有已连接模型时四个下拉禁用，并提示先添加并测试连接',
+  Object.values(ROUTE_SELECTS).every((id) => selectById(noConnectedTree, id)?.props.disabled === true)
+    && noConnectedTree.text.includes('先添加并测试连接一个模型提供商'),
+  JSON.stringify(Object.values(ROUTE_SELECTS).map((id) => selectById(noConnectedTree, id)?.props.disabled ?? null)),
+)
+
+/* ⑤ 选择后保存：patch 里 modelRoutes.generate.primary 同时带 providerId 与 model */
+const saveRoutesBundle = sectionWithRecording({ size: '1024x1024' })
+const saveRoutesSession = createSession(saveRoutesBundle.component, {
+  t: undefined,
+  close: () => {},
+  __initial: { phase: 'idle', providers: [zhipuFull, openaiProvider], activeProviderId: 'zhipu' },
+})
+let saveRoutesTree = saveRoutesSession.tree()
+saveRoutesSession.change(selectById(saveRoutesTree, ROUTE_SELECTS['generate.primary']), 'openai::dall-e-3')
+saveRoutesSession.change(selectById(saveRoutesTree, ROUTE_SELECTS['generate.fallback']), 'zhipu::wan2.7-image')
+saveRoutesTree = saveRoutesSession.tree()
+const routeSaveButton = saveRoutesTree.nodes.find((node) => node.type === 'button' && node.props?.['data-dib-action'] === 'save-routes')
+saveRoutesSession.click(routeSaveButton)
+await sleep(30)
+const routesPatch = saveRoutesBundle.updates[0]?.patch
+check(
+  '保存后 modelRoutes.generate.primary 同时带正确的 providerId 与 model',
+  routesPatch !== undefined
+    && routesPatch.modelRoutes?.generate?.primary?.providerId === 'openai'
+    && routesPatch.modelRoutes?.generate?.primary?.model === 'dall-e-3'
+    && routesPatch.modelRoutes?.generate?.fallback?.providerId === 'zhipu'
+    && routesPatch.modelRoutes?.generate?.fallback?.model === 'wan2.7-image'
+    && routesPatch.modelRoutes?.edit?.primary?.providerId === ''
+    && routesPatch.fallbackAfterMs === 15000,
+  JSON.stringify(routesPatch ?? null).slice(0, 320),
+)
+
+/* ⑥ 手动输入：providerId 取当前生效服务商，模型名写进对应槽位 */
+const manualRouteBundle = sectionWithRecording({ size: '1024x1024' })
+const manualRouteSession = createSession(manualRouteBundle.component, {
+  t: undefined,
+  close: () => {},
+  __initial: { phase: 'idle', providers: [zhipuFull, openaiProvider], activeProviderId: 'zhipu' },
+})
+let manualRouteTree = manualRouteSession.tree()
+manualRouteSession.change(selectById(manualRouteTree, ROUTE_SELECTS['edit.primary']), MANUAL_MODEL_VALUE)
+manualRouteTree = manualRouteSession.tree()
+const manualRouteInput = inputById(manualRouteTree, `${ROUTE_SELECTS['edit.primary']}-manual`)
+check(
+  '选「手动输入…」后出现文本框，界面上说明走的是当前生效服务商',
+  selectById(manualRouteTree, ROUTE_SELECTS['edit.primary'])?.props.value === MANUAL_MODEL_VALUE
+    && manualRouteInput !== undefined
+    && manualRouteTree.text.includes('手动填写的模型走当前生效服务商'),
+  JSON.stringify({ value: selectById(manualRouteTree, ROUTE_SELECTS['edit.primary'])?.props.value ?? null, input: manualRouteInput !== undefined }),
+)
+manualRouteSession.change(manualRouteInput, 'my-own-edit-model')
+manualRouteTree = manualRouteSession.tree()
+manualRouteSession.click(manualRouteTree.nodes.find((node) => node.type === 'button' && node.props?.['data-dib-action'] === 'save-routes'))
+await sleep(30)
+const manualRoutesPatch = manualRouteBundle.updates[0]?.patch
+check(
+  '手填的模型名写进 modelRoutes.edit.primary，providerId 取当前生效服务商',
+  manualRoutesPatch?.modelRoutes?.edit?.primary?.model === 'my-own-edit-model'
+    && manualRoutesPatch?.modelRoutes?.edit?.primary?.providerId === 'zhipu',
+  JSON.stringify(manualRoutesPatch?.modelRoutes ?? null).slice(0, 240),
+)
+
+/* ⑦ 主模型超时：非法值不落盘，合法值 / 留空按默认写 */
+const timeoutBundle = sectionWithRecording({ size: '1024x1024' })
+const timeoutSession = createSession(timeoutBundle.component, {
+  t: undefined,
+  close: () => {},
+  __initial: { phase: 'idle', providers: [zhipuFull, openaiProvider], activeProviderId: 'zhipu' },
+})
+let timeoutTree = timeoutSession.tree()
+timeoutSession.change(inputById(timeoutTree, 'dib-fallback-ms'), 'abc')
+timeoutTree = timeoutSession.tree()
+timeoutSession.click(timeoutTree.nodes.find((node) => node.type === 'button' && node.props?.['data-dib-action'] === 'save-routes'))
+await sleep(30)
+timeoutTree = timeoutSession.tree()
+check(
+  '主模型超时填了非法值时不写入任何数据（并给出原因）',
+  timeoutBundle.updates.length === 0 && timeoutTree.text.includes('主模型超时必须是正整数毫秒数'),
+  JSON.stringify({ updates: timeoutBundle.updates.length, hint: timeoutTree.text.includes('主模型超时必须是正整数毫秒数') }).slice(0, 140),
+)
+timeoutSession.change(inputById(timeoutTree, 'dib-fallback-ms'), '20000')
+timeoutTree = timeoutSession.tree()
+timeoutSession.click(timeoutTree.nodes.find((node) => node.type === 'button' && node.props?.['data-dib-action'] === 'save-routes'))
+await sleep(30)
+check(
+  '超时改成合法值后写进 patch（fallbackAfterMs=20000）',
+  timeoutBundle.updates[0]?.patch?.fallbackAfterMs === 20000,
+  JSON.stringify(timeoutBundle.updates[0]?.patch?.fallbackAfterMs ?? null),
+)
+timeoutSession.change(inputById(timeoutTree, 'dib-fallback-ms'), '')
+timeoutTree = timeoutSession.tree()
+timeoutSession.click(timeoutTree.nodes.find((node) => node.type === 'button' && node.props?.['data-dib-action'] === 'save-routes'))
+await sleep(30)
+check(
+  '超时留空按默认 15000 写',
+  timeoutBundle.updates[1]?.patch?.fallbackAfterMs === 15000,
+  JSON.stringify(timeoutBundle.updates.map((entry) => entry.patch.fallbackAfterMs)),
+)
+
+/* ⑧ 主页改选择后，浮层里的「当前生图模型」标记跟着走（同一份状态） */
+const linkedBundle = sectionWithRecording({ size: '1024x1024' })
+const linkedSession = createSession(linkedBundle.component, {
+  t: undefined,
+  close: () => {},
+  __initial: {
+    phase: 'idle',
+    providers: [zhipuFull],
+    activeProviderId: 'zhipu',
+    editor: { mode: 'edit', initial: editorInitialFor(ALL_MODELS) },
+  },
+})
+let linkedTree = linkedSession.tree()
+linkedSession.change(selectById(linkedTree, ROUTE_SELECTS['generate.primary']), 'zhipu::qwen-image-3.0')
+linkedTree = linkedSession.tree()
+check(
+  '主页下拉改了生图模型后，浮层对应行同步打上「当前生图模型」',
+  textOfElement(routedRowOf(linkedTree, 'qwen-image-3.0')).includes('当前生图模型')
+    && !textOfElement(routedRowOf(linkedTree, 'qwen-image-2.1-pro')).includes('当前生图模型')
+    && selectById(linkedTree, ROUTE_SELECTS['generate.primary'])?.props.value === 'zhipu::qwen-image-3.0',
+  JSON.stringify({ value: selectById(linkedTree, ROUTE_SELECTS['generate.primary'])?.props.value ?? null }).slice(0, 160),
+)
+
 
 /* 非法 keyRef（手改 profile 塞进来的）不能进 payload，按空处理并留一条 warn */
 const badRefBundle = sectionWithRecording({ size: '1024x1024' })

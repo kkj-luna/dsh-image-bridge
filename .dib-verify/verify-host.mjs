@@ -52,9 +52,19 @@ let modelsAuth = ''
 let keyedModelsAuth = ''
 /** 收到的每一条请求（方法 + 路径）：用来断言"没有可用密钥时一个包都不发"。 */
 const requests = []
+/** 模型路由用例的记录：备用服务商、慢响应服务商、以及"第一次掐断连接"的服务器。 */
+let lastAltGenerateBody
+let lastAltEditBody
+let altAuth = ''
+let lastSlowGenerateBody
+let slowAuth = ''
+let flakyAttempts = 0
+let lastFlakyGenerateBody
 
 const server = createServer((request, response) => {
   const chunks = []
+  // 客户端中途放弃（响应头超时/取消）时 socket 会被掐断，别让这类事件把进程带崩。
+  response.on('error', () => {})
   request.on('data', (chunk) => chunks.push(chunk))
   request.on('end', () => {
     requests.push(`${request.method} ${request.url}`)
@@ -75,11 +85,54 @@ const server = createServer((request, response) => {
       image()
       return
     }
+    if (request.method === 'POST' && (request.url.startsWith('/alt-vendor/images/generations') || request.url.startsWith('/alt-vendor/images/edits'))) {
+      if (request.url.startsWith('/alt-vendor/images/generations')) lastAltGenerateBody = body
+      else lastAltEditBody = body
+      altAuth = auth
+      image()
+      return
+    }
+    /* 慢响应：故意拖过 fallbackAfterMs 才回响应头，用来验证"响应头预算"。 */
+    if (request.method === 'POST' && request.url.startsWith('/slow-vendor/images/generations')) {
+      setTimeout(() => {
+        if (response.writableEnded || response.destroyed) return
+        lastSlowGenerateBody = body
+        slowAuth = auth
+        image()
+      }, 600)
+      return
+    }
+    /* 第一次直接掐断连接（模拟网络层失败），第二次正常：验证"去掉信号重试一次"的兜底。 */
+    if (request.method === 'POST' && request.url.startsWith('/flaky/images/generations')) {
+      flakyAttempts += 1
+      if (flakyAttempts === 1) {
+        request.socket.destroy()
+        return
+      }
+      lastFlakyGenerateBody = body
+      image()
+      return
+    }
     if (request.method === 'POST' && (request.url.startsWith('/vendor/images/generations') || request.url.startsWith('/vendor/images/edits'))) {
       if (request.url.startsWith('/vendor/images/generations')) lastVendorGenerateBody = body
       else lastVendorEditBody = body
       vendorAuth = auth
       image()
+      return
+    }
+    /* 200 但 data 为空：真机上"模型不支持这个端点 / 没出图"的常见形态。 */
+    if (request.method === 'POST' && request.url.startsWith('/empty-vendor/images/generations')) {
+      json(200, { data: [] })
+      return
+    }
+    /* 200 但回的是任务态（没有 data 数组）：异步服务商常见形态。 */
+    if (request.method === 'POST' && request.url.startsWith('/task-vendor/images/generations')) {
+      json(200, { task_id: 'task-1', status: 'processing' })
+      return
+    }
+    /* 200 且给了一个图片地址，但那个地址取不到：图片"已经产出、只是传输失败"。 */
+    if (request.method === 'POST' && request.url.startsWith('/urlish-vendor/images/generations')) {
+      json(200, { data: [{ url: `${origin}/missing-image.png` }] })
       return
     }
     if (request.method === 'POST' && request.url.startsWith('/legacy/images/generations')) {
@@ -183,7 +236,7 @@ if (mod.Config !== undefined) {
   const serialized = JSON.stringify(json)
   const refs = json?.refs ?? {}
   const volatileNodes = Object.values(refs).filter((node) => node?.meta?.volatile === true)
-  const fieldNames = ['baseUrl', 'model', 'editModel', 'size', 'saveToWorkspace', 'outputDir', 'timeoutMs', 'providers', 'activeProviderId']
+  const fieldNames = ['baseUrl', 'model', 'editModel', 'size', 'saveToWorkspace', 'outputDir', 'timeoutMs', 'providers', 'activeProviderId', 'modelRoutes', 'fallbackAfterMs']
   check('Config 字段齐全', fieldNames.every((key) => serialized.includes(`"${key}"`)), `缺少: ${fieldNames.filter((key) => !serialized.includes(`"${key}"`)).join(',')}`)
   check('每个字段都标了 volatile', volatileNodes.length === fieldNames.length, `volatile=${volatileNodes.length}/${fieldNames.length}`)
   check('每个 volatile 字段都有默认值', volatileNodes.every((node) => node.meta.default !== undefined), '')
@@ -224,6 +277,30 @@ if (mod.Config !== undefined) {
     JSON.stringify(roundTripProviders),
   )
 
+  /* 模型路由：两层嵌套对象，每一档都是 { providerId, model }，客户端会写这个形状。 */
+  const roundTripRoutes = mod.Config({
+    modelRoutes: {
+      generate: { primary: { providerId: 'p1', model: 'm1' }, fallback: { providerId: 'p2', model: 'm2' } },
+      edit: { primary: { providerId: 'p3', model: 'm3' } },
+    },
+    fallbackAfterMs: 2500,
+  })
+  const routes = plain(roundTripRoutes.modelRoutes)
+  check(
+    'modelRoutes / fallbackAfterMs 能通过 Schema 校验且原样保留',
+    routes?.generate?.primary?.providerId === 'p1'
+      && routes?.generate?.fallback?.model === 'm2'
+      && routes?.edit?.primary?.model === 'm3'
+      && plain(roundTripRoutes.fallbackAfterMs) === 2500,
+    JSON.stringify({ routes, fallbackAfterMs: plain(roundTripRoutes.fallbackAfterMs) }),
+  )
+  const routeDefaults = plain(mod.Config({}).modelRoutes)
+  check(
+    'modelRoutes 默认 {}、fallbackAfterMs 默认 15000',
+    routeDefaults !== null && typeof routeDefaults === 'object' && plain(mod.Config({}).fallbackAfterMs) === 15000,
+    JSON.stringify({ routeDefaults, fallbackAfterMs: plain(mod.Config({}).fallbackAfterMs) }),
+  )
+
   /*
    * 设置页的表单投影：dsh-settings 会对每个 volatile 字段执行
    * `new z(node.toJSON())`（plainSchema）再逐层 walk。数组套对象是最容易在这一步
@@ -237,6 +314,14 @@ if (mod.Config !== undefined) {
     'providers 子 schema 能被设置服务重建（plainSchema 同款调用）',
     rebuiltProviders?.type === 'array' && Object.keys(rebuiltProviders.inner?.dict ?? {}).length === 7,
     JSON.stringify(rebuiltProviders === undefined ? null : Object.keys(rebuiltProviders.inner?.dict ?? {})),
+  )
+  const rebuiltRoutes = mod.Config?.dict?.modelRoutes === undefined ? undefined : z(mod.Config.dict.modelRoutes.toJSON())
+  check(
+    'modelRoutes 子 schema 能被设置服务重建（两层嵌套对象）',
+    rebuiltRoutes?.type === 'object'
+      && rebuiltRoutes.dict?.generate?.dict?.primary?.dict?.providerId !== undefined
+      && rebuiltRoutes.dict?.edit?.dict?.fallback?.dict?.model !== undefined,
+    JSON.stringify(rebuiltRoutes === undefined ? null : Object.keys(rebuiltRoutes.dict ?? {})),
   )
 }
 
@@ -811,6 +896,291 @@ providerRefs.length = 0
 await providerGenerate.execute({ prompt: 'level three' }, exec)
 check('providers 为空时请求真的打到旧 baseUrl/model', String(lastLegacyGenerateBody).includes('legacy-model'), String(lastLegacyGenerateBody))
 check('三级回退用旧的 DSH_IMAGE_BRIDGE_API_KEY', legacyAuth === 'Bearer key-for-DSH_IMAGE_BRIDGE_API_KEY', legacyAuth)
+
+/* ------------------------------------------------------------------ *
+ * 跨服务商模型路由 + 主/备用模型与"响应头预算"
+ *
+ * 四家服务商各司其职：vendor-one 正常、alt-vendor 正常（用来证明路由用的是它的地址与
+ * 凭据）、dead-vendor 一律 404、slow-vendor 拖 600ms 才回响应头。路由就是
+ * modelRoutes.<role>.{primary,fallback} = { providerId, model }。
+ * ------------------------------------------------------------------ */
+
+const emptyRoute = () => ({ providerId: '', model: '' })
+const emptyRole = () => ({ primary: emptyRoute(), fallback: emptyRoute() })
+/** 各司其职的服务商配置（每次改路由都复用同一套 providers/activeProviderId）。 */
+const routeProviders = [
+  { id: 'vendor-one', label: 'Vendor One', baseUrl: vendorBase, keyRef: '', models: [], imageModel: 'vendor-image-v2', editModel: 'vendor-edit-v2' },
+  { id: 'alt-vendor', label: 'Alt Vendor', baseUrl: `${origin}/alt-vendor`, keyRef: '', models: [], imageModel: 'alt-image', editModel: 'alt-edit' },
+  { id: 'dead-vendor', label: 'Dead Vendor', baseUrl: `${origin}/dead-vendor`, keyRef: '', models: [], imageModel: 'dead-image', editModel: 'dead-edit' },
+  { id: 'flaky-vendor', label: 'Flaky Vendor', baseUrl: `${origin}/flaky`, keyRef: '', models: [], imageModel: 'flaky-image', editModel: '' },
+  { id: 'slow-vendor', label: 'Slow Vendor', baseUrl: `${origin}/slow-vendor`, keyRef: '', models: [], imageModel: 'slow-image', editModel: '' },
+  { id: 'empty-vendor', label: 'Empty Vendor', baseUrl: `${origin}/empty-vendor`, keyRef: '', models: [], imageModel: 'empty-image', editModel: '' },
+  { id: 'task-vendor', label: 'Task Vendor', baseUrl: `${origin}/task-vendor`, keyRef: '', models: [], imageModel: 'task-image', editModel: '' },
+  { id: 'urlish-vendor', label: 'Urlish Vendor', baseUrl: `${origin}/urlish-vendor`, keyRef: '', models: [], imageModel: 'urlish-image', editModel: '' },
+]
+const setRoutes = (generate, edit = emptyRole(), fallbackAfterMs = 15000) => {
+  providerConfigValue = {
+    ...providerConfigValue,
+    providers: routeProviders,
+    activeProviderId: 'vendor-one',
+    modelRoutes: { generate, edit },
+    fallbackAfterMs,
+  }
+}
+
+/* ① 路由命中：用被选中那家服务商的 baseUrl 与凭据，而不是当前生效服务商的。 */
+setRoutes({ primary: { providerId: 'alt-vendor', model: 'alt-image' }, fallback: emptyRoute() })
+providerRefs.length = 0
+lastAltGenerateBody = undefined
+lastVendorGenerateBody = undefined
+const routedValue = await providerGenerate.execute({ prompt: 'routed primary' }, exec)
+check(
+  '① 路由命中时用该服务商的 baseUrl（不是生效服务商的）',
+  typeof lastAltGenerateBody === 'string' && String(lastAltGenerateBody).includes('alt-image') && lastVendorGenerateBody === undefined,
+  `alt=${Boolean(lastAltGenerateBody)} vendor=${Boolean(lastVendorGenerateBody)}`,
+)
+check(
+  '① 且用该服务商自己的凭据（没有借用生效服务商的密钥）',
+  providerRefs.includes('DSH_IMAGE_BRIDGE_KEY_ALT_VENDOR')
+    && !providerRefs.includes('DSH_IMAGE_BRIDGE_KEY_VENDOR_ONE')
+    && altAuth === 'Bearer key-for-DSH_IMAGE_BRIDGE_KEY_ALT_VENDOR',
+  `${JSON.stringify(providerRefs)} ${altAuth}`,
+)
+check('① 结果里的模型是路由选中的那个', routedValue.model === 'alt-image', String(routedValue.model))
+
+/* ①b 主用未配时才轮到"当前生效服务商的 imageModel"（现状不受影响）。 */
+setRoutes(emptyRole())
+lastVendorGenerateBody = undefined
+const noRouteValue = await providerGenerate.execute({ prompt: 'no route' }, exec)
+check('①b 没有路由时仍用当前生效服务商的 imageModel', noRouteValue.model === 'vendor-image-v2' && String(lastVendorGenerateBody).includes('vendor-image-v2'), String(noRouteValue.model))
+
+/* ①c 改图走 routes.edit：用的是那家服务商的 edits 端点与它自己的凭据。 */
+setRoutes(emptyRole(), { primary: { providerId: 'alt-vendor', model: 'alt-edit' }, fallback: emptyRoute() })
+providerRefs.length = 0
+lastAltEditBody = undefined
+lastVendorEditBody = undefined
+const routedEditValue = await providerEdit.execute({ prompt: 'routed edit', image_path: 'generated-images/source.png' }, exec)
+check(
+  '①c 改图命中 routes.edit：打到该服务商的 edits 端点并用它的凭据',
+  String(lastAltEditBody).includes('alt-edit')
+    && lastVendorEditBody === undefined
+    && altAuth === 'Bearer key-for-DSH_IMAGE_BRIDGE_KEY_ALT_VENDOR'
+    && routedEditValue.model === 'alt-edit',
+  `altEdit=${Boolean(lastAltEditBody)} vendorEdit=${Boolean(lastVendorEditBody)} model=${routedEditValue.model}`,
+)
+
+/* ⑦ 路由指向的服务商没有可用凭据 → 明确报错，且不得借用别家的密钥（F-3 原则）。 */
+const healthyCredentials = providerServices.credentials
+providerServices.credentials = { async resolve() { return undefined } }
+setRoutes({ primary: { providerId: 'alt-vendor', model: 'alt-image' }, fallback: { providerId: 'vendor-one', model: 'vendor-image-v2' } })
+lastAltGenerateBody = undefined
+const requestsBeforeNoKey = requests.length
+let routeNoKeyError = ''
+try {
+  await providerGenerate.execute({ prompt: 'no key for route' }, exec)
+} catch (error) {
+  routeNoKeyError = error instanceof Error ? error.message : String(error)
+}
+providerServices.credentials = healthyCredentials
+check(
+  '⑦ 路由命中的服务商没有凭据时明确报错且不发请求',
+  routeNoKeyError.includes('DSH_IMAGE_BRIDGE_KEY_ALT_VENDOR')
+    && routeNoKeyError.includes('API Key')
+    && lastAltGenerateBody === undefined
+    && requests.length === requestsBeforeNoKey,
+  `${routeNoKeyError} | 新增请求=${requests.length - requestsBeforeNoKey}`,
+)
+
+/* ② 主模型 404 → 自动改用备用模型并成功。 */
+setRoutes({ primary: { providerId: 'dead-vendor', model: 'dead-image' }, fallback: { providerId: 'vendor-one', model: 'vendor-image-v2' } })
+lastVendorGenerateBody = undefined
+const requestsBeforeFallback = requests.length
+const fallbackValue = await providerGenerate.execute({ prompt: 'fallback case' }, exec)
+check(
+  '② 主模型 404 时自动改用备用模型并成功',
+  fallbackValue.model === 'vendor-image-v2' && String(lastVendorGenerateBody).includes('vendor-image-v2'),
+  `${fallbackValue.model} ${String(lastVendorGenerateBody).slice(0, 80)}`,
+)
+check(
+  '② 先打主模型、失败后才打备用（顺序正确）',
+  requests.slice(requestsBeforeFallback).join(' | ') === 'POST /dead-vendor/images/generations | POST /vendor/images/generations',
+  JSON.stringify(requests.slice(requestsBeforeFallback)),
+)
+check(
+  '② 结果里说明这次是备用模型出的图',
+  Array.isArray(fallbackValue.warnings) && fallbackValue.warnings.some((warning) => warning.includes('备用模型')),
+  JSON.stringify(fallbackValue.warnings),
+)
+
+/* ③ 主模型拿到响应头超过预算 → 中止并改用备用（慢服务商 600ms，预算 300ms）。 */
+setRoutes(
+  { primary: { providerId: 'slow-vendor', model: 'slow-image' }, fallback: { providerId: 'vendor-one', model: 'vendor-image-v2' } },
+  emptyRole(),
+  300,
+)
+lastVendorGenerateBody = undefined
+const requestsBeforeTimeout = requests.length
+const slowValue = await providerGenerate.execute({ prompt: 'header budget case' }, exec)
+check(
+  '③ 响应头超预算时中止主模型并改用备用',
+  slowValue.model === 'vendor-image-v2' && String(lastVendorGenerateBody).includes('vendor-image-v2'),
+  String(slowValue.model),
+)
+check(
+  '③ 用的是配置里的预算（300ms），不是等慢响应回来',
+  Array.isArray(slowValue.warnings) && slowValue.warnings.some((warning) => warning.includes('300ms')),
+  JSON.stringify(slowValue.warnings),
+)
+check(
+  '③ 主模型的请求确实发出去过（是"超时中止"，不是压根没发）',
+  requests.slice(requestsBeforeTimeout).some((entry) => entry.includes('/slow-vendor/')),
+  JSON.stringify(requests.slice(requestsBeforeTimeout)),
+)
+
+/* ④ 备用没配 → 直接把主模型的错误报出来。 */
+setRoutes({ primary: { providerId: 'dead-vendor', model: 'dead-image' }, fallback: emptyRoute() })
+let noFallbackError = ''
+try {
+  await providerGenerate.execute({ prompt: 'no fallback' }, exec)
+} catch (error) {
+  noFallbackError = error instanceof Error ? error.message : String(error)
+}
+check('④ 备用未配置时直接报主模型的错（含模型名与原因）', noFallbackError.includes('dead-image') && noFallbackError.includes('404'), noFallbackError)
+
+/* ⑤ 取消不是失败：exec.signal 已中止时绝不尝试备用。 */
+setRoutes({ primary: { providerId: 'slow-vendor', model: 'slow-image' }, fallback: { providerId: 'vendor-one', model: 'vendor-image-v2' } })
+const cancelController = new AbortController()
+const cancelExec = { ...exec, signal: cancelController.signal }
+setTimeout(() => cancelController.abort(new Error('用户取消')), 80)
+const requestsBeforeCancel = requests.length
+let cancelError = ''
+try {
+  await providerGenerate.execute({ prompt: 'cancel case' }, cancelExec)
+} catch (error) {
+  cancelError = error instanceof Error ? error.message : String(error)
+}
+const cancelRequests = requests.slice(requestsBeforeCancel)
+check(
+  '⑤ exec.signal 取消时不尝试备用（请求只发了主模型那一次）',
+  cancelError.includes('已中止') && cancelRequests.length >= 1 && cancelRequests.every((entry) => entry.includes('/slow-vendor/')),
+  `${cancelError} | ${JSON.stringify(cancelRequests)}`,
+)
+
+/* ⑥ 顺带守住既有能力：网络层失败仍"去掉信号重试一次"，不是直接判死。 */
+setRoutes(emptyRole())
+providerConfigValue = { ...providerConfigValue, activeProviderId: 'flaky-vendor' }
+flakyAttempts = 0
+lastFlakyGenerateBody = undefined
+const flakyValue = await providerGenerate.execute({ prompt: 'flaky case' }, exec)
+check(
+  '⑥ 网络层失败仍保留"去掉信号重试一次"的兜底',
+  flakyAttempts === 2 && flakyValue.model === 'flaky-image' && typeof lastFlakyGenerateBody === 'string',
+  `attempts=${flakyAttempts} model=${flakyValue.model}`,
+)
+
+/* ⑥b 备用也失败时，错误里要能同时看到两次尝试的模型与原因。 */
+setRoutes({ primary: { providerId: 'dead-vendor', model: 'dead-image' }, fallback: { providerId: 'slow-vendor', model: 'slow-image' } }, emptyRole(), 200)
+let bothFailError = ''
+try {
+  await providerGenerate.execute({ prompt: 'both fail' }, exec)
+} catch (error) {
+  bothFailError = error instanceof Error ? error.message : String(error)
+}
+check(
+  '⑥b 备用也失败时错误里同时有两次尝试的模型与原因',
+  bothFailError.includes('dead-image')
+    && bothFailError.includes('404')
+    && bothFailError.includes('slow-image')
+    && bothFailError.includes('200ms'),
+  bothFailError,
+)
+
+/* ------------------------------------------------------------------ *
+ * ⑧ 200 但没有可用图片（空 data / 任务态）也算"这次没出图" → 换备用
+ *
+ * 从用户视角，"回包成功但一张图都没解出来"和"连接失败"一样都是没出图；真机上
+ * 模型不支持该端点、data 为空、返回任务态都会长成这样。边界：只有**确实解析不出
+ * 任何可用图片**才算失败，正常出图（哪怕一张）绝不能因此重试（会重复计费）。
+ * ------------------------------------------------------------------ */
+
+/* ⑧ 主模型 200 + data 为空 → 自动改用备用并成功出图，且只多打一次请求。 */
+setRoutes({ primary: { providerId: 'empty-vendor', model: 'empty-image' }, fallback: { providerId: 'vendor-one', model: 'vendor-image-v2' } })
+lastVendorGenerateBody = undefined
+const requestsBeforeEmpty = requests.length
+const emptyValue = await providerGenerate.execute({ prompt: 'empty data case' }, exec)
+check(
+  '⑧ 主模型 200 但 data 为空 → 自动改用备用并成功出图',
+  emptyValue.model === 'vendor-image-v2' && String(lastVendorGenerateBody).includes('vendor-image-v2'),
+  String(emptyValue.model),
+)
+check(
+  '⑧ 且确实只打了两次请求（主一次、备用一次）',
+  requests.slice(requestsBeforeEmpty).join(' | ') === 'POST /empty-vendor/images/generations | POST /vendor/images/generations',
+  JSON.stringify(requests.slice(requestsBeforeEmpty)),
+)
+check(
+  '⑧ warning 说明是备用出的图，并带上"没有可用图片"这个原因',
+  Array.isArray(emptyValue.warnings)
+    && emptyValue.warnings.some((warning) => warning.includes('备用模型') && warning.includes('没有返回任何可用的图片数据')),
+  JSON.stringify(emptyValue.warnings),
+)
+
+/* ⑧b 任务态回包（200、没有 data 数组）同样触发备用。 */
+setRoutes({ primary: { providerId: 'task-vendor', model: 'task-image' }, fallback: { providerId: 'vendor-one', model: 'vendor-image-v2' } })
+lastVendorGenerateBody = undefined
+const requestsBeforeTask = requests.length
+const taskValue = await providerGenerate.execute({ prompt: 'task state case' }, exec)
+check(
+  '⑧b 200 返回任务态（没有 data 数组）同样换备用',
+  taskValue.model === 'vendor-image-v2' && requests.slice(requestsBeforeTask).length === 2,
+  `${taskValue.model} ${JSON.stringify(requests.slice(requestsBeforeTask))}`,
+)
+
+/* ⑨ 正常出图（哪怕只有一张）绝不触发备用：请求数必须仍是 1。 */
+setRoutes({ primary: { providerId: 'vendor-one', model: 'vendor-image-v2' }, fallback: { providerId: 'alt-vendor', model: 'alt-image' } })
+lastAltGenerateBody = undefined
+altAuth = ''
+const requestsBeforeNormal = requests.length
+const normalValue = await providerGenerate.execute({ prompt: 'normal single image' }, exec)
+check(
+  '⑨ 正常出图不触发备用（请求数=1，防止重复计费）',
+  requests.slice(requestsBeforeNormal).join(' | ') === 'POST /vendor/images/generations'
+    && lastAltGenerateBody === undefined
+    && normalValue.warnings === undefined,
+  `${JSON.stringify(requests.slice(requestsBeforeNormal))} alt=${Boolean(lastAltGenerateBody)} warnings=${JSON.stringify(normalValue.warnings)}`,
+)
+
+/* ⑨b 主备都拿不到图片时，错误要能看出两次都是"回包没有可用图片"，而不是网络/状态码问题。 */
+setRoutes({ primary: { providerId: 'empty-vendor', model: 'empty-image' }, fallback: { providerId: 'task-vendor', model: 'task-image' } })
+let noImageError = ''
+try {
+  await providerGenerate.execute({ prompt: 'no image on both' }, exec)
+} catch (error) {
+  noImageError = error instanceof Error ? error.message : String(error)
+}
+check(
+  '⑨b 主备都没图片时错误里同时说明两次都是"回包无可用图片"',
+  noImageError.includes('empty-image')
+    && noImageError.includes('task-image')
+    && (noImageError.match(/没有返回任何可用的图片数据|没有 data 数组/gu) ?? []).length >= 2,
+  noImageError,
+)
+
+/* ⑨c 边界：图片已产出、只是下载失败 → 硬错误、不换备用（那已经是一次计过费的生成）。 */
+setRoutes({ primary: { providerId: 'urlish-vendor', model: 'urlish-image' }, fallback: { providerId: 'vendor-one', model: 'vendor-image-v2' } })
+const requestsBeforeUrlish = requests.length
+let downloadError = ''
+try {
+  await providerGenerate.execute({ prompt: 'download failure' }, exec)
+} catch (error) {
+  downloadError = error instanceof Error ? error.message : String(error)
+}
+check(
+  '⑨c 图片只是下载失败时不换备用（避免重复计费）',
+  downloadError.includes('下载生成的图片失败')
+    && requests.slice(requestsBeforeUrlish).filter((entry) => entry.includes('/vendor/')).length === 0,
+  `${downloadError} | ${JSON.stringify(requests.slice(requestsBeforeUrlish))}`,
+)
 
 /* ---------------------------------------------------------------- 收尾 */
 

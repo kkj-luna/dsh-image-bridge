@@ -87,6 +87,15 @@ export const name = '@local/image-bridge-v4'
 export const inject = ['tools']
 
 /**
+ * 一条模型路由的 schema：模型可以选**任何**已配置服务商下的，所以必须带 providerId——
+ * 地址与凭据都取自那家服务商，不是当前生效的那家。
+ */
+const routeEndpointSchema = () => z.object({
+  providerId: z.string().default('').description('服务商 id；留空表示这一档没配。'),
+  model: z.string().default('').description('该服务商下的模型名。'),
+})
+
+/**
  * 可公开的接口配置。
  *
  * 每个字段都标了 `volatile()`：settings 服务只允许在线改写 volatile 字段
@@ -97,6 +106,9 @@ export const inject = ['tools']
  * 「当前生效的服务商」走（`activeProviderId` 命中优先，没命中就取列表第一个）；
  * 只有 `providers` 为空时才整体回退到 baseUrl/model/editModel，
  * 因此老的（单服务商）配置不改也能继续用。
+ *
+ * `modelRoutes` 再往上一层：为生图/修图各指定主用与备用模型（可跨服务商），
+ * 主用失败或迟迟拿不到响应头时自动改用备用。
  */
 export const Config = z === undefined ? undefined : z.object({
   baseUrl: z
@@ -124,6 +136,15 @@ export const Config = z === undefined ? undefined : z.object({
     .volatile()
     .description('多个生图服务商；非空时以 activeProviderId 选中的那一项为准。'),
   activeProviderId: z.string().default('').volatile().description('当前生效的服务商 id；为空或找不到时回退到上面的 baseUrl/model。'),
+  modelRoutes: z
+    .object({
+      generate: z.object({ primary: routeEndpointSchema().default({}), fallback: routeEndpointSchema().default({}) }).default({}),
+      edit: z.object({ primary: routeEndpointSchema().default({}), fallback: routeEndpointSchema().default({}) }).default({}),
+    })
+    .default({})
+    .volatile()
+    .description('生图/修图的模型路由：每项 { providerId, model }，可跨服务商选择；fallback 是主用失败或超时后的备用模型。'),
+  fallbackAfterMs: z.number().default(15000).volatile().description('主模型从发起请求到拿到响应头的预算（毫秒）；超过就中止并改用备用模型。整次调用的上限仍是 timeoutMs。'),
 })
 
 /** API Key 在 credentials 服务里的引用名（同时作为环境变量回退名）。 */
@@ -137,6 +158,9 @@ const CREDENTIAL_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /** 拉取模型列表的超时毫秒数；列表接口只是给设置页选模型用，不能久等。 */
 const MODELS_TIMEOUT_MS = 15000
+
+/** 主模型"多久没拿到响应头就换备用"的默认预算；设置页可改写（0/负数视为未设）。 */
+const DEFAULT_FALLBACK_AFTER_MS = 15000
 
 /** 设置页「测试连接」用的环回 RPC 通道。 */
 const RPC_CHANNEL = '/dsh-image-bridge'
@@ -427,7 +451,30 @@ function normalizedConfig(config) {
     // 列表整体保留（与设置页一致）：哪怕某一项还没填全，也要占着它那一格 id，否则两侧会错位。
     providers: Array.isArray(providers) ? providers.map((raw) => normalizeProvider(raw, taken)) : [],
     activeProviderId: nonEmptyString(value.activeProviderId),
+    modelRoutes: normalizedRoutes(value.modelRoutes),
+    fallbackAfterMs: Number.isFinite(plainValueOf(value.fallbackAfterMs)) && plainValueOf(value.fallbackAfterMs) > 0
+      ? plainValueOf(value.fallbackAfterMs)
+      : DEFAULT_FALLBACK_AFTER_MS,
   }
+}
+
+/** 一条模型路由（`{ providerId, model }`）的归一；任一项为空都表示"这一档没配"。 */
+function normalizedRoute(raw) {
+  const value = plainValueOf(raw)
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  return { providerId: nonEmptyString(source.providerId), model: nonEmptyString(source.model) }
+}
+
+/** 生图/修图两个角色的主用与备用路由；形状恒定，取值方不必再防 undefined。 */
+function normalizedRoutes(raw) {
+  const value = plainValueOf(raw)
+  const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const role = (key) => {
+    const entry = plainValueOf(source[key])
+    const scoped = entry !== null && typeof entry === 'object' && !Array.isArray(entry) ? entry : {}
+    return { primary: normalizedRoute(scoped.primary), fallback: normalizedRoute(scoped.fallback) }
+  }
+  return { generate: role('generate'), edit: role('edit') }
 }
 
 /**
@@ -493,16 +540,19 @@ function activeProviderSummary(config) {
 }
 
 /**
- * 把配置折算成「本次请求要用的接口参数」。
+ * 把配置折算成「当前生效服务商的接口参数」。
  *
  * 服务商模式下：baseUrl 取服务商的，密钥名取 `DSH_IMAGE_BRIDGE_KEY_<ID>`，
  * 生图模型取 imageModel、改图模型取 editModel（为空则回退 imageModel，再回退旧 model）。
  * 回退模式下一切照旧，密钥名仍是 DSH_IMAGE_BRIDGE_API_KEY。
+ *
+ * `role` 决定用哪一档模型名：`generate` 用 imageModel，`edit` 用 editModel。
  */
-function endpointFor(config) {
+function endpointFor(config, role) {
   const provider = activeProviderOf(config)
+  const legacyModel = role === 'edit' ? config.editModel : config.model
   if (provider === undefined) {
-    return { provider: undefined, baseUrl: config.baseUrl, model: config.model, editModel: config.editModel, keyRef: API_KEY_REF }
+    return { provider: undefined, baseUrl: config.baseUrl, model: legacyModel, keyRef: API_KEY_REF, label: '' }
   }
   if (provider.baseUrl === '') {
     throw new Error(`服务商「${provider.label}」还没有填写接口地址（baseUrl）：请在「设置 → 生图桥」里补全后再试。`)
@@ -511,9 +561,77 @@ function endpointFor(config) {
   return {
     provider,
     baseUrl: provider.baseUrl,
-    model: imageModel,
-    editModel: provider.editModel === '' ? imageModel : provider.editModel,
+    model: role === 'edit' && provider.editModel !== '' ? provider.editModel : imageModel,
     keyRef: providerCredentialRef(provider.id, provider.keyRef),
+    label: provider.label,
+  }
+}
+
+/**
+ * 解析一条模型路由。
+ *
+ * - `none`：这一档没配（providerId 或 model 为空），或指向的服务商已经不存在——
+ *   调用方按契约继续往下一档回退；
+ * - `ready`：命中服务商且凭据可用，端点带上**那家服务商**的 baseUrl 与 keyRef；
+ * - `unavailable`：配了但用不了（缺 baseUrl、缺凭据）。绝不借用别家服务商的密钥（F-3）。
+ */
+async function resolveModelRoute({ ctx, config, route }) {
+  const providerId = nonEmptyString(route?.providerId)
+  const model = nonEmptyString(route?.model)
+  if (providerId === '' || model === '') return { kind: 'none' }
+  const provider = (Array.isArray(config.providers) ? config.providers : []).find((item) => item.id === providerId)
+  if (provider === undefined) return { kind: 'none' }
+  if (provider.baseUrl === '') {
+    return { kind: 'unavailable', message: `模型路由指向的服务商「${provider.label}」没有填写接口地址（baseUrl）。` }
+  }
+  const keyRef = providerCredentialRef(provider.id, provider.keyRef)
+  const apiKey = await resolveApiKey(ctx, keyRef)
+  if (apiKey === '') {
+    return { kind: 'unavailable', message: `模型路由指向的服务商「${provider.label}」没有可用的 API Key（凭据名 ${keyRef}）。` }
+  }
+  return { kind: 'ready', endpoint: { provider, baseUrl: provider.baseUrl, model, keyRef, apiKey, label: provider.label } }
+}
+
+/** 取某个端点的密钥；拿不到就按该端点自己的凭据名报错（不跨服务商借用）。 */
+async function keyForEndpoint(ctx, endpoint) {
+  const apiKey = await resolveApiKey(ctx, endpoint.keyRef)
+  if (apiKey === '') {
+    throw new Error(`尚未配置生图接口密钥：凭据 ${endpoint.keyRef} 里没有密钥，请在「设置 → 生图桥」里填入 API Key 并保存，或设置环境变量 ${endpoint.keyRef}。`)
+  }
+  return apiKey
+}
+
+/**
+ * 组装本次调用要尝试的端点序列（主用 + 可选备用）。
+ *
+ * 主用的解析顺序：`args.model` → `modelRoutes.<role>.primary` → 当前生效服务商的
+ * imageModel/editModel → 旧字段（后两档由 endpointFor 负责）。备用只来自
+ * `modelRoutes.<role>.fallback`；它没配、或指向的服务商不可用，就等于"没有备用"，
+ * 但要把原因留着，好在主用失败时如实说明为什么没换成。
+ *
+ * 每条路由都用**它自己那家服务商**的 baseUrl 与凭据：跨服务商选择模型不等于借用密钥。
+ */
+async function imageAttemptPlan({ ctx, config, role, requestedModel }) {
+  const routes = config.modelRoutes[role]
+  const primaryRoute = await resolveModelRoute({ ctx, config, route: routes.primary })
+  if (primaryRoute.kind === 'unavailable') throw new Error(primaryRoute.message)
+
+  let primary
+  if (requestedModel !== '') {
+    const endpoint = endpointFor(config, role)
+    primary = { ...endpoint, model: requestedModel, apiKey: await keyForEndpoint(ctx, endpoint) }
+  } else if (primaryRoute.kind === 'ready') {
+    primary = primaryRoute.endpoint
+  } else {
+    const endpoint = endpointFor(config, role)
+    primary = { ...endpoint, apiKey: await keyForEndpoint(ctx, endpoint) }
+  }
+
+  const fallbackRoute = await resolveModelRoute({ ctx, config, route: routes.fallback })
+  return {
+    primary,
+    ...(fallbackRoute.kind === 'ready' ? { fallback: fallbackRoute.endpoint } : {}),
+    ...(fallbackRoute.kind === 'unavailable' ? { fallbackNote: fallbackRoute.message } : {}),
   }
 }
 
@@ -587,10 +705,20 @@ async function bytesOfItem(item, signal) {
   return undefined
 }
 
+/**
+ * "这次调用没有产出任何可用图片"。
+ *
+ * 与"图片已经产出、只是传输失败"（下载 url 形态的图片失败）刻意分开：前者可以换备用模型
+ * 重试，后者不能——服务商已经生成并计费了，再生成一次就是重复计费。
+ */
+class NoImageError extends Error {
+  name = 'NoImageError'
+}
+
 async function collectImages(payload, signal) {
   const data = Array.isArray(payload?.data) ? payload.data : undefined
   if (data === undefined) {
-    throw new Error(`图片接口返回里没有 data 数组：${truncate(JSON.stringify(payload ?? null))}`)
+    throw new NoImageError(`图片接口返回里没有 data 数组：${truncate(JSON.stringify(payload ?? null))}`)
   }
   const out = []
   for (const item of data) {
@@ -604,7 +732,7 @@ async function collectImages(payload, signal) {
       ...(typeof item.revised_prompt === 'string' && item.revised_prompt !== '' ? { revisedPrompt: item.revised_prompt } : {}),
     })
   }
-  if (out.length === 0) throw new Error('图片接口没有返回任何可用的图片数据')
+  if (out.length === 0) throw new NoImageError('图片接口没有返回任何可用的图片数据')
   return out
 }
 
@@ -735,38 +863,138 @@ async function fetchResilient(url, init, signal) {
   }
 }
 
-/** 统一的对外请求：生图走 JSON，改图走 multipart。 */
-async function requestImages({ config, apiKey, keyRef, kind, prompt, size, model, n, file, signal }) {
-  if (apiKey === '') {
-    const ref = keyRef ?? API_KEY_REF
-    throw new Error(`尚未配置生图接口密钥：请在「设置 → 生图桥」里填入 API Key（凭据名 ${ref}），或设置环境变量 ${ref}。`)
+/**
+ * 一次"到响应头为止"的请求尝试。
+ *
+ * 两个中止来源：`exec.signal`（调用方取消）与 `fallbackAfterMs` 预算（响应头超时）。
+ * 请求发出去之后两者没有区别，差别只在失败时怎么解释——**取消不是失败**，绝不能因此
+ * 改用备用模型；超时才轮到备用上场。预算只算到拿到响应头为止：头一到就撤销计时器，
+ * 之后读 body 不受它限制（整次调用的上限仍由工具的 timeoutMs 管）。
+ *
+ * 网络层失败保留既有的"去掉 exec.signal 重试一次"兜底（fetchResilient 的行为），
+ * 但重试时换成只带预算的信号——否则"多久没响应头就换人"会在重试路径上失效。
+ *
+ * @returns {{kind:'response', response}|{kind:'timeout'|'cancelled'|'failed', error}}
+ */
+async function attemptWithHeaderBudget({ url, init, signal, budgetMs }) {
+  const budget = new AbortController()
+  let expired = false
+  const timer = setTimeout(() => {
+    expired = true
+    budget.abort(new Error('header-timeout'))
+  }, budgetMs)
+  const forwardAbort = () => budget.abort(signal?.reason)
+  const callerAborted = () => signal !== undefined && signal !== null && signal.aborted === true
+  if (callerAborted()) budget.abort(signal.reason)
+  else if (signal !== undefined && signal !== null) signal.addEventListener('abort', forwardAbort, { once: true })
+  try {
+    let response
+    try {
+      response = await fetch(url, { ...init, signal: budget.signal })
+    } catch (error) {
+      const first = describeFetchFailure(error, url)
+      // 先看取消：调用方要求停止时，任何"重试/换人"都是错的。
+      if (callerAborted()) return { kind: 'cancelled', error: new Error(`${first}（exec.signal ${describeSignal(signal)}）`) }
+      if (expired) return { kind: 'timeout', error: new Error(`${first}（超过 ${budgetMs}ms 仍未拿到响应头）`) }
+      try {
+        response = await fetch(url, { ...init, signal: budget.signal })
+      } catch (retryError) {
+        if (callerAborted()) return { kind: 'cancelled', error: new Error(`${first}（exec.signal ${describeSignal(signal)}）`) }
+        if (expired) return { kind: 'timeout', error: new Error(`${first}（超过 ${budgetMs}ms 仍未拿到响应头）`) }
+        return { kind: 'failed', error: new Error(`${first}（exec.signal ${describeSignal(signal)}）；去掉信号重试仍失败：${describeFetchFailure(retryError, url)}`) }
+      }
+    }
+    return { kind: 'response', response }
+  } finally {
+    clearTimeout(timer)
+    if (signal !== undefined && signal !== null) signal.removeEventListener('abort', forwardAbort)
   }
-  const url = `${config.baseUrl}/images/${kind === 'edit' ? 'edits' : 'generations'}`
-  let payload
+}
+
+/** 按端点拼出一次生图/改图请求：生图走 JSON，改图走 multipart。 */
+function imageRequestSpec({ endpoint, kind, prompt, size, model, n, file }) {
+  const url = `${endpoint.baseUrl}/images/${kind === 'edit' ? 'edits' : 'generations'}`
   if (kind === 'edit') {
     const form = new FormData()
     form.append('model', model)
     form.append('prompt', prompt)
     if (size !== undefined && size !== '') form.append('size', size)
     form.append('image', new Blob([file.bytes], { type: file.mediaType }), file.name)
-    const response = await fetchResilient(url, { method: 'POST', headers: authHeaders(apiKey), body: form }, signal)
-    payload = await readJsonResponse(response)
-  } else {
-    const body = { model, prompt }
-    if (size !== undefined && size !== '') body.size = size
-    if (Number.isFinite(n) && n > 1) body.n = n
-    const response = await fetchResilient(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...authHeaders(apiKey) },
-      body: JSON.stringify(body),
-    }, signal)
-    payload = await readJsonResponse(response)
+    return { url, init: { method: 'POST', headers: authHeaders(endpoint.apiKey), body: form } }
   }
-  return await collectImages(payload, signal)
+  const body = { model, prompt }
+  if (size !== undefined && size !== '') body.size = size
+  if (Number.isFinite(n) && n > 1) body.n = n
+  return {
+    url,
+    init: { method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders(endpoint.apiKey) }, body: JSON.stringify(body) },
+  }
+}
+
+/**
+ * 一次取图尝试：只负责"发出请求并拿到可用图片"。
+ *
+ * 网络失败、响应头超时、非 2xx（含回包不是 JSON）、以及**回包正常但解析不出任何可用图片**
+ * 都不在这里抛，而是交回上层决定要不要换备用——从用户视角这四种都是"这次没出图"。
+ * 图片已经产出、只是传输失败（url 形态下载失败）才是硬错误：那是已经计过费的一次生成，
+ * 换备用会重复计费。
+ */
+async function requestImagesOnce({ endpoint, kind, prompt, size, model, n, file, signal, budgetMs }) {
+  const spec = imageRequestSpec({ endpoint, kind, prompt, size, model, n, file })
+  const attempt = await attemptWithHeaderBudget({ url: spec.url, init: spec.init, signal, budgetMs })
+  if (attempt.kind !== 'response') return attempt
+  let payload
+  try {
+    payload = await readJsonResponse(attempt.response)
+  } catch (error) {
+    return { kind: 'failed', error: error instanceof Error ? error : new Error(String(error)) }
+  }
+  try {
+    return { kind: 'images', images: await collectImages(payload, signal) }
+  } catch (error) {
+    if (error instanceof NoImageError) return { kind: 'failed', error }
+    throw error
+  }
+}
+
+/**
+ * 跑一次"主模型 → 备用模型"的取图。
+ *
+ * 换备用的条件：网络失败、非 2xx（含回包不是 JSON）、超过 `budgetMs` 没拿到响应头、
+ * 以及回包正常却解析不出任何可用图片（"这次没出图"）。
+ * 取消（exec.signal 已中止）**不换**；备用没配或不可用时，把主模型的错误如实报出去，
+ * 并把"备用为什么没上"一并说清楚。
+ *
+ * @returns {{ images, endpoint, warning? }}
+ */
+async function requestImagesWithFallback({ plan, label, kind, prompt, size, n, file, signal, budgetMs }) {
+  const primary = plan.primary
+  const first = await requestImagesOnce({ endpoint: primary, kind, prompt, size, model: primary.model, n, file, signal, budgetMs })
+  if (first.kind === 'images') return { ...first, endpoint: primary }
+  if (first.kind === 'cancelled') throw first.error
+  if (plan.fallback === undefined) {
+    const note = plan.fallbackNote === undefined ? '' : `（备用模型不可用：${plan.fallbackNote}）`
+    throw new Error(`${label}「${primary.model}」失败：${first.error.message}${note}`)
+  }
+  const fallback = plan.fallback
+  const second = await requestImagesOnce({ endpoint: fallback, kind, prompt, size, model: fallback.model, n, file, signal, budgetMs })
+  if (second.kind === 'images') {
+    return {
+      ...second,
+      endpoint: fallback,
+      warning: `${label}「${primary.model}」未能成功（${first.error.message}），已改用备用模型「${fallback.model}」。`,
+    }
+  }
+  if (second.kind === 'cancelled') throw second.error
+  throw new Error(`${label}「${primary.model}」失败：${first.error.message}；备用模型「${fallback.model}」也失败：${second.error.message}`)
 }
 
 /**
  * 落实一次生图结果：存附件、写工作区文件、组装工具值。
+ *
+ * `extraWarnings` 用来把"这次其实是备用模型出的图"之类的运行时事实带给模型和用户——
+ * 结果里不写清楚，用户只会看到一张跟主模型无关的图。
+ *
  * @returns 输出 Schema 声明的规范值。
  */
 async function settleImages(args) {
@@ -776,7 +1004,7 @@ async function settleImages(args) {
 
   const values = []
   const savedPaths = []
-  const warnings = []
+  const warnings = [...(args.extraWarnings ?? [])]
   const revisedPrompts = []
   const cwd = exec.agent?.session?.header?.cwd
 
@@ -1109,7 +1337,7 @@ export function apply(ctx, config) {
       parameters: {
         prompt: { type: 'string', required: true, description: '图片内容的描述，越具体越好（主体、风格、构图、光线、文字等）。' },
         size: { type: 'string', description: `图片尺寸，例如 1024x1024、1024x1536、1536x1024。默认 ${resolved.size}。` },
-        model: { type: 'string', description: `覆盖默认生图模型（配置里的旧字段默认是 ${resolved.model}；多服务商时以当前服务商的 imageModel 为准）。` },
+        model: { type: 'string', description: '覆盖默认生图模型（用当前生效服务商的地址与密钥）；留空时按设置页里的模型路由选择，主用失败会自动改用备用。' },
       },
       output: OUTPUT,
       timeoutMs: resolved.timeoutMs,
@@ -1118,26 +1346,33 @@ export function apply(ctx, config) {
         const prompt = typeof args.prompt === 'string' ? args.prompt.trim() : ''
         if (prompt === '') throw new Error('prompt 不能为空')
         /*
-         * 配置每次调用都重读：providers / activeProviderId 都是 volatile 字段，
-         * 挂载期的 config 里根本没有它们，值只存在于设置服务；用户保存后也必须立刻生效。
+         * 配置每次调用都重读：providers / activeProviderId / modelRoutes 都是 volatile
+         * 字段，挂载期的 config 里根本没有它们，值只存在于设置服务；保存后也必须立刻生效。
          */
         const live = effectiveConfigOf(ctx, config).config
-        const endpoint = endpointFor(live)
+        const requestedModel = typeof args.model === 'string' ? args.model.trim() : ''
+        const plan = await imageAttemptPlan({ ctx, config: live, role: 'generate', requestedModel })
         const size = typeof args.size === 'string' && args.size.trim() !== '' ? args.size.trim() : live.size
-        const model = typeof args.model === 'string' && args.model.trim() !== '' ? args.model.trim() : endpoint.model
-        const apiKey = await resolveApiKey(ctx, endpoint.keyRef)
-        const images = await requestImages({
-          config: { ...live, baseUrl: endpoint.baseUrl },
-          apiKey,
-          keyRef: endpoint.keyRef,
+        const result = await requestImagesWithFallback({
+          plan,
+          label: '生图模型',
           kind: 'generate',
           prompt,
           size,
-          model,
           n: 1,
           signal: exec.signal,
+          budgetMs: live.fallbackAfterMs,
         })
-        return await settleImages({ ctx, exec, config: live, prompt, size, model, images })
+        return await settleImages({
+          ctx,
+          exec,
+          config: live,
+          prompt,
+          size,
+          model: result.endpoint.model,
+          images: result.images,
+          extraWarnings: result.warning === undefined ? [] : [result.warning],
+        })
       },
     }))
 
@@ -1148,7 +1383,7 @@ export function apply(ctx, config) {
         prompt: { type: 'string', required: true, description: '要如何修改这张图，例如「把背景换成夜晚的街道」。' },
         image_path: { type: 'string', required: true, description: '待修改图片的路径，由文件系统后端解析。' },
         size: { type: 'string', description: `输出尺寸，默认沿用原图或配置里的 ${resolved.size}。` },
-        model: { type: 'string', description: `覆盖默认改图模型（配置里的旧字段默认是 ${resolved.editModel}；多服务商时以当前服务商的 editModel 为准，留空则用生图模型）。` },
+        model: { type: 'string', description: '覆盖默认改图模型（用当前生效服务商的地址与密钥）；留空时按设置页里的模型路由选择，主用失败会自动改用备用。' },
       },
       output: OUTPUT,
       timeoutMs: resolved.timeoutMs,
@@ -1167,25 +1402,32 @@ export function apply(ctx, config) {
         const bytes = await fs.readBytes(target, exec.signal, 20 * 1024 * 1024)
         const mediaType = sniffMediaType(bytes)
         if (mediaType === undefined) throw new Error(`不是受支持的图片格式（PNG/JPEG/WebP/GIF）：${imagePath}`)
-        // 与生图同理：服务商与模型每次调用都重读，改图用的是当前服务商的 editModel。
+        // 与生图同理：服务商、模型与路由每次调用都重读（改图那一路用 routes.edit）。
         const live = effectiveConfigOf(ctx, config).config
-        const endpoint = endpointFor(live)
+        const requestedModel = typeof args.model === 'string' ? args.model.trim() : ''
+        const plan = await imageAttemptPlan({ ctx, config: live, role: 'edit', requestedModel })
         const size = typeof args.size === 'string' && args.size.trim() !== '' ? args.size.trim() : live.size
-        const model = typeof args.model === 'string' && args.model.trim() !== '' ? args.model.trim() : endpoint.editModel
         const name = imagePath.split(/[\\/]/u).pop() ?? 'source.png'
-        const apiKey = await resolveApiKey(ctx, endpoint.keyRef)
-        const images = await requestImages({
-          config: { ...live, baseUrl: endpoint.baseUrl },
-          apiKey,
-          keyRef: endpoint.keyRef,
+        const result = await requestImagesWithFallback({
+          plan,
+          label: '改图模型',
           kind: 'edit',
           prompt,
           size,
-          model,
           file: { bytes, mediaType, name },
           signal: exec.signal,
+          budgetMs: live.fallbackAfterMs,
         })
-        return await settleImages({ ctx, exec, config: live, prompt, size, model, images })
+        return await settleImages({
+          ctx,
+          exec,
+          config: live,
+          prompt,
+          size,
+          model: result.endpoint.model,
+          images: result.images,
+          extraWarnings: result.warning === undefined ? [] : [result.warning],
+        })
       },
     }))
     note('两个工具已注册')
