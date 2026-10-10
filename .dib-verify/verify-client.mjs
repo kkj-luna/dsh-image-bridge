@@ -976,6 +976,61 @@ check(
   }),
 )
 
+/* ③b 空选项文案与说明小字（用户逐字确认过的措辞） */
+const optionTextAt = (select, index) => {
+  if (select === undefined) return ''
+  const children = Array.isArray(select.props.children) ? select.props.children : [select.props.children]
+  const option = children.filter((child) => child !== null && typeof child === 'object')[index]
+  return option === undefined ? '' : textOfElement(option).trim()
+}
+const hintTextOf = (tree, id) => {
+  const node = tree.nodes.find((entry) => entry.type === 'p' && entry.props?.id === id)
+  return node === undefined ? '' : textOfElement(node).trim()
+}
+const zhDict = dictionaries[0].dicts.zh
+const enDict = dictionaries[0].dicts.en
+check(
+  '四个下拉的空选项按槽位命名：主模型 / 备用模型 / 主模型 / 备用模型',
+  optionTextAt(selectById(routesTree, ROUTE_SELECTS['generate.primary']), 0) === '主模型'
+    && optionTextAt(selectById(routesTree, ROUTE_SELECTS['generate.fallback']), 0) === '备用模型'
+    && optionTextAt(selectById(routesTree, ROUTE_SELECTS['edit.primary']), 0) === '主模型'
+    && optionTextAt(selectById(routesTree, ROUTE_SELECTS['edit.fallback']), 0) === '备用模型',
+  JSON.stringify(Object.entries(ROUTE_SELECTS).map(([slot, id]) => `${slot}=${optionTextAt(selectById(routesTree, id), 0)}`)),
+)
+check(
+  '两条说明小字是最终文案，且 zh / en 两套字典逐字一致',
+  hintTextOf(routesTree, `${ROUTE_SELECTS['generate.primary']}-hint`) === '工具调用时优先使用。'
+    && hintTextOf(routesTree, `${ROUTE_SELECTS['generate.fallback']}-hint`) === '主模型超时仍未返回或连接失败，自动改用。'
+    && zhDict['route.primaryHint'] === '工具调用时优先使用。'
+    && zhDict['route.fallbackHint'] === '主模型超时仍未返回或连接失败，自动改用。'
+    && zhDict['route.unset'] === '主模型'
+    && zhDict['route.noFallback'] === '备用模型'
+    && enDict['route.primaryHint'] === 'Used first when the tools call the API.'
+    && enDict['route.fallbackHint'] === 'Used when the primary times out or fails to connect.'
+    && enDict['route.unset'] === 'Primary model'
+    && enDict['route.noFallback'] === 'Fallback model',
+  JSON.stringify({
+    zhPrimary: hintTextOf(routesTree, `${ROUTE_SELECTS['generate.primary']}-hint`),
+    zhFallback: hintTextOf(routesTree, `${ROUTE_SELECTS['generate.fallback']}-hint`),
+    enPrimary: enDict['route.primaryHint'],
+    enFallback: enDict['route.fallbackHint'],
+  }).slice(0, 320),
+)
+check(
+  '主用与备用成对紧邻（两对），对内有更小的行距、对间保留分隔',
+  (() => {
+    const pairs = routesTree.nodes.filter((node) => node.props?.className === 'dib-route-pair')
+    const slotsOf = (pair) => (Array.isArray(pair?.props?.children) ? pair.props.children : []).map((child) => child?.props?.['data-route-slot'])
+    const cssText = styles.map((style) => style.textContent).join('')
+    return pairs.length === 2
+      && slotsOf(pairs[0]).join(',') === 'generate.primary,generate.fallback'
+      && slotsOf(pairs[1]).join(',') === 'edit.primary,edit.fallback'
+      && cssText.includes('.dib-route-pair .dib-field+.dib-field{border-top:none}')
+      && cssText.includes('.dib-route-pair+.dib-route-pair{margin-top:')
+  })(),
+  JSON.stringify(routesTree.nodes.filter((node) => node.props?.className === 'dib-route-pair').length),
+)
+
 /* ④ 没有任何已连接的模型时：四个下拉禁用 + 一行提示 */
 const noConnectedTree = routesPageWith(routesBundle, { providers: [{ ...providerRecord, models: [] }] })
 check(

@@ -247,10 +247,10 @@ window.__ModuleLoader__.load({
         'route.generate.fallback': '生图备用模型',
         'route.edit.primary': '修图模型',
         'route.edit.fallback': '修图备用模型',
-        'route.unset': '未设置',
-        'route.noFallback': '不设置备用',
-        'route.primaryHint': '工具调用时优先使用它。',
-        'route.fallbackHint': '主模型超过下面的超时时间仍未返回，或连接失败，就自动改用它。',
+        'route.unset': '主模型',
+        'route.noFallback': '备用模型',
+        'route.primaryHint': '工具调用时优先使用。',
+        'route.fallbackHint': '主模型超时仍未返回或连接失败，自动改用。',
         'route.manualHint': '手动填写的模型走当前生效服务商',
         'route.noActive': '当前没有生效的服务商',
         'routes.save': '保存模型设置',
@@ -348,10 +348,10 @@ window.__ModuleLoader__.load({
         'route.generate.fallback': 'Image fallback model',
         'route.edit.primary': 'Edit model',
         'route.edit.fallback': 'Edit fallback model',
-        'route.unset': 'Not set',
-        'route.noFallback': 'No fallback',
+        'route.unset': 'Primary model',
+        'route.noFallback': 'Fallback model',
         'route.primaryHint': 'Used first when the tools call the API.',
-        'route.fallbackHint': 'Used automatically when the primary exceeds the timeout below or fails to connect.',
+        'route.fallbackHint': 'Used when the primary times out or fails to connect.',
         'route.manualHint': 'A manually typed model goes through the active provider',
         'route.noActive': 'there is no active provider right now',
         'routes.save': 'Save model settings',
@@ -463,7 +463,11 @@ window.__ModuleLoader__.load({
       /* 主页的模型区块 */
       '.dib-routes{display:flex;flex-direction:column;gap:4px;margin-top:16px;padding-top:16px;border-top:0.5px solid var(--dsw-alias-border-l2)}',
       '.dib-section-title{margin:0 0 4px;font-size:14px;font-weight:500;line-height:22px;color:var(--dsw-alias-label-primary)}',
-      '.dib-routes .dib-field{padding:10px 0}',
+      /* 主用与备用是紧邻的一对：对内几乎不留缝、也不画分隔线，对与对之间照旧留出段落间距。 */
+      '.dib-route-pair{display:flex;flex-direction:column}',
+      '.dib-route-pair+.dib-route-pair{margin-top:14px;padding-top:6px;border-top:0.5px solid var(--dsw-alias-border-l2)}',
+      '.dib-routes .dib-field{padding:4px 0}',
+      '.dib-route-pair .dib-field+.dib-field{border-top:none}',
       '.dib-toggle-row{display:flex;align-items:center;gap:8px;padding:8px 0}',
       /* 全局默认值 */
       '.dib-defaults{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:16px;padding-top:16px;border-top:0.5px solid var(--dsw-alias-border-l2)}',
@@ -1953,14 +1957,21 @@ window.__ModuleLoader__.load({
             placeholder: id.startsWith('generate') ? tr('imageModel.placeholder') : tr('editModel.placeholder'),
           }))
         }
-        return h('div', { key: id, className: 'dib-route-group' }, nodes)
+        return h('div', { key: id, className: 'dib-route-group', 'data-route-slot': id }, nodes)
       }
+
+      /** 一个角色（生图 / 修图）：主用 + 备用紧邻成组。 */
+      const routePair = (role) => h('div', { key: role, className: 'dib-route-pair', 'data-route-pair': role }, [
+        routeField(`${role}.primary`),
+        routeField(`${role}.fallback`),
+      ])
 
       const routesBlock = h('div', { key: 'routes', className: 'dib-routes' }, [
         h('h3', { key: 'title', className: 'dib-section-title' }, tr('routes.title')),
         h('p', { key: 'hint', className: 'dib-field-hint' }, tr('routes.hint')),
         hasConnected ? null : h('p', { key: 'none', className: 'dib-field-hint' }, tr('routes.none')),
-        ...ROUTE_IDS.map(routeField),
+        routePair('generate'),
+        routePair('edit'),
         h('div', { key: 'showall', className: 'dib-toggle-row' }, [
           h('label', { key: 'toggle', className: 'dib-toggle' }, [
             h('input', {
