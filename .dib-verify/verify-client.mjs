@@ -20,7 +20,18 @@ function check(name, condition, detail) {
 /* ---------------------------------------------------------------- 桩 React */
 
 let hookState = []
+/** 桩 ref / DOM 调用的记录：断言"焦点回到触发器""当前项滚入视野"靠它。 */
+const domCalls = { focus: [], scrollIntoView: [], listeners: new Map(), outsideTarget: null }
+const makeRefStub = (type) => ({
+  focus() { domCalls.focus.push(String(type)) },
+  scrollIntoView(options) { domCalls.scrollIntoView.push({ type: String(type), options }) },
+  // 默认"点在容器内部"；外部点击测试把 domCalls.outsideTarget 设成一个哨兵对象。
+  contains(target) { return target !== domCalls.outsideTarget },
+})
 function createElement(type, props, ...children) {
+  if (props !== null && props !== undefined && typeof props.ref === 'object' && props.ref !== null) {
+    props.ref.current = makeRefStub(type)
+  }
   return { type, props: { ...(props ?? {}), children: children.length <= 1 ? children[0] : children } }
 }
 /** React.Component 的最小实现；错误边界是类组件，必须在模块加载时就能 extends。 */
@@ -50,6 +61,8 @@ const React = {
   },
   useCallback: (fn) => fn,
   useMemo: (fn) => fn(),
+  /** createSession 的渲染器用它把 effect 的依赖数组记下来（见 session 实现）。 */
+  useEffectWithDeps: null,
 }
 
 /* ---------------------------------------------------------------- 桩环境 */
@@ -118,6 +131,8 @@ const navDom = (() => {
     }
   }
   const state = { brokenSelector: false }
+  /** 文档级事件监听（自绘下拉"点面板外关闭"就靠它）与手动派发。 */
+  const listeners = new Map()
   const documentStub = {
     createElement: (tagName) => element(tagName),
     head: { appendChild: (node) => { styles.push(node); return node } },
@@ -126,6 +141,21 @@ const navDom = (() => {
       selectorCalls.push(selector)
       if (state.brokenSelector || selector !== '[role="dialog"] nav button') return []
       return rows.slice()
+    },
+    addEventListener(type, handler) {
+      const list = listeners.get(type) ?? []
+      list.push(handler)
+      listeners.set(type, list)
+    },
+    removeEventListener(type, handler) {
+      listeners.set(type, (listeners.get(type) ?? []).filter((entry) => entry !== handler))
+    },
+    /** 滚入视野用的元素查询：返回带 scrollIntoView 的桩节点并把调用记进 domCalls。 */
+    getElementById(id) {
+      return {
+        id,
+        scrollIntoView(options) { domCalls.scrollIntoView.push({ id, options }) },
+      }
     },
   }
   return {
@@ -136,6 +166,9 @@ const navDom = (() => {
     state,
     selectorCalls,
     observerCallbacks,
+    listenerCount: (type) => (listeners.get(type) ?? []).length,
+    /** 手动派发一个文档级事件（例如 mousedown）。 */
+    dispatch(type, event) { for (const handler of (listeners.get(type) ?? []).slice()) handler(event) },
     /** 测试手动触发 MutationObserver（真实浏览器里由 DOM 变更触发）。 */
     fire() { for (const callback of observerCallbacks.slice()) callback([]) },
     observerCount: () => observerCallbacks.length,
@@ -467,6 +500,43 @@ const ALL_MODELS = [...IMAGE_MODELS, ...NON_IMAGE_MODELS]
 
 /** 下拉里「手动输入…」的保留取值（必须与 client.js 的 MANUAL_MODEL_VALUE 一致）。 */
 const MANUAL_MODEL_VALUE = '__dib_manual__'
+/** 尺寸下拉里「自定义…」的保留取值（必须与 client.js 的 CUSTOM_SIZE_VALUE 一致）。 */
+const CUSTOM_SIZE_VALUE = '__dib_custom_size__'
+
+/* ---------------------------------------------------------------- 自绘下拉的查询助手 */
+
+/** 触发器：`<button id=… aria-haspopup=listbox>`（原来的原生 select 位置）。 */
+const triggerById = (tree, id) => tree.nodes.find((node) => node.type === 'button' && node.props?.id === id && node.props?.['aria-haspopup'] === 'listbox')
+const triggerTextOf = (tree, id) => {
+  const trigger = triggerById(tree, id)
+  if (trigger === undefined) return ''
+  // 触发器里是「值 + 小箭头」，断言的"显示文案"只取值那一半。
+  const value = (Array.isArray(trigger.props.children) ? trigger.props.children : [])
+    .find((child) => child?.props?.className === 'dib-dd-value')
+  return (value === undefined ? textOfElement(trigger) : textOfElement(value)).trim()
+}
+/** 下拉组件节点本身（渲染时就在树里，props.entries 是条目表；菜单项也在其展开结果里）。 */
+const dropdownById = (tree, id) => tree.nodes.find((node) => node.props?.id === id && Array.isArray(node.props?.entries))
+const entriesOf = (tree, id) => dropdownById(tree, id)?.props?.entries ?? []
+const entryOptionsOf = (tree, id) => entriesOf(tree, id).filter((entry) => entry.kind === 'option')
+/** 模型项（排除末尾的「手动输入…」）。 */
+const modelOptionsOf = (tree, id) => entryOptionsOf(tree, id).filter((entry) => entry.value !== MANUAL_MODEL_VALUE)
+const groupLabelsOf = (tree, id) => entriesOf(tree, id).filter((entry) => entry.kind === 'group').map((entry) => entry.label)
+/** 展开后的菜单面板与菜单项（只在 open 状态存在）。 */
+const menuOf = (tree, id) => tree.nodes.find((node) => node.props?.['data-dib-menu'] === id)
+const menuItemsOf = (menu) => (menu === undefined ? [] : (menu.props.children ?? []).filter((child) => child?.props?.role === 'option'))
+const menuGroupsOf = (menu) => (menu === undefined ? [] : (menu.props.children ?? []).filter((child) => child?.props?.className === 'dib-menu-group'))
+const menuItemByNameOf = (menu, label) => menuItemsOf(menu).find((item) => textOfElement(item).replace('✓', '').trim() === label)
+const menuItemByValueOf = (menu, value) => menuItemsOf(menu).find((item) => String(item.props['data-value'] ?? '') === value)
+/** 点击触发器打开菜单（已经开着就不点，避免又关掉），返回展开后的树。 */
+const openDropdownTree = (session, id) => {
+  const before = session.tree()
+  if (menuOf(before, id) === undefined) session.click(triggerById(before, id))
+  return session.tree()
+}
+const keyDownOn = (session, node, key) => {
+  session.fire(node?.props?.onKeyDown, { key, preventDefault() {} })
+}
 
 globalThis.fetch = async (url, init) => {
   const body = JSON.parse(String(init?.body ?? '{}'))
@@ -610,18 +680,32 @@ function createSession(component, props) {
         if (!(index in store.refs)) store.refs[index] = { current: initial }
         return store.refs[index]
       }
-      React.useEffect = (effect) => {
+      React.useEffect = (effect, deps) => {
         const store = cursor
         const index = store.index
         store.index += 1
-        if (store.effects === undefined) store.effects = new Set()
-        if (store.effects.has(index)) return undefined
-        store.effects.add(index)
-        try {
-          return effect()
-        } catch {
-          return undefined
+        if (store.effects === undefined) store.effects = new Map()
+        const previous = store.effects.get(index)
+        /*
+         * 依赖数组要真的参与判断：像"打开时才挂 document 监听、关闭时摘掉"这类 effect
+         * （自绘下拉就靠它）必须能在 open 变化后重跑，否则测不到"点外部关闭"。
+         * 没有依赖数组时保持老行为：只在挂载那次执行。
+         */
+        if (previous !== undefined) {
+          const same = Array.isArray(deps) && Array.isArray(previous.deps)
+            && deps.length === previous.deps.length
+            && deps.every((value, position) => Object.is(value, previous.deps[position]))
+          if (same) return undefined
+          if (typeof previous.cleanup === 'function') previous.cleanup()
         }
+        let cleanup
+        try {
+          cleanup = effect()
+        } catch {
+          cleanup = undefined
+        }
+        store.effects.set(index, { deps: Array.isArray(deps) ? deps.slice() : undefined, cleanup: typeof cleanup === 'function' ? cleanup : undefined })
+        return cleanup
       }
       try {
         return fn()
@@ -637,7 +721,7 @@ function createSession(component, props) {
       const key = `${name}#${node.props?.key ?? path}`
       let store = stores.get(key)
       if (store === undefined) {
-        store = { hooks: [], index: 0, effects: new Set(), refs: {} }
+        store = { hooks: [], index: 0, effects: new Map(), refs: {} }
         stores.set(key, store)
       }
       store.index = 0
@@ -675,15 +759,37 @@ function createSession(component, props) {
   return session
 }
 
-const selectById = (tree, id) => tree.nodes.find((node) => node.type === 'select' && node.props?.id === id)
+/*
+ * 兼容层：控件从原生 `<select>` 换成了自绘下拉（Dropdown，见 client.js）。
+ *
+ * 早期断言是按 select 写的，这里把「按 id 取控件」映射到"触发器 + 条目表"上，
+ * 让只关心 value / disabled / aria / 选项清单的断言原样继续有效；语义确实变了的
+ * （占位文案现在在触发器上、菜单要展开才渲染、选择要点击而不是触发 change）逐条改写。
+ */
+const selectById = (tree, id) => {
+  const dropdown = tree.nodes.find((node) => node.props?.id === id && Array.isArray(node.props?.entries))
+  const trigger = tree.nodes.find((node) => node.type === 'button' && node.props?.id === id && node.props?.['aria-haspopup'] === 'listbox')
+  if (dropdown === undefined && trigger === undefined) return undefined
+  const entries = dropdown?.props?.entries ?? []
+  return {
+    type: 'button',
+    props: {
+      ...(trigger?.props ?? {}),
+      id,
+      value: dropdown?.props?.value,
+      optionValues: entries.filter((entry) => entry.kind === 'option').map((entry) => entry.value),
+      optionTexts: entries.map((entry) => entry.label),
+      optionEntries: entries,
+    },
+  }
+}
 const optionValuesOf = (select) => {
   if (select === undefined) return []
+  if (Array.isArray(select.props.optionValues)) return select.props.optionValues
   const children = Array.isArray(select.props.children) ? select.props.children : [select.props.children]
   return children.filter((child) => child !== null && typeof child === 'object').map((child) => String(child.props?.value ?? ''))
 }
 const inputById = (tree, id) => tree.nodes.find((node) => node.type === 'input' && node.props?.id === id)
-/** 下拉里除「空选项」与「手动输入…」之外的真实模型名。 */
-const modelOptionsOf = (tree, id) => optionValuesOf(selectById(tree, id)).filter((value) => value !== '' && value !== MANUAL_MODEL_VALUE)
 
 const buttonByText = (tree, label) => tree.buttons.find((button) => textOfElement(button).includes(label))
 const hasClass = (tree, name) => tree.classes.some((value) => value.split(' ').includes(name))
@@ -1125,11 +1231,12 @@ check(
 /* 副标题是一句话，不是教程：字数封顶，防以后又被写长 */
 const subtitleText = textOfElement(headerChildren[1] ?? {}).trim()
 check(
-  '副标题是一句话：zh 逐字等于约定文案，且不超过 24 个汉字（含标点也 ≤ 26 字）',
-  subtitleText === '接入外部生图模型，为生图与修图各指定一个模型'
+  '副标题是一句话：zh 逐字等于约定文案，汉字 ≤ 24 且总长 ≤ 40（够放产品名 DeepSeek Harness）',
+  subtitleText === '为你的 DeepSeek Harness 接上外部生图模型'
     && zhDict['intro'] === subtitleText
+    // 汉字数封顶仍然保持 24：防的是"以后又被写成长教程"；总长放宽到 40 只是为了容纳产品名。
     && (subtitleText.match(/[\u4e00-\u9fff]/gu) ?? []).length <= 24
-    && subtitleText.length <= 26
+    && subtitleText.length <= 40
     // 不带句尾句号（与设置页其它说明文案一致），也不再塞括号步骤。
     && !/[。.]$/u.test(subtitleText)
     && !/[（(]/u.test(subtitleText),
@@ -1138,9 +1245,9 @@ check(
 check(
   '副标题的英文同样是一句短句（zh/en 两套都有，且不是直译的长句）',
   typeof enDict['intro'] === 'string'
-    && enDict['intro'] === 'Connect external image models for generation and editing'
+    && enDict['intro'] === 'Connect external image models to your DeepSeek Harness'
     && enDict['intro'] !== zhDict['intro']
-    && enDict['intro'].length <= 64
+    && enDict['intro'].length <= 80
     && !/[。.]$/u.test(enDict['intro'])
     && !enDict['intro'].includes('('),
   JSON.stringify({ en: enDict['intro'], length: String(enDict['intro']).length }).slice(0, 200),
@@ -1465,87 +1572,72 @@ const allOptionsOf = (select) => {
 /* ① 四个下拉存在，选项是所有服务商模型的并集，按服务商分组 */
 const routesBundle = sectionWithRecording({ size: '1024x1024' })
 const routesTree = routesPageWith(routesBundle, {})
-const generateSelect = selectById(routesTree, ROUTE_SELECTS['generate.primary'])
-const generateGroups = (generateSelect?.props.children ?? []).filter((child) => child !== null && typeof child === 'object' && child.type === 'optgroup')
-const generateOptionNames = generateGroups.flatMap((group) => group.props.children.map((option) => option.props['data-model']))
+const generateOptionNames = modelOptionsOf(routesTree, ROUTE_SELECTS['generate.primary']).map((entry) => entry.data['data-model'])
 check(
-  '主页四个下拉都在：生图 / 生图备用 / 修图 / 修图备用',
-  Object.values(ROUTE_SELECTS).every((id) => selectById(routesTree, id) !== undefined)
-    && selectById(routesTree, ROUTE_SELECTS['generate.fallback']) !== undefined
-    && selectById(routesTree, ROUTE_SELECTS['edit.fallback']) !== undefined,
-  Object.values(ROUTE_SELECTS).map((id) => `${id}:${selectById(routesTree, id) !== undefined}`).join(','),
+  '主页四个下拉都在（自绘触发器 + listbox 语义）：生图 / 生图备用 / 修图 / 修图备用',
+  Object.values(ROUTE_SELECTS).every((id) => dropdownById(routesTree, id) !== undefined && triggerById(routesTree, id) !== undefined)
+    && Object.values(ROUTE_SELECTS).every((id) => triggerById(routesTree, id)?.props['aria-haspopup'] === 'listbox')
+    && dropdownById(routesTree, ROUTE_SELECTS['generate.fallback']) !== undefined
+    && dropdownById(routesTree, ROUTE_SELECTS['edit.fallback']) !== undefined,
+  Object.values(ROUTE_SELECTS).map((id) => `${id}:${dropdownById(routesTree, id) !== undefined}`).join(','),
 )
 check(
-  '选项是所有服务商模型的并集，且按服务商分组（optgroup 标签 = 服务商名）',
-  generateGroups.length === 3
-    && generateGroups.map((group) => group.props.label).join(',') === '— 智谱 —,— OPENAI —,— OTHER —'
+  '选项是所有服务商模型的并集，且按服务商分组（小标题 = 服务商名，带「— 名称 —」大写标记）',
+  groupLabelsOf(routesTree, ROUTE_SELECTS['generate.primary']).join(',') === '— 智谱 —,— OPENAI —,— OTHER —'
     && generateOptionNames.join(',') === 'qwen-image-2.1-pro,qwen-image-3.0-pro,qwen-image-3.0,qwen-image-2.0-pro,qwen-image-2.0-2026-03-03,qwen-image-2.0-pro-2026-04-22,wan2.7-image,wan2.7-image-pro,z-image-turbo,gpt-image-1,dall-e-3,gemini-3.1-flash-image,gpt-image-2',
-  JSON.stringify({ groups: generateGroups.map((group) => group.props.label), options: generateOptionNames.length }).slice(0, 260),
+  JSON.stringify({ groups: groupLabelsOf(routesTree, ROUTE_SELECTS['generate.primary']), options: generateOptionNames.length }).slice(0, 260),
 )
 check(
   '选项里每项都带 providerId 与 model（跨服务商选择知道用哪家的地址与凭据）',
-  generateGroups.every((group) => group.props.children.every((option) => typeof option.props['data-provider'] === 'string' && option.props['data-provider'] !== '' && typeof option.props['data-model'] === 'string' && option.props.value === `${option.props['data-provider']}::${option.props['data-model']}`)),
-  JSON.stringify(generateGroups[1]?.props.children[0]?.props ?? null).slice(0, 200),
+  modelOptionsOf(routesTree, ROUTE_SELECTS['generate.primary']).every((entry) => typeof entry.data?.['data-provider'] === 'string' && entry.data['data-provider'] !== '' && typeof entry.data['data-model'] === 'string' && entry.value === `${entry.data['data-provider']}::${entry.data['data-model']}`),
+  JSON.stringify(modelOptionsOf(routesTree, ROUTE_SELECTS['generate.primary'])[0] ?? null).slice(0, 200),
 )
 
-/* ①b 占位条目不出现在展开列表里，但也绝不静默跳到第一个模型 */
-const unsetSelect = selectById(routesTree, ROUTE_SELECTS['generate.primary'])
-const unsetOptions = allOptionsOf(unsetSelect)
-const unsetPlaceholder = unsetOptions.find((option) => String(option.props?.value ?? '') === '')
+/* ①b 占位只出现在触发器上：菜单里没有可点的空值项，也绝不静默跳到第一个模型 */
+const unsetDropdown = dropdownById(routesTree, ROUTE_SELECTS['generate.primary'])
 check(
-  '未设置时：value 为空、占位条目带 hidden + disabled（展开列表里看不到也点不中）',
-  unsetSelect?.props.value === ''
-    && unsetPlaceholder !== undefined
-    && unsetPlaceholder.props.hidden === true
-    && unsetPlaceholder.props.disabled === true
-    && textOfElement(unsetPlaceholder).trim() === '主模型',
+  '未设置时：触发器显示占位「主模型」、aria-expanded=false，且菜单里没有空值项（不会静默跳到第一个模型）',
+  unsetDropdown?.props.value === ''
+    && triggerTextOf(routesTree, ROUTE_SELECTS['generate.primary']) === '主模型'
+    && triggerById(routesTree, ROUTE_SELECTS['generate.primary'])?.props['aria-expanded'] === 'false'
+    && entryOptionsOf(routesTree, ROUTE_SELECTS['generate.primary']).every((entry) => entry.value !== '')
+    && modelOptionsOf(routesTree, ROUTE_SELECTS['generate.primary']).length > 0,
   JSON.stringify({
-    value: unsetSelect?.props.value ?? null,
-    hidden: unsetPlaceholder?.props?.hidden ?? null,
-    disabled: unsetPlaceholder?.props?.disabled ?? null,
+    value: unsetDropdown?.props?.value ?? null,
+    trigger: triggerTextOf(routesTree, ROUTE_SELECTS['generate.primary']),
+    emptyOptions: entryOptionsOf(routesTree, ROUTE_SELECTS['generate.primary']).filter((entry) => entry.value === '').length,
   }),
 )
 check(
-  '未设置时不会静默跳到第一个模型（受控值有空值选项可匹配，显示的占位与状态一致）',
-  (() => {
-    const value = String(unsetSelect?.props.value ?? '')
-    const matched = unsetOptions.find((option) => String(option.props?.value ?? '') === value)
-    // 浏览器只在"没有匹配项"时才回退到第一个选项；这里必须能精确匹配到占位条目。
-    return matched !== undefined
-      && matched.props.disabled === true
-      && generateOptionNames.every((model) => matched.props['data-model'] !== model)
-  })(),
-  JSON.stringify({ value: unsetSelect?.props.value ?? null, firstOption: String(unsetOptions[0]?.props?.value ?? '') }).slice(0, 160),
-)
-check(
-  '已设置时选中的就是那个模型（服务商 + 模型合成值能精确匹配）',
+  '已设置时选中的就是那个模型（触发器显示模型名，选项里能精确匹配到服务商+模型）',
   (() => {
     const setTree = routesPageWith(routesBundle, {
       routes: routesSeed({ 'generate.primary': routeItem('other', 'gemini-3.1-flash-image') }),
     })
-    const setSelect = selectById(setTree, ROUTE_SELECTS['generate.primary'])
-    const matched = allOptionsOf(setSelect).find((option) => String(option.props?.value ?? '') === String(setSelect?.props?.value ?? ''))
-    return setSelect?.props.value === 'other::gemini-3.1-flash-image'
+    const setDropdown = dropdownById(setTree, ROUTE_SELECTS['generate.primary'])
+    const matched = modelOptionsOf(setTree, ROUTE_SELECTS['generate.primary']).find((entry) => entry.value === setDropdown?.props?.value)
+    return setDropdown?.props.value === 'other::gemini-3.1-flash-image'
+      && triggerTextOf(setTree, ROUTE_SELECTS['generate.primary']) === 'gemini-3.1-flash-image'
       && matched !== undefined
-      && matched.props['data-provider'] === 'other'
-      && matched.props['data-model'] === 'gemini-3.1-flash-image'
+      && matched.data['data-provider'] === 'other'
+      && matched.data['data-model'] === 'gemini-3.1-flash-image'
   })(),
-  String(selectById(routesPageWith(routesBundle, { routes: routesSeed({ 'generate.primary': routeItem('other', 'gemini-3.1-flash-image') }) }), ROUTE_SELECTS['generate.primary'])?.props.value ?? null),
+  String(dropdownById(routesPageWith(routesBundle, { routes: routesSeed({ 'generate.primary': routeItem('other', 'gemini-3.1-flash-image') }) }), ROUTE_SELECTS['generate.primary'])?.props.value ?? null),
 )
 
 /* ①c 分组标题的区分策略：文本标记 + 加粗样式，模型名一个字不改 */
 check(
   '分组标题带文本标记（破折号包裹 + ASCII 大写），并配有加粗样式规则',
-  generateGroups.every((group) => /^— .+ —$/u.test(String(group.props.label)))
-    && generateGroups.map((group) => group.props.label).join(',') === '— 智谱 —,— OPENAI —,— OTHER —'
-    && styles.map((style) => style.textContent).join('').includes('.dib-select optgroup{font-weight:700'),
-  JSON.stringify(generateGroups.map((group) => group.props.label)),
+  groupLabelsOf(routesTree, ROUTE_SELECTS['generate.primary']).every((label) => /^— .+ —$/u.test(label))
+    && groupLabelsOf(routesTree, ROUTE_SELECTS['generate.primary']).join(',') === '— 智谱 —,— OPENAI —,— OTHER —'
+    && styles.map((style) => style.textContent).join('').includes('.dib-menu-group{'),
+  JSON.stringify(groupLabelsOf(routesTree, ROUTE_SELECTS['generate.primary'])),
 )
 check(
   '模型名没有被改写（只有分组标题加标记；含截图里那两类真实 id）',
   generateOptionNames.includes('gemini-3.1-flash-image')
     && generateOptionNames.includes('gpt-image-2')
-    && generateGroups.flatMap((group) => group.props.children).every((option) => textOfElement(option).trim() === option.props['data-model'])
+    && modelOptionsOf(routesTree, ROUTE_SELECTS['generate.primary']).every((entry) => entry.label === entry.data['data-model'])
     && generateOptionNames.every((model) => !model.includes('—') && model === model.trim()),
   JSON.stringify(generateOptionNames.slice(-4)),
 )
@@ -1559,9 +1651,7 @@ check(
   JSON.stringify({ count: generateOptionNames.length, leaked: NON_IMAGE_MODELS.filter((m) => generateOptionNames.includes(m)) }).slice(0, 200),
 )
 const routesAllTree = routesPageWith(routesBundle, { routesShowAll: true })
-const allOptionNames = (selectById(routesAllTree, ROUTE_SELECTS['generate.primary'])?.props.children ?? [])
-  .filter((child) => child !== null && typeof child === 'object' && child.type === 'optgroup')
-  .flatMap((group) => group.props.children.map((option) => option.props['data-model']))
+const allOptionNames = modelOptionsOf(routesAllTree, ROUTE_SELECTS['generate.primary']).map((entry) => entry.data['data-model'])
 check(
   '勾「显示全部模型」后选项含语言模型（并集 + 语言模型）',
   NON_IMAGE_MODELS.every((model) => allOptionNames.includes(model)) && allOptionNames.includes('gpt-4o') && allOptionNames.length === ALL_MODELS.length + 5,
@@ -1586,6 +1676,8 @@ check(
 /* ③b 空选项文案与说明小字（用户逐字确认过的措辞） */
 const optionTextAt = (select, index) => {
   if (select === undefined) return ''
+  const texts = select.props.optionTexts
+  if (Array.isArray(texts)) return String(texts[index] ?? '')
   const children = Array.isArray(select.props.children) ? select.props.children : [select.props.children]
   const option = children.filter((child) => child !== null && typeof child === 'object')[index]
   return option === undefined ? '' : textOfElement(option).trim()
@@ -1595,12 +1687,14 @@ const hintTextOf = (tree, id) => {
   return node === undefined ? '' : textOfElement(node).trim()
 }
 check(
-  '四个下拉的空选项按槽位命名：主模型 / 备用模型 / 主模型 / 备用模型',
-  optionTextAt(selectById(routesTree, ROUTE_SELECTS['generate.primary']), 0) === '主模型'
-    && optionTextAt(selectById(routesTree, ROUTE_SELECTS['generate.fallback']), 0) === '备用模型'
-    && optionTextAt(selectById(routesTree, ROUTE_SELECTS['edit.primary']), 0) === '主模型'
-    && optionTextAt(selectById(routesTree, ROUTE_SELECTS['edit.fallback']), 0) === '备用模型',
-  JSON.stringify(Object.entries(ROUTE_SELECTS).map(([slot, id]) => `${slot}=${optionTextAt(selectById(routesTree, id), 0)}`)),
+  '四个下拉的占位文案按槽位命名：主模型 / 备用模型 / 主模型 / 备用模型（在触发器上，不在菜单里）',
+  triggerTextOf(routesTree, ROUTE_SELECTS['generate.primary']) === '主模型'
+    && triggerTextOf(routesTree, ROUTE_SELECTS['generate.fallback']) === '备用模型'
+    && triggerTextOf(routesTree, ROUTE_SELECTS['edit.primary']) === '主模型'
+    && triggerTextOf(routesTree, ROUTE_SELECTS['edit.fallback']) === '备用模型'
+    // 同一句文案不进菜单：菜单里没有空值项，用户点不到"清空"（与 task-20 的既定行为一致）。
+    && Object.values(ROUTE_SELECTS).every((id) => entryOptionsOf(routesTree, id).every((entry) => entry.value !== '')),
+  JSON.stringify(Object.entries(ROUTE_SELECTS).map(([slot, id]) => `${slot}=${triggerTextOf(routesTree, id)}`)),
 )
 check(
   '两条说明小字是最终文案（zh 不带句尾句号、en 保留英文句号）',
@@ -1685,15 +1779,15 @@ const enRoutesTree = treeOf(invoke(routesBundle.component, {
   __initial: { phase: 'idle', providers: [zhipuFull, openaiProvider], activeProviderId: 'zhipu' },
 }).element)
 check(
-  '备用下拉的 aria-label 与四个空选项都走语言包（英文环境下是英文）',
-  selectById(enRoutesTree, ROUTE_SELECTS['generate.fallback'])?.props['aria-label'] === 'Image fallback model'
-    && selectById(enRoutesTree, ROUTE_SELECTS['edit.fallback'])?.props['aria-label'] === 'Edit fallback model'
-    && optionTextAt(selectById(enRoutesTree, ROUTE_SELECTS['generate.primary']), 0) === 'Primary model'
-    && optionTextAt(selectById(enRoutesTree, ROUTE_SELECTS['generate.fallback']), 0) === 'Fallback model'
+  '备用下拉的 aria-label 与四个占位文案都走语言包（英文环境下是英文）',
+  triggerById(enRoutesTree, ROUTE_SELECTS['generate.fallback'])?.props['aria-label'] === 'Image fallback model'
+    && triggerById(enRoutesTree, ROUTE_SELECTS['edit.fallback'])?.props['aria-label'] === 'Edit fallback model'
+    && triggerTextOf(enRoutesTree, ROUTE_SELECTS['generate.primary']) === 'Primary model'
+    && triggerTextOf(enRoutesTree, ROUTE_SELECTS['generate.fallback']) === 'Fallback model'
     && hintTextOf(enRoutesTree, `${ROUTE_SELECTS['generate.primary']}-hint`) === 'Used first when the tools call the API.',
   JSON.stringify({
-    aria: selectById(enRoutesTree, ROUTE_SELECTS['generate.fallback'])?.props['aria-label'] ?? null,
-    empty: optionTextAt(selectById(enRoutesTree, ROUTE_SELECTS['generate.primary']), 0),
+    aria: triggerById(enRoutesTree, ROUTE_SELECTS['generate.fallback'])?.props['aria-label'] ?? null,
+    empty: triggerTextOf(enRoutesTree, ROUTE_SELECTS['generate.primary']),
   }).slice(0, 200),
 )
 
@@ -1714,8 +1808,11 @@ const saveRoutesSession = createSession(saveRoutesBundle.component, {
   __initial: { phase: 'idle', providers: [zhipuFull, openaiProvider], activeProviderId: 'zhipu' },
 })
 let saveRoutesTree = saveRoutesSession.tree()
-saveRoutesSession.change(selectById(saveRoutesTree, ROUTE_SELECTS['generate.primary']), 'openai::dall-e-3')
-saveRoutesSession.change(selectById(saveRoutesTree, ROUTE_SELECTS['generate.fallback']), 'zhipu::wan2.7-image')
+/* 自绘菜单：点触发器 → 点菜单项（不再是 select 的 change）。 */
+saveRoutesTree = openDropdownTree(saveRoutesSession, ROUTE_SELECTS['generate.primary'])
+saveRoutesSession.click(menuItemByValueOf(menuOf(saveRoutesTree, ROUTE_SELECTS['generate.primary']), 'openai::dall-e-3'))
+saveRoutesTree = openDropdownTree(saveRoutesSession, ROUTE_SELECTS['generate.fallback'])
+saveRoutesSession.click(menuItemByValueOf(menuOf(saveRoutesTree, ROUTE_SELECTS['generate.fallback']), 'zhipu::wan2.7-image'))
 saveRoutesTree = saveRoutesSession.tree()
 const routeSaveButton = saveRoutesTree.nodes.find((node) => node.type === 'button' && node.props?.['data-dib-action'] === 'save-routes')
 saveRoutesSession.click(routeSaveButton)
@@ -1755,15 +1852,16 @@ const manualRouteSession = createSession(manualRouteBundle.component, {
   __initial: { phase: 'idle', providers: [zhipuFull, openaiProvider], activeProviderId: 'zhipu' },
 })
 let manualRouteTree = manualRouteSession.tree()
-manualRouteSession.change(selectById(manualRouteTree, ROUTE_SELECTS['edit.primary']), MANUAL_MODEL_VALUE)
+manualRouteTree = openDropdownTree(manualRouteSession, ROUTE_SELECTS['edit.primary'])
+manualRouteSession.click(menuItemByValueOf(menuOf(manualRouteTree, ROUTE_SELECTS['edit.primary']), MANUAL_MODEL_VALUE))
 manualRouteTree = manualRouteSession.tree()
 const manualRouteInput = inputById(manualRouteTree, `${ROUTE_SELECTS['edit.primary']}-manual`)
 check(
   '选「手动输入…」后出现文本框，界面上说明走的是当前生效服务商',
-  selectById(manualRouteTree, ROUTE_SELECTS['edit.primary'])?.props.value === MANUAL_MODEL_VALUE
+  dropdownById(manualRouteTree, ROUTE_SELECTS['edit.primary'])?.props.value === MANUAL_MODEL_VALUE
     && manualRouteInput !== undefined
     && manualRouteTree.text.includes('手动填写的模型走当前生效服务商'),
-  JSON.stringify({ value: selectById(manualRouteTree, ROUTE_SELECTS['edit.primary'])?.props.value ?? null, input: manualRouteInput !== undefined }),
+  JSON.stringify({ value: dropdownById(manualRouteTree, ROUTE_SELECTS['edit.primary'])?.props.value ?? null, input: manualRouteInput !== undefined }),
 )
 manualRouteSession.change(manualRouteInput, 'my-own-edit-model')
 manualRouteTree = manualRouteSession.tree()
@@ -1827,14 +1925,15 @@ const linkedSession = createSession(linkedBundle.component, {
   },
 })
 let linkedTree = linkedSession.tree()
-linkedSession.change(selectById(linkedTree, ROUTE_SELECTS['generate.primary']), 'zhipu::qwen-image-3.0')
+linkedTree = openDropdownTree(linkedSession, ROUTE_SELECTS['generate.primary'])
+linkedSession.click(menuItemByValueOf(menuOf(linkedTree, ROUTE_SELECTS['generate.primary']), 'zhipu::qwen-image-3.0'))
 linkedTree = linkedSession.tree()
 check(
-  '主页下拉改了生图模型后，浮层对应行同步打上「当前生图模型」',
+  '主页菜单里改了生图模型后，浮层对应行同步打上「当前生图模型」',
   textOfElement(routedRowOf(linkedTree, 'qwen-image-3.0')).includes('当前生图模型')
     && !textOfElement(routedRowOf(linkedTree, 'qwen-image-2.1-pro')).includes('当前生图模型')
-    && selectById(linkedTree, ROUTE_SELECTS['generate.primary'])?.props.value === 'zhipu::qwen-image-3.0',
-  JSON.stringify({ value: selectById(linkedTree, ROUTE_SELECTS['generate.primary'])?.props.value ?? null }).slice(0, 160),
+    && dropdownById(linkedTree, ROUTE_SELECTS['generate.primary'])?.props.value === 'zhipu::qwen-image-3.0',
+  JSON.stringify({ value: dropdownById(linkedTree, ROUTE_SELECTS['generate.primary'])?.props.value ?? null }).slice(0, 160),
 )
 
 
@@ -1906,10 +2005,11 @@ check(
   '「默认尺寸」的标签在控件上方（field 内独立 label，文档顺序在下拉之前）且仍与下拉关联',
   sizeFieldOrder[0] === 'div'
     && sizeFieldOrder[1] === 'label'
-    && sizeFieldOrder.indexOf('select') > sizeFieldOrder.indexOf('label')
-    && sizeFieldOrder.lastIndexOf('label') < sizeFieldOrder.indexOf('select')
+    && sizeFieldOrder.indexOf('button') > sizeFieldOrder.indexOf('label')
+    && sizeFieldOrder.lastIndexOf('label') < sizeFieldOrder.indexOf('button')
     && sizeFieldLabel?.props?.htmlFor === 'dib-size'
-    && selectById(sizeTree, SIZE_SELECT)?.props?.id === 'dib-size'
+    && dropdownById(sizeTree, SIZE_SELECT)?.props?.id === 'dib-size'
+    && triggerById(sizeTree, SIZE_SELECT)?.props?.id === 'dib-size'
     // field 是纵向排列（标签在上、控件在下），而不是把两者并排放在一个行内盒子里。
     && styles.map((style) => style.textContent).join('').includes('.dib-field{display:flex;flex-direction:column;'),
   JSON.stringify({ order: sizeFieldOrder.slice(0, 6), htmlFor: sizeFieldLabel?.props?.htmlFor ?? null }).slice(0, 200),
@@ -1926,11 +2026,13 @@ check(
   '「保存尺寸」与下拉同处一行（同一 controls 容器 + 可换行），不与下拉抢宽度',
   (() => {
     const controls = (sizeFieldNode?.props?.children ?? []).find((child) => child?.props?.className === 'dib-size-controls')
+    const children = (controls?.props?.children ?? []).filter(Boolean)
+    const dropdown = children.find((child) => child?.props?.id === 'dib-size' || child?.props?.className === 'dib-dd')
     const order = tagOrderOf(controls)
     return controls !== undefined
-      && order.includes('select')
+      && dropdown !== undefined
       && order.includes('button')
-      && order.indexOf('button') > order.indexOf('select')
+      && order.indexOf('button') > order.indexOf('div')
       && styles.map((style) => style.textContent).join('').includes('.dib-size-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}')
   })(),
   JSON.stringify(sizeFieldOrder.slice(0, 6)),
@@ -1944,13 +2046,14 @@ const sizeSession = createSession(sizeSaveBundle.component, {
   __initial: { phase: 'idle', providers: [zhipuFull], activeProviderId: 'zhipu', size: '1024x1024' },
 })
 let sizeLiveTree = sizeSession.tree()
-sizeSession.change(selectById(sizeLiveTree, SIZE_SELECT), CUSTOM_SIZE_VALUE_FOR_TEST)
+sizeLiveTree = openDropdownTree(sizeSession, SIZE_SELECT)
+sizeSession.click(menuItemByValueOf(menuOf(sizeLiveTree, SIZE_SELECT), CUSTOM_SIZE_VALUE_FOR_TEST))
 sizeLiveTree = sizeSession.tree()
 const sizeCustomInput = inputById(sizeLiveTree, SIZE_CUSTOM_INPUT)
 check(
   '选「自定义…」后下拉切到保留值，并出现尺寸文本框',
-  selectById(sizeLiveTree, SIZE_SELECT)?.props.value === CUSTOM_SIZE_VALUE_FOR_TEST && sizeCustomInput !== undefined,
-  JSON.stringify({ value: selectById(sizeLiveTree, SIZE_SELECT)?.props.value ?? null, input: sizeCustomInput !== undefined }),
+  dropdownById(sizeLiveTree, SIZE_SELECT)?.props.value === CUSTOM_SIZE_VALUE_FOR_TEST && sizeCustomInput !== undefined,
+  JSON.stringify({ value: dropdownById(sizeLiveTree, SIZE_SELECT)?.props.value ?? null, input: sizeCustomInput !== undefined }),
 )
 sizeSession.change(sizeCustomInput, '1280*720')
 sizeLiveTree = sizeSession.tree()
@@ -2168,21 +2271,81 @@ check(
     && cardTextsOf(switchTree)[1].includes('OpenAI'),
   JSON.stringify({ cards: cardTextsOf(switchTree) }).slice(0, 200),
 )
+/*
+ * 空状态（用户截图反馈重做）：没有可用模型时不再把四个槽位展开成四个手填框，
+ * 常见的那句「手动填写的模型走当前生效服务商」只出现一次，且绝不把内部 id 当名字显示。
+ */
+const sharedHintOf = (tree) => {
+  const node = tree.nodes.find((entry) => entry.type === 'p' && String(entry.props?.className ?? '').split(/\s+/u).includes('dib-routes-shared'))
+  return node === undefined ? '' : textOfElement(node).trim()
+}
+const emptyStateTree = pageWith(cardBundle, { providers: [], activeProviderId: '' })
+const legacyTree2 = pageWith(cardBundle, {
+  providers: [{ ...providerRecord, id: 'default', label: '', legacy: true, models: [] }],
+  activeProviderId: 'default',
+})
 check(
-  '「手动输入…」提示里的服务商名字非空（activeProviderId 没命中时回退 providers[0]）',
+  '空状态：四个槽位都不展开手填文本框，且下拉禁用（只有明确选「手动输入…」的槽位才展开）',
+  Object.values(ROUTE_SELECTS).every((id) => inputById(emptyStateTree, `${id}-manual`) === undefined)
+    && Object.values(ROUTE_SELECTS).every((id) => triggerById(emptyStateTree, id)?.props.disabled === true)
+    && Object.values(ROUTE_SELECTS).every((id) => dropdownById(emptyStateTree, id)?.props.value === ''),
+  JSON.stringify({
+    inputs: Object.values(ROUTE_SELECTS).filter((id) => inputById(emptyStateTree, `${id}-manual`) !== undefined).length,
+    disabled: Object.values(ROUTE_SELECTS).map((id) => triggerById(emptyStateTree, id)?.props.disabled ?? null),
+  }),
+)
+check(
+  '空状态：共用的「手动填写…走哪家」提示在整个区块只出现一次（不是四个槽位各一遍）',
   (() => {
-    // 故意不给 activeProviderId：Host 与界面都回退到 providers[0]，手动输入才有名字可用。
-    const tree = pageWith(cardBundle, { providers: [{ ...providerRecord, models: [] }], activeProviderId: '' })
-    const node = tree.nodes.find((entry) => entry.type === 'p' && entry.props?.id === 'dib-route-generate-primary-hint')
-    const text = node === undefined ? '' : textOfElement(node).trim()
-    return text === '手动填写的模型走当前生效服务商：智谱'
-      && !text.includes('当前没有生效的服务商')
+    const backend = pageWith(cardBundle, { providers: [{ ...providerRecord, models: [] }], activeProviderId: '' })
+    const text = backend.text
+    const occurrences = text.split('手动填写的模型走当前生效服务商').length - 1
+    const hintRows = backend.nodes.filter((entry) => String(entry.props?.className ?? '').split(/\s+/u).includes('dib-routes-shared')).length
+    return occurrences === 1 && hintRows === 1 && sharedHintOf(backend) === '手动填写的模型走当前生效服务商：智谱'
   })(),
+  JSON.stringify({ shared: sharedHintOf(pageWith(cardBundle, { providers: [{ ...providerRecord, models: [] }], activeProviderId: '' })) }).slice(0, 200),
+)
+check(
+  '空状态：没有服务商时不显示内部 id（`default`），改成「尚未添加服务商」这类人话',
+  sharedHintOf(emptyStateTree) === '手动填写的模型走当前生效服务商；尚未添加服务商'
+    && !emptyStateTree.text.includes('default')
+    && sharedHintOf(legacyTree2).includes('默认提供商')
+    && !legacyTree2.text.includes('：default'),
+  JSON.stringify({ empty: sharedHintOf(emptyStateTree), legacy: sharedHintOf(legacyTree2) }).slice(0, 220),
+)
+check(
+  '手填文本框不再带重复的「手动输入…」标签（只留 placeholder 与 aria-label）',
   (() => {
-    const tree = pageWith(cardBundle, { providers: [{ ...providerRecord, models: [] }], activeProviderId: '' })
-    const node = tree.nodes.find((entry) => entry.type === 'p' && entry.props?.id === 'dib-route-generate-primary-hint')
-    return node === undefined ? '(缺)' : textOfElement(node).trim()
+    const tree = pageWith(cardBundle, {
+      providers: [zhipuFull],
+      activeProviderId: 'zhipu',
+      routes: routesSeed({ 'generate.primary': { providerId: 'zhipu', model: '', manual: true, manualText: '' } }),
+    })
+    const input = inputById(tree, `${ROUTE_SELECTS['generate.primary']}-manual`)
+    const group = slotGroupOf(tree, 'generate.primary')
+    const labels = (() => {
+      const found = []
+      walk(group, (item) => {
+        if (item !== null && typeof item === 'object' && item.type === 'label') found.push(textOfElement(item).trim())
+      })
+      return found
+    })()
+    return input !== undefined
+      && input.props['aria-label'] === '手动输入…'
+      && !labels.includes('手动输入…')
   })(),
+  JSON.stringify({ labels: (() => {
+    const tree = pageWith(cardBundle, {
+      providers: [zhipuFull],
+      activeProviderId: 'zhipu',
+      routes: routesSeed({ 'generate.primary': { providerId: 'zhipu', model: '', manual: true, manualText: '' } }),
+    })
+    const found = []
+    walk(slotGroupOf(tree, 'generate.primary'), (item) => {
+      if (item !== null && typeof item === 'object' && item.type === 'label') found.push(textOfElement(item).trim())
+    })
+    return found
+  })() }).slice(0, 200),
 )
 
 /* 卡片上的「测试」同样要带这张卡片自己的 keyRef */
@@ -2359,6 +2522,148 @@ check(
     && styles.every((style) => style.dataset?.pluginCss !== 'dsh-image-bridge/settings-nav-icon')
     && navDom.observerCount() === 0,
   JSON.stringify({ disposers: navDisposers.length, styles: styleCountBefore, marked: markedNavLabels().length, observers: navDom.observerCount(), allStyles: styles.length, allEffects: effects.length, allDisposers: effectDisposers.length }).slice(0, 300),
+)
+
+/* ------------------------------------------------------------------ *
+ * 自绘下拉菜单：结构、键盘、aria、滚动（六个断言）
+ * ------------------------------------------------------------------ */
+
+const menuBundle = sectionWithRecording({ providers: [zhipuFull, openaiProvider, otherProvider], activeProviderId: 'zhipu', size: '1024x1024' })
+const menuSession = createSession(menuBundle.component, { t: undefined, close: () => {}, __initial: { phase: 'loading' } })
+await sleep(30)
+let menuTree = menuSession.tree()
+// 载入是异步的：等到触发器真的渲染出来（否则拿到的是"载入中"那一版）。
+for (let round = 0; round < 6 && (menuTree.nodes.find((node) => node.props?.['data-dib-route'] === 'generate.primary') === undefined); round += 1) {
+  await sleep(20)
+  menuTree = menuSession.tree()
+}
+const PRIMARY = ROUTE_SELECTS['generate.primary']
+
+check(
+  '① 触发器渲染当前值（未设置时是占位），点击后弹出菜单浮层（role=listbox）',
+  triggerTextOf(menuTree, PRIMARY) === '主模型'
+    && menuOf(menuTree, PRIMARY) === undefined
+    && triggerById(menuTree, PRIMARY)?.props['aria-expanded'] === 'false'
+    && (() => {
+      menuTree = openDropdownTree(menuSession, PRIMARY)
+      const menu = menuOf(menuTree, PRIMARY)
+      return menu !== undefined
+        && menu.props.role === 'listbox'
+        && triggerById(menuTree, PRIMARY)?.props['aria-expanded'] === 'true'
+        && triggerById(menuTree, PRIMARY)?.props['aria-controls'] === menu.props.id
+        && menuItemsOf(menu).length === modelOptionsOf(menuTree, PRIMARY).length + 1
+    })(),
+  JSON.stringify({ trigger: triggerTextOf(menuTree, PRIMARY), items: menuItemsOf(menuOf(menuTree, PRIMARY)).length }).slice(0, 200),
+)
+check(
+  '② 当前项带勾号语义：aria-selected=true + 一个勾号节点，其它项为 false',
+  (() => {
+    // 先选一个模型，再打开菜单看勾号落在谁身上
+    menuSession.click(menuItemByValueOf(menuOf(menuTree, PRIMARY), 'zhipu::wan2.7-image'))
+    menuTree = openDropdownTree(menuSession, PRIMARY)
+    const menu = menuOf(menuTree, PRIMARY)
+    const items = menuItemsOf(menu)
+    const selected = items.filter((item) => item.props['aria-selected'] === 'true')
+    const checkNode = (item) => (Array.isArray(item.props.children) ? item.props.children : []).some((child) => child?.props?.className === 'dib-menu-check')
+    return selected.length === 1
+      && String(selected[0].props['data-value']) === 'zhipu::wan2.7-image'
+      && checkNode(selected[0])
+      && items.filter((item) => item.props['aria-selected'] === 'false').every((item) => !checkNode(item))
+  })(),
+  JSON.stringify(menuItemsOf(menuOf(menuTree, PRIMARY)).map((item) => `${item.props['data-value']}:${item.props['aria-selected']}`)).slice(0, 240),
+)
+check(
+  '③ 点面板外关闭、Esc 关闭，且关闭后焦点回到触发器',
+  (() => {
+    const focusBefore = domCalls.focus.length
+    // 点面板外
+    domCalls.outsideTarget = { tag: 'outside' }
+    navDom.dispatch('mousedown', { target: domCalls.outsideTarget })
+    menuTree = menuSession.tree()
+    const closedByOutside = menuOf(menuTree, PRIMARY) === undefined && triggerById(menuTree, PRIMARY)?.props['aria-expanded'] === 'false'
+    domCalls.outsideTarget = null
+    // 再开一次，用 Esc 关
+    menuTree = openDropdownTree(menuSession, PRIMARY)
+    keyDownOn(menuSession, triggerById(menuTree, PRIMARY), 'Escape')
+    menuTree = menuSession.tree()
+    const closedByEsc = menuOf(menuTree, PRIMARY) === undefined
+    return closedByOutside && closedByEsc && domCalls.focus.length > focusBefore
+  })(),
+  JSON.stringify({ focusCalls: domCalls.focus.length, outsideListeners: navDom.listenerCount('mousedown') }).slice(0, 200),
+)
+check(
+  '④ 键盘上下键移动 + 回车选中，并按同一份状态落盘（providerId + model）',
+  await (async () => {
+    menuTree = openDropdownTree(menuSession, PRIMARY)
+    const activeValueOf = () => menuItemsOf(menuOf(menuTree, PRIMARY))
+      .find((item) => String(item.props.className).includes('is-active'))?.props['data-value'] ?? null
+    // 打开时高亮落在当前选中项上；上下键必须真的把高亮挪走，回车提交的是**高亮那一项**。
+    const atOpen = activeValueOf()
+    keyDownOn(menuSession, triggerById(menuTree, PRIMARY), 'ArrowDown')
+    menuTree = menuSession.tree()
+    const afterDown = activeValueOf()
+    keyDownOn(menuSession, triggerById(menuTree, PRIMARY), 'ArrowUp')
+    menuTree = menuSession.tree()
+    const afterUp = activeValueOf()
+    keyDownOn(menuSession, triggerById(menuTree, PRIMARY), 'ArrowDown')
+    menuTree = menuSession.tree()
+    keyDownOn(menuSession, triggerById(menuTree, PRIMARY), 'Enter')
+    menuTree = menuSession.tree()
+    const value = dropdownById(menuTree, PRIMARY)?.props.value
+    menuSession.click(menuTree.nodes.find((node) => node.type === 'button' && node.props?.['data-dib-action'] === 'save-routes'))
+    await sleep(30)
+    const saved = [...menuBundle.updates].reverse().map((entry) => entry.patch?.modelRoutes?.generate?.primary).find((item) => item !== undefined)
+    return atOpen !== null && afterDown !== null && afterDown !== atOpen && afterUp === atOpen
+      && value === afterDown
+      && menuOf(menuTree, PRIMARY) === undefined
+      && typeof value === 'string' && value.includes('::')
+      && saved?.providerId === value.split('::')[0]
+      && saved?.model === value.split('::')[1]
+  })(),
+  JSON.stringify({ value: dropdownById(menuTree, PRIMARY)?.props.value ?? null, saved: [...menuBundle.updates].reverse().map((entry) => entry.patch?.modelRoutes?.generate?.primary).find((item) => item !== undefined) ?? null }).slice(0, 220),
+)
+check(
+  '⑤ 长列表可用：面板有最大高度 + 内部滚动，键盘移动时当前项被滚入视野',
+  (() => {
+    const cssTextAll = styles.map((style) => style.textContent).join('')
+    const scrollBefore = domCalls.scrollIntoView.length
+    menuTree = openDropdownTree(menuSession, PRIMARY)
+    keyDownOn(menuSession, triggerById(menuTree, PRIMARY), 'ArrowDown')
+    menuTree = menuSession.tree()
+    const menu = menuOf(menuTree, PRIMARY)
+    const inline = String(menu?.props?.style ?? '')
+    return cssTextAll.includes('.dib-menu{') && cssTextAll.includes('max-height:280px') && cssTextAll.includes('overflow-y:auto')
+      // jsdom 里量不到真实高度，所以断言"滚动究竟有没有被触发"：每次键盘移动都会调一次 scrollIntoView。
+      && domCalls.scrollIntoView.length > scrollBefore
+      && domCalls.scrollIntoView[domCalls.scrollIntoView.length - 1]?.options?.block === 'nearest'
+      && inline === ''
+  })(),
+  JSON.stringify({ scrollCalls: domCalls.scrollIntoView.length, last: domCalls.scrollIntoView[domCalls.scrollIntoView.length - 1] ?? null }).slice(0, 200),
+)
+check(
+  '⑥ 分组是**不可点**的小标题（role=presentation、没有点击处理），并沿用「— 名称 —」大写标记',
+  (() => {
+    menuTree = openDropdownTree(menuSession, PRIMARY)
+    const groups = menuGroupsOf(menuOf(menuTree, PRIMARY))
+    return groups.length === 3
+      && groups.map((group) => textOfElement(group).trim()).join(',') === '— 智谱 —,— OPENAI —,— OTHER —'
+      && groups.every((group) => group.props.role === 'presentation' && group.props.onClick === undefined)
+      // 小标题不是选项：不参与 aria-selected / 勾号
+      && menuItemsOf(menuOf(menuTree, PRIMARY)).every((item) => !textOfElement(item).includes('—'))
+  })(),
+  JSON.stringify(menuGroupsOf(menuOf(menuTree, PRIMARY)).map((group) => textOfElement(group).trim())).slice(0, 200),
+)
+/* 补一条：未设置时触发器显示占位而不是"第一个模型的名字"（与上面的占位断言配对） */
+check(
+  '未设置的槽位：触发器显示占位文案，不会显示成第一个模型的名字',
+  (() => {
+    const tree = routesPageWith(routesBundle, {})
+    const firstModel = modelOptionsOf(tree, ROUTE_SELECTS['generate.fallback'])[0]?.label ?? ''
+    return triggerTextOf(tree, ROUTE_SELECTS['generate.fallback']) === '备用模型'
+      && firstModel !== ''
+      && triggerTextOf(tree, ROUTE_SELECTS['generate.fallback']) !== firstModel
+  })(),
+  JSON.stringify({ trigger: triggerTextOf(routesPageWith(routesBundle, {}), ROUTE_SELECTS['generate.fallback']) }).slice(0, 160),
 )
 
 /* 硬约束：主题令牌与双语文案 */

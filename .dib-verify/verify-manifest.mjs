@@ -66,6 +66,19 @@ check('补丁插入了一行', rowId !== '', patch.slice(0, 120))
 const rowName = /^\s*name:\s*'?([^'\s]+)'?/mu.exec(patch)?.[1] ?? ''
 check('补丁行 name 指向本包', rowName === manifest.name, `name=${rowName} 期望=${manifest.name}`)
 
+/*
+ * 改名（@local/image-bridge-v4 → @local/dsh-image-bridge）时最容易漏的就是"只改一半"：
+ * 包名、Host 导出的 name、补丁行 name 三处必须逐字一致，否则表现为插件加载不出来或
+ * 清单里出现一张解析不了的重复卡片。这条断言专门盯这个。
+ */
+const hostExportName = /export const name = '([^']+)'/u.exec(host)?.[1] ?? ''
+check(
+  '三处 name 一致：package.json / index.js export / 补丁行',
+  hostExportName !== '' && hostExportName === manifest.name && rowName === manifest.name,
+  JSON.stringify({ packageJson: manifest.name, hostExport: hostExportName, patchRow: rowName }),
+)
+check('包名与目录名各就各位（目录仍是 dsh-image-bridge-v4，改名不动目录）', ROOT.endsWith('dsh-image-bridge-v4'), ROOT)
+
 /* ---------------------------------------------- 跨文件一致性 */
 
 const settingsNs = /const SETTINGS_NS = '([^']+)'/u.exec(client)?.[1] ?? ''

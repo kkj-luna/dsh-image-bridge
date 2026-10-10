@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: '@local/image-bridge-v4',
+  id: '@local/dsh-image-bridge',
   factory(require) {
     /**
      * 生图桥 · Client 半。
@@ -177,7 +177,7 @@ window.__ModuleLoader__.load({
         'label.model': '模型',
         'label.file': '文件',
         'nav': '生图桥',
-        'intro': '接入外部生图模型，为生图与修图各指定一个模型',
+        'intro': '为你的 DeepSeek Harness 接上外部生图模型',
         'loading': '正在载入当前配置…',
         'unavailable': '配置界面暂时不可用（未能连上 Host 的配置服务）',
         'loadFailed': '读取配置失败：',
@@ -260,7 +260,7 @@ window.__ModuleLoader__.load({
         'route.primaryHint': '工具调用时优先使用',
         'route.fallbackHint': '主模型超时仍未返回或连接失败，自动改用',
         'route.manualHint': '手动填写的模型走当前生效服务商',
-        'route.noActive': '当前没有生效的服务商',
+        'route.noProvider': '尚未添加服务商',
         'routes.save': '保存模型设置',
         'routes.saved': '模型设置已保存',
         'fallbackAfterMs': '主模型超时(毫秒)',
@@ -285,7 +285,7 @@ window.__ModuleLoader__.load({
         'label.model': 'Model',
         'label.file': 'File',
         'nav': 'Image Bridge',
-        'intro': 'Connect external image models for generation and editing',
+        'intro': 'Connect external image models to your DeepSeek Harness',
         'loading': 'Loading current settings…',
         'unavailable': 'Configuration is unavailable (the Host configuration service is not reachable).',
         'loadFailed': 'Reading the configuration failed: ',
@@ -368,7 +368,7 @@ window.__ModuleLoader__.load({
         'route.primaryHint': 'Used first when the tools call the API.',
         'route.fallbackHint': 'Used when the primary times out or fails to connect.',
         'route.manualHint': 'A manually typed model goes through the active provider',
-        'route.noActive': 'there is no active provider right now',
+        'route.noProvider': 'no provider has been added yet',
         'routes.save': 'Save model settings',
         'routes.saved': 'Model settings saved.',
         'fallbackAfterMs': 'Primary model timeout (ms)',
@@ -502,6 +502,22 @@ window.__ModuleLoader__.load({
       '.dib-size-field{margin-top:16px;padding-top:16px;border-top:0.5px solid var(--dsw-alias-border-l2)}',
       '.dib-size-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
       '.dib-size-controls .dib-select{flex:0 1 320px;width:auto;min-width:200px}',
+      /* 自绘下拉：触发器沿用原来的输入框外观，右侧一个小箭头 */
+      '.dib-dd{position:relative;min-width:0;max-width:320px}',
+      '.dib-dd-trigger{display:flex;align-items:center;gap:6px;width:100%;text-align:left;cursor:pointer;font:inherit}',
+      '.dib-dd-trigger:disabled{cursor:default}',
+      '.dib-dd-value{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.dib-dd-caret{flex:0 0 auto;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:1}',
+      /* 菜单面板：圆角 + 层级背景 + 阴影 + 边框，长列表内部滚动 */
+      '.dib-menu{position:absolute;z-index:30;left:0;right:0;top:calc(100% + 4px);max-height:280px;overflow-y:auto;padding:4px;box-sizing:border-box;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-elevation-prominent)}',
+      '.dib-menu-item{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;cursor:pointer}',
+      '.dib-menu-item:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+      '.dib-menu-item.is-active{background:var(--dsw-alias-interactive-bg-hover)}',
+      '.dib-menu-item.is-selected{font-weight:500}',
+      '.dib-menu-label{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.dib-menu-check{flex:0 0 auto;color:var(--dsw-alias-state-business-primary)}',
+      /* 分组标题：不可点，延续「— 名称 —」大写标记 */
+      '.dib-menu-group{padding:6px 8px 2px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;font-weight:700;letter-spacing:0.02em}',
     ].join('')
 
     /* ------------------------------------------------------------------ */
@@ -1020,7 +1036,7 @@ window.__ModuleLoader__.load({
      * 这两行必须与 package.json 的 `name` / `version` 逐字一致——客户端模块拿不到清单，
      * 只能写成常量，所以验收里有一条断言专门盯"改版本忘了同步"。
      */
-    const PACKAGE_NAME = '@local/image-bridge-v4'
+    const PACKAGE_NAME = '@local/dsh-image-bridge'
     const PACKAGE_VERSION = '0.1.0'
 
     /**
@@ -2175,6 +2191,12 @@ window.__ModuleLoader__.load({
       const sizeIsPreset = SIZE_PRESETS.includes(state.size)
       const sizeIsCustom = state.sizeCustom === true || (state.size !== '' && !sizeIsPreset)
       const sizeSelectValue = sizeIsPreset ? state.size : DEFAULT_SIZE
+      /** 触发器上显示的预设文案（带比例注释；词典缺键时退回尺寸本身）。 */
+      const sizeTriggerLabel = (() => {
+        const key = `size.preset.${sizeSelectValue}`
+        const label = tr(key)
+        return label === key ? sizeSelectValue : label
+      })()
 
       /*
        * 模型区块：四个槽位（生图/修图 × 主/备）+ 主模型超时。
@@ -2193,13 +2215,196 @@ window.__ModuleLoader__.load({
        * 至少一家服务商，这个名字就不会是空的（Host 那边解析手动输入的凭据也是这么回退的）。
        */
       const activeProvider = state.providers.find((provider) => provider.id === state.activeProviderId) ?? state.providers[0]
-      const activeName = activeProvider === undefined
+      /*
+       * 给用户看的服务商名：label → 「默认提供商」（旧单服务商配置合成的那张卡片）→ 空。
+       * **绝不把内部 id 当名字显示**：那张合成卡片 id 是 `default`，直接显示给用户就是
+       * 截图里那句莫名其妙的"走当前生效服务商：default"。
+       */
+      const activeName = activeProvider === undefined || activeProvider === null
         ? ''
-        : activeProvider.label !== '' ? activeProvider.label : activeProvider.id
-      const activeLabel = activeName === '' ? tr('route.noActive') : activeName
+        : typeof activeProvider.label === 'string' && activeProvider.label.trim() !== ''
+          ? activeProvider.label.trim()
+          : activeProvider.legacy === true ? tr('legacyProviderName') : ''
       const routed = { generate: routeItemOf('generate.primary'), edit: routeItemOf('edit.primary') }
 
-      /** 某个槽位的选项分组：只列有模型的服务商，当前值一定补进去（受控下拉不能空白）。 */
+    /**
+     * 自绘下拉菜单：Harness 风格（圆角面板、当前项右侧勾号、悬停高亮）。
+     *
+     * 原生 `<select>` 展开的是操作系统列表，与界面其它地方不一致；这里自己画一个，
+     * 代价是原生免费提供的能力都要自己实现，所以下面这些一个都不能少：
+     * 点击触发器开关、点面板外关闭、Esc 关闭、上下键移动 + 回车选中、Home/End、
+     * 关闭后焦点回到触发器、`aria-haspopup`/`aria-expanded`/`role=listbox`+`role=option`/
+     * `aria-selected`/`aria-activedescendant`，以及长列表的最大高度 + 内部滚动 +
+     * 当前项滚入视野。
+     *
+     * 焦点始终留在触发器上，用 `aria-activedescendant` 表达"键盘当前在哪一项"——这是
+     * listbox 的标准做法，也省掉了在选项之间搬运 DOM 焦点的麻烦。
+     *
+     * 条目形状（由调用方给）：
+     *   { kind: 'group', key, label }                     不可点的小标题
+     *   { kind: 'option', key, value, label, data? }       可选项（data 里带 providerId/model）
+     */
+    function Dropdown(props) {
+      const [open, setOpen] = React.useState(false)
+      const [activeIndex, setActiveIndex] = React.useState(-1)
+      const triggerRef = React.useRef(null)
+      const wrapperRef = React.useRef(null)
+      const entries = Array.isArray(props.entries) ? props.entries : []
+      /** 可选项在 entries 里的下标（键盘只在可选项之间移动，跳过小标题）。 */
+      const optionIndexes = entries.map((entry, index) => (entry.kind === 'option' ? index : -1)).filter((index) => index >= 0)
+      const optionIdOf = (index) => `${props.id}-opt-${index}`
+      const selectedEntryIndex = entries.findIndex((entry) => entry.kind === 'option' && entry.value === props.value)
+      const activeEntryIndex = activeIndex >= 0 && activeIndex < entries.length ? activeIndex : -1
+      const isOpen = open && !props.disabled
+
+      const focusTrigger = () => {
+        const node = triggerRef.current
+        if (node !== null && node !== undefined && typeof node.focus === 'function') node.focus()
+      }
+      const close = (refocus) => {
+        setOpen(false)
+        setActiveIndex(-1)
+        if (refocus === true) focusTrigger()
+      }
+      const openWith = (index) => {
+        setOpen(true)
+        setActiveIndex(index >= 0 ? index : (optionIndexes.length > 0 ? optionIndexes[0] : -1))
+      }
+      const commit = (entry) => {
+        close(true)
+        if (entry !== undefined && entry.kind === 'option' && typeof props.onPick === 'function') props.onPick(entry)
+      }
+      const move = (delta) => {
+        const current = optionIndexes.indexOf(activeEntryIndex)
+        const next = current < 0
+          ? (delta > 0 ? 0 : optionIndexes.length - 1)
+          : Math.min(optionIndexes.length - 1, Math.max(0, current + delta))
+        if (optionIndexes.length > 0) setActiveIndex(optionIndexes[next])
+      }
+
+      /*
+       * 打开时：点面板外关闭、Esc 关闭。
+       *
+       * 都挂在 effect 上，关闭（卸载）时把监听摘掉——绝不留下全局副作用。
+       */
+      React.useEffect(() => {
+        if (!isOpen) return () => {}
+        if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return () => {}
+        const onDocumentMouseDown = (event) => {
+          const target = event === null || event === undefined ? undefined : event.target
+          const wrapper = wrapperRef.current
+          if (target !== undefined && wrapper !== null && wrapper !== undefined && typeof wrapper.contains === 'function' && wrapper.contains(target)) return
+          close(false)
+        }
+        document.addEventListener('mousedown', onDocumentMouseDown)
+        return () => {
+          if (typeof document.removeEventListener === 'function') document.removeEventListener('mousedown', onDocumentMouseDown)
+        }
+      }, [isOpen])
+
+      // 键盘走到哪一项，就把它滚进可见范围（176+ 项时这条是必须的）。
+      React.useEffect(() => {
+        if (!isOpen || activeEntryIndex < 0) return
+        if (typeof document === 'undefined' || typeof document.getElementById !== 'function') return
+        const node = document.getElementById(optionIdOf(activeEntryIndex))
+        if (node !== null && node !== undefined && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'nearest' })
+      }, [isOpen, activeEntryIndex])
+
+      const onTriggerKeyDown = (event) => {
+        const key = event === null || event === undefined ? '' : event.key
+        if (key === 'ArrowDown' || key === 'ArrowUp') {
+          if (typeof event.preventDefault === 'function') event.preventDefault()
+          if (!isOpen) openWith(selectedEntryIndex)
+          else move(key === 'ArrowDown' ? 1 : -1)
+          return
+        }
+        if (key === 'Enter' || key === ' ') {
+          if (!isOpen) {
+            if (typeof event.preventDefault === 'function') event.preventDefault()
+            openWith(selectedEntryIndex)
+            return
+          }
+          if (typeof event.preventDefault === 'function') event.preventDefault()
+          commit(entries[activeEntryIndex])
+          return
+        }
+        if (key === 'Escape' && isOpen) {
+          if (typeof event.preventDefault === 'function') event.preventDefault()
+          close(true)
+          return
+        }
+        if (key === 'Home' && isOpen) {
+          if (typeof event.preventDefault === 'function') event.preventDefault()
+          if (optionIndexes.length > 0) setActiveIndex(optionIndexes[0])
+          return
+        }
+        if (key === 'End' && isOpen) {
+          if (typeof event.preventDefault === 'function') event.preventDefault()
+          if (optionIndexes.length > 0) setActiveIndex(optionIndexes[optionIndexes.length - 1])
+          return
+        }
+        if (key === 'Tab' && isOpen) close(false)
+      }
+
+      const activeOption = activeEntryIndex >= 0 && entries[activeEntryIndex] !== undefined && entries[activeEntryIndex].kind === 'option'
+        ? entries[activeEntryIndex]
+        : undefined
+      const triggerProps = {
+        key: 'trigger',
+        id: props.id,
+        type: 'button',
+        className: `dib-input dib-select dib-dd-trigger${isOpen ? ' dib-dd-open' : ''}`,
+        disabled: props.disabled === true,
+        'aria-haspopup': 'listbox',
+        'aria-expanded': isOpen ? 'true' : 'false',
+        'aria-controls': `${props.id}-menu`,
+        ...(typeof props.ariaLabel === 'string' && props.ariaLabel !== '' ? { 'aria-label': props.ariaLabel } : {}),
+        ...(typeof props.ariaDescribedBy === 'string' && props.ariaDescribedBy !== '' ? { 'aria-describedby': props.ariaDescribedBy } : {}),
+        ...(activeOption === undefined ? {} : { 'aria-activedescendant': optionIdOf(activeEntryIndex) }),
+        ...(props.triggerData === undefined ? {} : props.triggerData),
+        ref: triggerRef,
+        onClick: () => { if (isOpen) close(false); else openWith(selectedEntryIndex) },
+        onKeyDown: onTriggerKeyDown,
+      }
+      const trigger = h('button', triggerProps, [
+        h('span', { key: 'value', className: 'dib-dd-value' }, props.triggerText),
+        h('span', { key: 'caret', className: 'dib-dd-caret', 'aria-hidden': 'true' }, '▾'),
+      ])
+      if (!isOpen) return h('div', { className: 'dib-dd', ref: wrapperRef }, trigger)
+      const menu = h('div', {
+        key: 'menu',
+        id: `${props.id}-menu`,
+        className: 'dib-menu',
+        role: 'listbox',
+        'aria-label': typeof props.ariaLabel === 'string' && props.ariaLabel !== '' ? props.ariaLabel : props.menuLabel,
+        ...(activeOption === undefined ? {} : { 'aria-activedescendant': optionIdOf(activeEntryIndex) }),
+        'data-dib-menu': props.id,
+      }, entries.map((entry, index) => {
+        if (entry.kind === 'group') {
+          // 小标题：纯展示，不可点、不参与键盘（role=presentation）。
+          return h('div', { key: entry.key, className: 'dib-menu-group', role: 'presentation' }, entry.label)
+        }
+        const selected = entry.value === props.value
+        const active = index === activeEntryIndex
+        return h('div', {
+          key: entry.key,
+          id: optionIdOf(index),
+          className: `dib-menu-item${active ? ' is-active' : ''}${selected ? ' is-selected' : ''}`,
+          role: 'option',
+          'aria-selected': selected ? 'true' : 'false',
+          'data-value': entry.value,
+          ...(entry.data === undefined ? {} : entry.data),
+          onClick: () => commit(entry),
+          onMouseEnter: () => setActiveIndex(index),
+        }, [
+          h('span', { key: 'label', className: 'dib-menu-label' }, entry.label),
+          selected ? h('span', { key: 'check', className: 'dib-menu-check', 'aria-hidden': 'true' }, '✓') : null,
+        ])
+      }))
+      return h('div', { className: 'dib-dd', ref: wrapperRef }, [trigger, menu])
+    }
+
+    /** 某个槽位的选项分组：只列有模型的服务商，当前值一定补进去（受控下拉不能空白）。 */
       const groupsFor = (id) => {
         const selected = routeItemOf(id)
         const groups = []
@@ -2214,73 +2419,109 @@ window.__ModuleLoader__.load({
         return groups
       }
 
+      /** 某个槽位在自绘菜单里的条目：小标题（服务商）+ 模型项 + 末尾的「手动输入…」。 */
+      const routeEntries = (id) => {
+        const entries = []
+        for (const group of groupsFor(id)) {
+          entries.push({
+            kind: 'group',
+            key: `g:${group.provider.id}`,
+            label: groupLabelOf(group.provider.label !== '' ? group.provider.label : group.provider.id),
+          })
+          for (const model of group.models) {
+            entries.push({
+              kind: 'option',
+              key: `${group.provider.id}:${model}`,
+              value: routeValueOf(group.provider.id, model),
+              label: model,
+              data: { 'data-provider': group.provider.id, 'data-model': model },
+            })
+          }
+        }
+        entries.push({ kind: 'option', key: 'manual', value: MANUAL_MODEL_VALUE, label: tr('manualOption') })
+        return entries
+      }
+
       const routeField = (id) => {
         const route = state.routes[id] !== null && typeof state.routes[id] === 'object' ? state.routes[id] : {}
-        const manual = route.manual === true || !hasConnected
+        /*
+         * 手填模式**只由用户的选择决定**（`route.manual`）。
+         *
+         * 以前这里还带着 `|| !hasConnected`：一个模型都没有时四个槽位会一起展开文本框
+         * + 四份重复提示，正是用户截图里那个"很丑"的空状态。空状态现在只显示一行引导
+         * 与四个禁用的占位下拉。
+         */
+        const manual = route.manual === true
         const selectId = `dib-route-${id.replace('.', '-')}`
         const inputId = `${selectId}-manual`
         const selected = routeItemOf(id)
         const fallbackSlot = id.endsWith('.fallback')
+        const placeholder = fallbackSlot ? tr('route.noFallback') : tr('route.unset')
         /*
-         * 备用那一行的可见标签被去掉了（下拉的空选项本身就写着「备用模型」，标签是重复的），
-         * 因此它必须带一个等价的 aria-label——**视觉上删掉、语义上保留**，读屏依旧能把
-         * 两个备用下拉和主用下拉区分开。文案照旧走语言包。
+         * 备用那一行的可见标签被去掉了（触发器在未设置时显示占位文案「备用模型」，标签是
+         * 重复的），因此它必须带一个等价的 aria-label——**视觉上删掉、语义上保留**，读屏
+         * 依旧能把两个备用下拉和主用下拉区分开。文案照旧走语言包。
          */
+        const entry = manual ? MANUAL_MODEL_VALUE : routeValueOf(route.providerId, route.model)
+        const triggerText = manual
+          ? tr('manualOption')
+          : route.model !== '' ? route.model : placeholder
         const fieldNodes = []
         if (!fallbackSlot) fieldNodes.push(h('label', { key: 'label', className: 'dib-label', htmlFor: selectId }, tr(`route.${id}`)))
-        fieldNodes.push(h('select', {
+        fieldNodes.push(h(Dropdown, {
           key: 'select',
           id: selectId,
-          className: 'dib-input dib-select',
-          'data-dib-route': id,
-          ...(fallbackSlot ? { 'aria-label': tr(`route.${id}`) } : {}),
-          'aria-describedby': `${selectId}-hint`,
-          value: manual ? MANUAL_MODEL_VALUE : routeValueOf(route.providerId, route.model),
+          /*
+           * 占位文案只出现在触发器上，**不进菜单**：这是 task-20 里用户明确要的——列表顶部
+           * 不再有一个可点的「主模型 / 备用模型」条目。未设置时显示的永远是这行占位，
+           * 不会静默跳到第一个模型。
+           */
+          triggerText,
+          entries: routeEntries(id),
+          value: entry,
           disabled: disabled || !hasConnected,
-          onChange: (event) => {
-            const next = event !== null && event.target !== null && typeof event.target.value === 'string' ? event.target.value : ''
-            if (next === MANUAL_MODEL_VALUE) {
+          ariaLabel: fallbackSlot ? tr(`route.${id}`) : '',
+          ariaDescribedBy: `${selectId}-hint`,
+          triggerData: { 'data-dib-route': id },
+          onPick: (picked) => {
+            if (picked.value === MANUAL_MODEL_VALUE) {
               patchRoute(id, { manual: true })
               return
             }
-            const picked = splitRouteValue(next)
-            patchRoute(id, { manual: false, providerId: picked.providerId, model: picked.model })
+            const split = splitRouteValue(picked.value)
+            patchRoute(id, { manual: false, providerId: split.providerId, model: split.model })
           },
-        }, [
-          /*
-           * 占位条目：`hidden` 让它在展开的列表里不出现，`disabled` 保证点不中，而当这个
-           * 槽位还没选模型时（受控 value 为空）浏览器仍然显示这行文案——**显示的占位与状态
-           * 一致**，不会静默跳到第一个模型（那会造成"显示某个模型、状态却是空"的错位）。
-           */
-          h('option', {
-            key: 'unset',
-            value: '',
-            hidden: true,
-            disabled: true,
-          }, fallbackSlot ? tr('route.noFallback') : tr('route.unset')),
-          ...groupsFor(id).map((group) => h('optgroup', {
-            key: `g:${group.provider.id}`,
-            label: groupLabelOf(group.provider.label !== '' ? group.provider.label : group.provider.id),
-          }, group.models.map((model) => h('option', {
-            key: `${group.provider.id}:${model}`,
-            value: routeValueOf(group.provider.id, model),
-            'data-provider': group.provider.id,
-            'data-model': model,
-          }, model)))),
-          h('option', { key: 'manual', value: MANUAL_MODEL_VALUE }, tr('manualOption')),
-        ]))
-        fieldNodes.push(h('p', { key: 'hint', id: `${selectId}-hint`, className: 'dib-field-hint' }, manual
-          ? `${tr('route.manualHint')}：${activeLabel}`
-          : fallbackSlot ? tr('route.fallbackHint') : tr('route.primaryHint')))
+        }))
+        fieldNodes.push(h('p', { key: 'hint', id: `${selectId}-hint`, className: 'dib-field-hint' }, fallbackSlot ? tr('route.fallbackHint') : tr('route.primaryHint')))
         const nodes = [h('div', {
           key: 'field',
           // 备用行少了一行标签，上内边距一并收掉，免得留出突兀的空隙。
           className: fallbackSlot ? 'dib-field dib-route-fallback' : 'dib-field',
         }, fieldNodes)]
         if (manual) {
-          nodes.push(field(inputId, tr('manualOption'), `${tr('route.manualHint')}：${activeLabel}`, typeof route.manualText === 'string' ? route.manualText : '', disabled, (value) => patchRoute(id, { manualText: value }), {
-            placeholder: id.startsWith('generate') ? tr('imageModel.placeholder') : tr('editModel.placeholder'),
-          }))
+          /*
+           * 手填文本框：**只有用户明确选了「手动输入…」的那个槽位**才会出现
+           * （以前"没有可用模型"会把四个槽位一起展开，一屏四份重复文案）。
+           *
+           * 这里刻意不给它 label：上面下拉的当前值已经写着「手动输入…」，再来一行标签是
+           * 重复；语义用 aria-label 保留（视觉删、语义留），说明文案提到区块共用说明里，
+           * 不再每个槽位重复一遍。
+           */
+          nodes.push(h('div', { key: 'manual-field', className: 'dib-field dib-manual-field' }, [
+            h('input', {
+              key: 'input',
+              id: inputId,
+              className: 'dib-input dib-input-narrow',
+              type: 'text',
+              value: typeof route.manualText === 'string' ? route.manualText : '',
+              disabled,
+              spellCheck: false,
+              autoComplete: 'off',
+              'aria-label': tr('manualOption'),
+              placeholder: id.startsWith('generate') ? tr('imageModel.placeholder') : tr('editModel.placeholder'),
+              onChange: (event) => patchRoute(id, { manualText: event.target.value }),
+            }),
+          ]))
         }
         return h('div', { key: id, className: 'dib-route-group', 'data-route-slot': id }, nodes)
       }
@@ -2294,6 +2535,14 @@ window.__ModuleLoader__.load({
       const routesBlock = h('div', { key: 'routes', className: 'dib-routes' }, [
         h('h3', { key: 'title', className: 'dib-section-title' }, tr('routes.title')),
         h('p', { key: 'hint', className: 'dib-field-hint' }, tr('routes.hint')),
+        /*
+         * 共用说明：只在区块里出现**一次**——「手动输入…」走哪家服务商、以及还没有服务商
+         * 时该怎么办。以前这句话是每个槽位各来一遍（四个槽位就是四遍），还把内部 id
+         * 当成服务商名显示（`default`）。
+         */
+        h('p', { key: 'shared', className: 'dib-field-hint dib-routes-shared' }, activeName === ''
+          ? `${tr('route.manualHint')}；${tr('route.noProvider')}`
+          : `${tr('route.manualHint')}：${activeName}`),
         hasConnected ? null : h('p', { key: 'none', className: 'dib-field-hint' }, tr('routes.none')),
         routePair('generate'),
         routePair('edit'),
@@ -2414,34 +2663,35 @@ window.__ModuleLoader__.load({
           h('label', { key: 'label', className: 'dib-label', htmlFor: 'dib-size' }, tr('size')),
           h('div', { key: 'controls', className: 'dib-size-controls' }, [
             /*
-             * 尺寸：常用预设 + 「自定义…」。
+             * 尺寸：常用预设 + 「自定义…」（同样是自绘菜单）。
              *
              * 与四个模型下拉同一条不变量——当前值一定出现在选项里：配置里存着预设之外的
              * 尺寸（例如以前手填的 `1280*720`）时自动进入自定义模式、把原值回显到文本框，
              * 既不显示空白，也不改写它。比例只写在选项文案里，value 始终是尺寸本身。
              */
-            h('select', {
+            h(Dropdown, {
               key: 'select',
               id: 'dib-size',
-              className: 'dib-input dib-select',
+              triggerText: sizeIsCustom ? tr('size.custom') : sizeTriggerLabel,
+              entries: [
+                ...SIZE_PRESETS.map((preset) => {
+                  const key = `size.preset.${preset}`
+                  const label = tr(key)
+                  return { kind: 'option', key: preset, value: preset, label: label === key ? preset : label }
+                }),
+                { kind: 'option', key: 'custom', value: CUSTOM_SIZE_VALUE, label: tr('size.custom') },
+              ],
               value: sizeIsCustom ? CUSTOM_SIZE_VALUE : sizeSelectValue,
               disabled: disabled || busy,
-              onChange: (event) => {
-                const next = event !== null && event.target !== null && typeof event.target.value === 'string' ? event.target.value : ''
-                if (next === CUSTOM_SIZE_VALUE) {
+              menuLabel: tr('size'),
+              onPick: (picked) => {
+                if (picked.value === CUSTOM_SIZE_VALUE) {
                   patch({ sizeCustom: true })
                   return
                 }
-                patch({ sizeCustom: false, size: next })
+                patch({ sizeCustom: false, size: picked.value })
               },
-            }, [
-              ...SIZE_PRESETS.map((preset) => {
-                const key = `size.preset.${preset}`
-                const label = tr(key)
-                return h('option', { key: preset, value: preset }, label === key ? preset : label)
-              }),
-              h('option', { key: 'custom', value: CUSTOM_SIZE_VALUE }, tr('size.custom')),
-            ]),
+            }),
             sizeIsCustom ? h('input', {
               key: 'custom-input',
               id: 'dib-size-custom',

@@ -4,7 +4,7 @@
 # 行 id 同时就是设置命名空间：客户端的 SETTINGS_NS 必须与它一致。
 - insert:
     - id: image-bridge-v4
-      name: '@local/image-bridge-v4'
+      name: '@local/dsh-image-bridge'
       config:
         baseUrl: 'http://127.0.0.1:8799/v1'
         model: 'gpt-image-1'
