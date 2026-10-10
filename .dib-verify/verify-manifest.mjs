@@ -94,6 +94,17 @@ check(
     && !/127\.0\.0\.1|localhost|192\.168\.|10\.0\./iu.test(patchEffective),
   JSON.stringify(patchEffective).slice(0, 200),
 )
+
+/*
+ * 「用户配置升级后还在不在」的完整矩阵在 verify-upgrade.mjs（对着真实合成算法跑）。
+ * 这里只钉住最容易被静默改坏的那一层：manifest 的 files 漏了补丁文件时，安装出去
+ * 的包里就没有这一行，插件能加载、设置页也能开，但**升级一次用户配置就没了**。
+ */
+check(
+  'files 列出了 cordis.patch.yml（漏了它 = 升级丢用户配置）',
+  manifest.files?.includes('cordis.patch.yml') === true,
+  JSON.stringify(manifest.files),
+)
 check(
   'Host schema 的默认地址是公开端点（新装用户不会指向本机 mock）',
   /baseUrl[\s\S]{0,120}?\.default\('https:\/\/api\.openai\.com\/v1'\)/u.test(host)
