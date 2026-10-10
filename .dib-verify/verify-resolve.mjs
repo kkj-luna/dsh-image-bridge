@@ -9,10 +9,17 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { PLUGIN_DIR, resolveDshBin, resolveProfileDir } from './dsh-paths.mjs'
 
-const ROOT = '<workspace>/plugins/dsh-image-bridge-v4'
-const DSH_BIN = '<user-dir>\\<user>\\AppData\\Roaming\\npm\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js'
-const PROFILE = '<user-dir>\\<user>\\.dsh\\profiles\\web'
+/*
+ * 路径全部现场推导（DSH_BIN / DSH_PROFILE_DIR / DSH_HOME / 全局 npm 前缀），
+ * 仓库里不写死开发机路径；推不出来就抛错并说明该设哪个环境变量。
+ */
+const ROOT = PLUGIN_DIR
+const DSH_BIN = resolveDshBin()
+const PROFILE = resolveProfileDir()
+/** 用一个明显不存在的 CLI 入口，模拟"只靠 DSH_PROFILE_DIR"的场景。 */
+const NOT_DSH = join(tmpdir(), 'not-dsh', 'not-dsh.js')
 
 const results = []
 function check(name, condition, detail) {
@@ -34,7 +41,7 @@ async function loadWith(caseName, { profileDir, argv1 }) {
 }
 
 /* 场景一：只有 profile 环境变量可用（CLI 入口是临时脚本，找不到 dsh 安装树）。 */
-const onlyProfile = await loadWith('profile', { profileDir: PROFILE, argv1: 'E:/tmp/not-dsh.js' })
+const onlyProfile = await loadWith('profile', { profileDir: PROFILE, argv1: NOT_DSH })
 check('仅凭 DSH_PROFILE_DIR 能拿到 Config', onlyProfile.Config !== undefined, 'Config 为 undefined')
 
 /* 场景二：没有任何环境变量，只靠 CLI 入口定位 dsh 安装目录。 */
@@ -42,7 +49,7 @@ const onlyArgv = await loadWith('argv', { profileDir: undefined, argv1: DSH_BIN 
 check('仅凭 CLI 入口位置能拿到 Config（不依赖环境变量）', onlyArgv.Config !== undefined, 'Config 为 undefined')
 
 /* 场景三：两条路都断了——插件仍必须能加载，只是没有配置表单。 */
-const neither = await loadWith('none', { profileDir: undefined, argv1: 'E:/tmp/not-dsh.js' })
+const neither = await loadWith('none', { profileDir: undefined, argv1: NOT_DSH })
 check('解析全失败时模块仍可加载', typeof neither.apply === 'function' && typeof neither.name === 'string', '模块加载失败')
 check('解析全失败时 Config 为 undefined（优雅降级）', neither.Config === undefined, 'Config 意外存在')
 

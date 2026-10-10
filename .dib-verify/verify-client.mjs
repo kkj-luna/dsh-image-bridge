@@ -8,8 +8,9 @@
  */
 import { readFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
+import { PLUGIN_DIR } from './dsh-paths.mjs'
 
-const ROOT = '<workspace>/plugins/dsh-image-bridge-v4'
+const ROOT = PLUGIN_DIR
 const results = []
 function check(name, condition, detail) {
   results.push({ name, ok: Boolean(condition) })
@@ -1867,7 +1868,11 @@ check(
 
 /* 保存：settings 写 providers/activeProviderId，credentials 写密钥 */
 const saveBundle = sectionWithRecording({ size: '1024x1024' })
-const secret = 'sk-unit-test-secret-value'
+/*
+ * 一个**合成的**标记值（不是任何真实密钥，也不带密钥前缀）：用来证明它只进
+ * credentials.set，绝不落进 settings patch 与诊断日志。
+ */
+const secret = 'unit-test-secret-marker'
 const saveTree = pageWith(saveBundle, {
   providers: [],
   activeProviderId: '',

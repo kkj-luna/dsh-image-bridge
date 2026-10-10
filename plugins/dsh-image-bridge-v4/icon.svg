@@ -1,10 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Image Bridge">
-  <rect x="2" y="2" width="60" height="60" rx="14" fill="#1f6feb"/>
-  <path d="M14 40h36" stroke="#ffffff" stroke-opacity="0.55" stroke-width="3" stroke-linecap="round"/>
-  <path d="M18 40c0-6 5-10 14-10s14 4 14 10" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>
-  <rect x="10" y="22" width="16" height="13" rx="3" fill="#ffffff"/>
-  <circle cx="15.5" cy="27" r="2.2" fill="#1f6feb"/>
-  <path d="M11.5 33.5l4.5-4 3 2.5 3-3.5 3 5z" fill="#1f6feb"/>
-  <rect x="38" y="20" width="16" height="16" rx="8" fill="#ffffff"/>
-  <path d="M46 24v8M42 28h8" stroke="#1f6feb" stroke-width="2.6" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="Image Bridge" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+  <!--
+    单色线条图标：只用 currentColor，随主题着色；没有硬编码颜色、没有内联样式表、不引外部资源。
+    语义 = 图片 + 桥：一个画框（图片）里画着太阳与一座拱桥（桥面 / 拱 / 桥墩落在画框底边上）。
+  -->
+  <rect x="3" y="4" width="18" height="16" rx="3" />
+  <circle cx="8.2" cy="8.8" r="1.5" />
+  <path d="M4.6 16.6h14.8" />
+  <path d="M7.6 16.6c0-2.5 1.9-4.2 4.4-4.2s4.4 1.7 4.4 4.2" />
+  <path d="M7.6 16.6V20" />
+  <path d="M16.4 16.6V20" />
 </svg>

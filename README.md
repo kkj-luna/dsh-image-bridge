@@ -12,25 +12,28 @@
 | 路径 | 说明 |
 | --- | --- |
 | `plugins/dsh-image-bridge-v4/` | **当前生效的插件**（Host 半 `index.js`、客户端半 `client.js`、语言包、图标、README） |
-| `.dib-verify/` | 测试与验收套件：`verify-*.mjs`（204 条断言）、`mock-image-api.mjs`（本地模拟生图接口） |
+| `.dib-verify/` | 测试与验收套件：`verify-*.mjs`、`dsh-paths.mjs`（路径推导）、`mock-image-api.mjs`（本地模拟生图接口） |
 | `generated-images/` | 生图插件的落盘输出（已在 `.gitignore` 中忽略） |
-| `dsh-image-bridge/`、`image-bridge/`、`plugins/dsh-image-bridge{,-live,-v3}/` | **过期副本**，仅作历史参考；不要在这里改代码 |
+| `dsh-image-bridge/`、`image-bridge/`、`plugins/dsh-image-bridge{,-live,-v3}/` | **历史副本**：已被 `plugins/dsh-image-bridge-v4/` 取代，**仅本地保留、不纳入版本控制**（在 `.gitignore` 里）。别在这里改代码 |
 
 插件的详细文档见 [plugins/dsh-image-bridge-v4/README.md](plugins/dsh-image-bridge-v4/README.md)。
 
 ## 跑测试
 
-```powershell
-cd <workspace>
-node .dib-verify\verify-manifest.mjs
-node .dib-verify\verify-client.mjs
-node .dib-verify\verify-host.mjs
-node .dib-verify\verify-resolve.mjs
+在仓库根目录直接跑（Windows / macOS / Linux 都一样）：
+
+```bash
+node .dib-verify/verify-manifest.mjs   # 清单与跨文件一致性
+node .dib-verify/verify-client.mjs     # 客户端注册形状 + 组件渲染
+node .dib-verify/verify-host.mjs       # Host 端到端
+node .dib-verify/verify-resolve.mjs    # 依赖解析健壮性
 
 # 跨进程端到端（先起本地模拟接口）
-node .dib-verify\mock-image-api.mjs 8799   # 另开一个终端
-node .dib-verify\verify-cross.mjs
+node .dib-verify/mock-image-api.mjs 8799   # 另开一个终端
+node .dib-verify/verify-cross.mjs
 ```
+
+脚本里的路径**全部现场推导**，仓库里没有写死任何机器路径：被测插件目录相对脚本自身定位（可用 `DIB_PLUGIN_DIR` 指到别处的副本）；dsh 的安装位置按 `DSH_BIN` → 全局 npm 前缀 → `require.resolve` 依次找；profile 目录按 `DSH_PROFILE_DIR` → `$DSH_HOME/profiles`（默认 `~/.dsh/profiles`，优先 `web`）依次找。找不到时脚本会直接报错并告诉你要设哪个环境变量，不会静默跳过。前提是这台机器装了 dsh（`npm i -g @deepseek-ai/dsh`）。
 
 ## 安装
 
@@ -38,5 +41,6 @@ node .dib-verify\verify-cross.mjs
 
 ## 已知待办
 
-- 过期副本尚未清理（`dsh-image-bridge/`、`image-bridge/`、`plugins/dsh-image-bridge{,-live,-v3}/`），确认不再需要后可删除。
+- 历史副本（`dsh-image-bridge/`、`image-bridge/`、`plugins/dsh-image-bridge{,-live,-v3}/`）已停止跟踪并写进 `.gitignore`，但**仍留在本机磁盘上**：本机 Harness profile 里可能还有指向它们的 link 依赖，删除磁盘文件会弄坏正在跑的插件。确认不再需要后可以自行删。
 - profile 里可能仍留有早期改名产生的惰性依赖记录，功能无影响。
+- 设置页左侧导航的图标由 Harness 外壳按 section id 硬编码选择（见 `.dib-verify` 报告中的说明），第三方 section 目前一律显示通用齿轮；`icon.svg` 只作用于插件市场/插件清单等读取清单图标的位置。

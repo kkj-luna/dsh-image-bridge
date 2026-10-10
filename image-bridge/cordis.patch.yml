@@ -1,8 +1,0 @@
-# 生图桥 bundle patch：把插件挂进 profile 层栈。
-# 用户可在此行同 id 覆盖 config（Web 设置页写入的也是同一处）。
-- insert:
-    - id: image-bridge
-      name: '@local/dsh-image-bridge'
-      config:
-        baseUrl: 'https://api.openai.com/v1'
-        model: 'gpt-image-1'

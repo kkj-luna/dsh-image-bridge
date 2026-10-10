@@ -10,8 +10,9 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { PLUGIN_DIR } from './dsh-paths.mjs'
 
-const ROOT = '<workspace>/plugins/dsh-image-bridge-v4'
+const ROOT = PLUGIN_DIR
 const baseUrl = process.argv[2] ?? 'http://127.0.0.1:8799/v1'
 const workRoot = await mkdtemp(join(tmpdir(), 'dib-cross-'))
 

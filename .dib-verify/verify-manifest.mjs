@@ -9,8 +9,9 @@
  */
 import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { PLUGIN_DIR } from './dsh-paths.mjs'
 
-const ROOT = '<workspace>/plugins/dsh-image-bridge-v4'
+const ROOT = PLUGIN_DIR
 const results = []
 function check(name, condition, detail) {
   results.push({ name, ok: Boolean(condition) })

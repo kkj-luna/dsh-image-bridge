@@ -9,7 +9,7 @@
 
 ## 一、四个测试套件重跑（全部 failed=0）
 
-命令：`node .dib-verify/verify-<name>.mjs`（工作目录 `<workspace>`）
+命令：`node .dib-verify/verify-<name>.mjs`（工作目录 = 仓库根目录）
 
 | 套件 | 断言总数 | 通过 | 失败 | 任务要求下限 | 结论 |
 |---|---|---|---|---|---|
@@ -162,8 +162,8 @@ C4 是量化探测（非断言），结论见 F-2。
 
 ```
 Error: tools 服务未挂载，无法注册工具
-    at Module.apply (file:///<workspace>/plugins/dsh-image-bridge-v4/index.js?cross=1:1009:47)
-    at file:///<workspace>/.dib-verify/verify-cross.mjs:45:5
+    at Module.apply (file:///<仓库>/plugins/dsh-image-bridge-v4/index.js?cross=1:1009:47)
+    at file:///<仓库>/.dib-verify/verify-cross.mjs:45:5
 [exit=1]
 ```
 
@@ -177,7 +177,7 @@ Error: tools 服务未挂载，无法注册工具
 - **根因**：`index.js:1009` 用 `ctx.get('tools')` 判断、`index.js:1010` 用 `ctx.tools.register` 注册（这是有意的设计，注释与代码一致：工具不放进 inject 回调）。而 `verify-cross.mjs:19-35` 里 `services` 没有 `tools` 键（只有 `scope.tools`），且 `ctx` 上也没有 `tools` 属性：
   - `ctx.get('tools')` → `services['tools']` → `undefined` → 抛 `tools 服务未挂载`（已实测）；
   - 即使补上 `get`，`ctx.tools` 仍是 `undefined` → 抛 `Cannot read properties of undefined (reading 'register')`（我在自己的第一版 harness 上实测到了这条，见"探针误报复核"第 2 条）。
-- **最小复现**：`node .dib-verify/mock-image-api.mjs 8799`（后台）→ `node .dib-verify/verify-cross.mjs`（工作目录 `<workspace>`）。
+- **最小复现**：`node .dib-verify/mock-image-api.mjs 8799`（后台）→ `node .dib-verify/verify-cross.mjs`（工作目录 = 仓库根目录）。
 - **影响**：task-3 第 3 项的交付脚本现状不可用，任何人照做都会得到失败结论；容易误判为插件坏了。
 - **修复方向（由实现者决定，我未改）**：`verify-cross.mjs` 的假 ctx 需要同时提供 `ctx.get('tools')` 与 `ctx.tools`（`{ register }`），与 `verify-host.mjs` 的 ctx 构造对齐。
 - **证据**：见 §4.1 报错栈 + 我打通的 A/B 组结果。

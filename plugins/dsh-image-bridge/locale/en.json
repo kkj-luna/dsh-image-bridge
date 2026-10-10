@@ -1,6 +1,0 @@
-{
-  "meta": {
-    "title": "Image Bridge",
-    "description": "Gives text-only models image generation and editing by calling an external image model you configure in the Web UI."
-  }
-}

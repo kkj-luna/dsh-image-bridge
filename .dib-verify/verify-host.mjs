@@ -12,16 +12,22 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { PLUGIN_DIR, resolveDshBin, resolveProfileDir } from './dsh-paths.mjs'
 
-const DSH_BIN = '<user-dir>\\<user>\\AppData\\Roaming\\npm\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js'
-process.env.DSH_PROFILE_DIR = '<user-dir>\\<user>\\.dsh\\profiles\\web'
+/*
+ * 路径全部现场推导，仓库里不写死开发机路径：
+ * dsh 安装位置来自 DSH_BIN / 全局 npm 前缀，profile 目录来自 DSH_PROFILE_DIR / DSH_HOME。
+ * 推不出来就抛错并告诉你该设哪个变量（见 dsh-paths.mjs）。
+ */
+const DSH_BIN = resolveDshBin()
+process.env.DSH_PROFILE_DIR = resolveProfileDir()
 /*
  * 把 CLI 入口指向 dsh 本体，让 `loadOptional` 能解析到真实的 @deepseek-ai/dsh-tools。
  * 否则 defineTool 会走恒等兜底，真实的 schema 校验（parameterSchemaSpecToJsonSchema /
  * valueSchemaSpecToJsonSchema）就完全没被覆盖——那恰恰是最容易抛错的一环。
  */
 process.argv[1] = DSH_BIN
-const ROOT = '<workspace>/plugins/dsh-image-bridge-v4'
+const ROOT = PLUGIN_DIR
 /** Host 的 RPC 通道前缀（与 index.js 的 RPC_CHANNEL 必须一致）。 */
 const RPC_PATH = '/dsh-image-bridge'
 

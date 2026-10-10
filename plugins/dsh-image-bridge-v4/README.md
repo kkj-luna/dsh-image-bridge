@@ -343,3 +343,14 @@ dsh-image-bridge-v4/
 ```
 
 回归测试在仓库的 `.dib-verify/`：Host 端到端（假 ctx + 真 HTTP + 真 PNG 字节比对）、客户端注册与组件、清单与跨文件一致性、依赖解析健壮性、跨进程端到端，以及一个可选的本地模拟生图接口。
+
+```bash
+node .dib-verify/verify-manifest.mjs   # 清单与跨文件一致性
+node .dib-verify/verify-client.mjs     # 客户端注册形状 + 组件渲染
+node .dib-verify/verify-host.mjs       # Host 端到端
+node .dib-verify/verify-resolve.mjs    # 依赖解析健壮性
+node .dib-verify/mock-image-api.mjs 8799   # 另开一个终端：本地模拟生图接口
+node .dib-verify/verify-cross.mjs          # 跨进程端到端（对着上面那个 mock）
+```
+
+脚本里的路径**全部现场推导**，仓库里没有写死任何开发机路径：被测插件目录相对脚本自身定位（可用 `DIB_PLUGIN_DIR` 指到别处的副本），dsh 的安装位置按 `DSH_BIN` → 全局 npm 前缀 → `require.resolve` 依次找，profile 目录按 `DSH_PROFILE_DIR` → `$DSH_HOME/profiles`（默认 `~/.dsh/profiles`，优先 `web`）依次找。找不到时脚本会**直接报错并告诉你要设哪个环境变量**，不会静默跳过、也不会回退到别人的路径。
