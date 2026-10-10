@@ -53,6 +53,12 @@ plugin_manager  action: install_bundle
 
 （包名与版本以常量写在 `client.js` 里，验收脚本会断言它们与 `package.json` 的 `name`/`version` 逐字一致——改版本时两处要一起改；徽标是技术标识，中英文界面显示同一串。）
 
+**同一个图标也会出现在设置页左侧导航里。** 外壳的导航字形是按 section id 从一张**封闭清单**里挑的（`settings.section` 只投影 `id` / `order` / `label`，注册方没有 icon 可传），所以第三方 section 默认一律是通用齿轮——插件市场也不例外。社区通行的做法是**挂载后认领自己那一行**（参考 `<profile>/node_modules/dshmarket/client/client.js` 的 settings-nav-icon 段，`dsh-better-sidebar`、`dsh-skill-mcp-panel` 同法），本插件用的是同一套办法，因此**随插件分发、所有用户可见**：
+
+- 只给"可见文字恰好等于本插件本地化标签"（zh「生图桥」/ en `Image Bridge`）的那一行打标记并注入一段样式，把外壳的齿轮藏掉、用 `mask-image` 画出我们自己的单色标记（只读 alpha，可见颜色来自 `background-color: currentColor`，所以跟随主题）；不碰外壳结构、不动其它行。
+- 标记与样式表都挂在 `ctx.effect` 上，插件卸载时一并移除；语言切换后由 `MutationObserver` 重新认领；对话框还没打开、选择器匹配不到、DOM 结构变了……一律**静默降级**（继续显示齿轮，不抛错、不留残留）。
+- **这是权宜之计**：等 `settings.section` 长出 `icon` 字段那天，这段代码应当删掉（插件市场自己也这么标注）。图形数据与页头内联 SVG、`icon.svg` 同一份（`GLYPH_SHAPES`），验收里有一条跨文件一致性断言盯着三处不许跑偏。
+
 页头下面是**提供商卡片列表**。每张卡片是**一行**：一个状态灯、名称（下面一行更浅的小字写状态，失败时再多一行原因）、右侧三个按钮（对齐官方「设置 → 模型」页的观感）：
 
 ```

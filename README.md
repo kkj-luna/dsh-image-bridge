@@ -43,5 +43,5 @@ node .dib-verify/verify-cross.mjs
 
 - 历史副本（`dsh-image-bridge/`、`image-bridge/`、`plugins/dsh-image-bridge{,-live,-v3}/`）已停止跟踪并写进 `.gitignore`，但**仍留在本机磁盘上**：本机 Harness profile 里可能还有指向它们的 link 依赖，删除磁盘文件会弄坏正在跑的插件。确认不再需要后可以自行删。
 - profile 里可能仍留有早期改名产生的惰性依赖记录，功能无影响。
-- 设置页左侧导航的图标由 Harness 外壳按 section id 硬编码选择（`navIcon(id)` 只认 `account` / `models` / `agent-presets` / `plugins` / `archived-sessions`，其余一律齿轮兜底），插件侧的 `icon` 管不到导航栏，第三方 section 因此一律显示通用齿轮——**这条不做变通**（改本机外壳只有这一台机器生效；"借"官方空闲 id 等于占别人的格子，将来 DSH 真加了对应页面就会被顶掉）。所以能随插件分发、所有用户都看得到的专属图标，就是插件设置页页头里的那个内联单色 SVG。
+- 设置页左侧导航的图标由 Harness 外壳按 section id 硬编码选择（`navIcon(id)` 只认 `account` / `models` / `agent-presets` / `plugins` / `archived-sessions`，其余一律齿轮兜底），插件侧的 `icon` 管不到导航栏。本插件采用**社区通行的"认领自己那一行"方案**（插件市场、`dsh-better-sidebar`、`dsh-skill-mcp-panel` 同法）：挂载后只给"标签等于本插件本地化名称"的那一行打标记并注入遮罩样式，把齿轮换成自己的单色标记，**随插件分发、所有用户可见**；对话框没开、选择器匹配不到等情况下静默降级回齿轮，卸载时标记与样式一并移除。这是**权宜之计**：等 `settings.section` 支持 `icon` 字段后，应改回官方能力（详见插件 README 的「三、配置」）。
 

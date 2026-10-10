@@ -56,8 +56,110 @@ const React = {
 
 let loaded
 globalThis.window = { __ModuleLoader__: { load(spec) { loaded = spec } } }
+
+/** 注入过的样式表（<style> 被 appendChild 到这里，remove() 会把它摘掉）。 */
 const styles = []
-globalThis.document = { createElement: () => ({ dataset: {}, remove() {} }), head: { appendChild: (node) => styles.push(node) } }
+
+/*
+ * 桩 DOM：认领导航行要用 document / MutationObserver。
+ *
+ * 只实现外壳真实用到的那点能力：`[role="dialog"] nav button` 这一个选择器、元素属性、
+ * 以及由测试手动触发的 MutationObserver —— 足以覆盖"认领自己那一行 / 语言切换重新认领 /
+ * 匹配不到时静默降级 / 卸载清理"这些边界。
+ */
+const navDom = (() => {
+  const observerCallbacks = []
+  const selectorCalls = []
+  const element = (tagName) => {
+    const node = {
+      tagName: String(tagName).toUpperCase(),
+      dataset: {},
+      children: [],
+      parent: null,
+      ownText: '',
+      attributes: new Map(),
+      appendChild(child) {
+        child.parent = node
+        node.children.push(child)
+        return child
+      },
+      setAttribute(name, value) { node.attributes.set(name, String(value)) },
+      getAttribute(name) { return node.attributes.has(name) ? node.attributes.get(name) : null },
+      hasAttribute(name) { return node.attributes.has(name) },
+      removeAttribute(name) { node.attributes.delete(name) },
+      remove() {
+        const parent = node.parent
+        if (parent !== null) parent.children = parent.children.filter((child) => child !== node)
+        node.parent = null
+        const index = styles.indexOf(node)
+        if (index >= 0) styles.splice(index, 1)
+      },
+      get textContent() {
+        return node.children.length === 0 ? node.ownText : `${node.ownText}${node.children.map((child) => child.textContent).join('')}`
+      },
+      set textContent(value) { node.ownText = String(value) },
+    }
+    return node
+  }
+  const dialog = element('div')
+  dialog.setAttribute('role', 'dialog')
+  const nav = element('nav')
+  dialog.appendChild(nav)
+  const rows = []
+  /** 用给定的标签重建整排导航行（模拟打开对话框 / 切换语言之后的 DOM）。 */
+  const setRows = (labels) => {
+    nav.children = []
+    rows.length = 0
+    for (const label of labels) {
+      const button = element('button')
+      button.textContent = label
+      nav.appendChild(button)
+      rows.push(button)
+    }
+  }
+  const state = { brokenSelector: false }
+  const documentStub = {
+    createElement: (tagName) => element(tagName),
+    head: { appendChild: (node) => { styles.push(node); return node } },
+    body: element('body'),
+    querySelectorAll(selector) {
+      selectorCalls.push(selector)
+      if (state.brokenSelector || selector !== '[role="dialog"] nav button') return []
+      return rows.slice()
+    },
+  }
+  return {
+    document: documentStub,
+    element,
+    setRows,
+    rows,
+    state,
+    selectorCalls,
+    observerCallbacks,
+    /** 测试手动触发 MutationObserver（真实浏览器里由 DOM 变更触发）。 */
+    fire() { for (const callback of observerCallbacks.slice()) callback([]) },
+    observerCount: () => observerCallbacks.length,
+  }
+})()
+
+globalThis.document = navDom.document
+globalThis.MutationObserver = class {
+  constructor(callback) {
+    this.callback = callback
+    navDom.observerCallbacks.push(callback)
+  }
+
+  observe() {}
+
+  disconnect() {
+    const index = navDom.observerCallbacks.indexOf(this.callback)
+    if (index >= 0) navDom.observerCallbacks.splice(index, 1)
+  }
+}
+
+/* 认领前的导航行：既有官方 section，也有我们这一行；再放一个"包含我们标签"的诱饵行
+   （别的插件完全可能叫「生图桥插件」），用来证明认领是**相等**匹配而不是包含匹配。 */
+navDom.setRows(['账户', '模型', '插件市场', '生图桥', '生图桥插件', '其他'])
 
 await import(pathToFileURL(`${ROOT}/client.js`).href)
 
@@ -75,18 +177,27 @@ check('插件声明 inject', Array.isArray(plugin.inject) && plugin.inject.inclu
 /* ---------------------------------------------------------------- 桩客户端 ctx */
 
 const effects = []
+const effectDisposers = []
 const dictionaries = []
 const registrations = []
+/** 语言状态：认领导航行的"语言切换后重新认领"靠它驱动。 */
+const localeState = { lang: 'zh' }
 
 const fakeCtx = {
   effect(fn, label) {
     effects.push(label)
     const cleanup = fn()
+    effectDisposers.push({ label, cleanup: typeof cleanup === 'function' ? cleanup : () => {} })
     return typeof cleanup === 'function' ? cleanup : () => {}
   },
   locale: {
     register(ns, dicts) { dictionaries.push({ ns, dicts }); return () => {} },
-    bind: (ns) => (key) => `t:${ns}:${key}`,
+    // 绑定出来的 t 直接查已注册词典（与真实外壳一致），查不到才退回可识别的占位串。
+    bind: (ns) => (key) => {
+      const entry = dictionaries.find((item) => item.ns === ns)
+      const table = entry === undefined ? undefined : entry.dicts[localeState.lang]
+      return table !== undefined && typeof table[key] === 'string' ? table[key] : `t:${ns}:${key}`
+    },
   },
   slots: {
     inject(key, callback) {
@@ -233,9 +344,12 @@ function sectionComponentWith(clientCtx) {
   const ctx = {
     get: clientCtx.get,
     locale: fakeCtx.locale,
-    effect: (fn) => {
+    effect: (fn, label) => {
       try {
         const cleanup = fn()
+        const disposer = typeof cleanup === 'function' ? cleanup : () => {}
+        // 记下来，让"卸载后清理干净"的断言能覆盖每一个挂载实例（不只 fakeCtx 那一个）。
+        effectDisposers.push({ label: label === undefined ? 're-apply' : label, cleanup: disposer })
         return typeof cleanup === 'function' ? cleanup : undefined
       } catch {
         return undefined
@@ -2140,6 +2254,87 @@ check(
   removeBundle.updates.length === 1 && Array.isArray(removeBundle.updates[0].patch.providers)
     && removeBundle.updates[0].patch.providers.length === 0 && removeBundle.updates[0].patch.activeProviderId === '',
   JSON.stringify(removeBundle.updates).slice(0, 240),
+)
+
+/* 认领导航行：把外壳的兜底齿轮换成我们自己的标记（随插件分发，所有用户可见） */
+const NAV_MARKER = 'data-dib-nav-icon'
+const markedNavLabels = () => navDom.rows.filter((row) => row.hasAttribute(NAV_MARKER)).map((row) => row.textContent)
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+const navStyleTag = styles.find((style) => style.dataset?.pluginCss === 'dsh-image-bridge/settings-nav-icon')
+const navStyleText = String(navStyleTag?.textContent ?? '')
+const navMaskMatch = /mask-image:\s*url\("([^"]+)"\)/u.exec(navStyleText)
+const navMaskSvg = navMaskMatch === null ? '' : decodeURIComponent(navMaskMatch[1].replace(/^data:image\/svg\+xml,/u, ''))
+const navIconSvgText = await readFile(`${ROOT}/icon.svg`, 'utf8')
+/** 只比图形元素上的几何数据：把根 <svg …> 去掉，免得两边根属性不同就误报。 */
+const geometryPairsOf = (text) => [...text.replace(/<svg\b[^>]*>/u, '').matchAll(/(?:^|\s)(x|y|width|height|rx|cx|cy|r|d)="([^"]*)"/gu)]
+  .map((match) => `${match[1]}="${match[2]}"`)
+  .sort()
+
+check(
+  '认领导航行：只给自己那一行打标记，其余行（含官方 section 与"包含我们标签"的诱饵行）一个都不碰',
+  markedNavLabels().join(',') === zhDict['nav']
+    && markedNavLabels().join(',') === '生图桥'
+    && navDom.selectorCalls.includes('[role="dialog"] nav button')
+    && navDom.observerCount() >= 1,
+  JSON.stringify({ marked: markedNavLabels(), selectors: [...new Set(navDom.selectorCalls)], observers: navDom.observerCount() }).slice(0, 220),
+)
+check(
+  '标记的图形与 icon.svg 同源（几何数据逐条一致），可见颜色来自 currentColor 而不是硬编码',
+  navStyleTag !== undefined
+    && navStyleText.includes(`[${NAV_MARKER}] > svg { display: none; }`)
+    && navStyleText.includes('background-color: currentColor')
+    && navMaskSvg.includes('viewBox="0 0 24 24"')
+    && geometryPairsOf(navMaskSvg).join('|') === geometryPairsOf(navIconSvgText).join('|')
+    && geometryPairsOf(navMaskSvg).length >= 12
+    // 遮罩里的 #000 只被 encodeURIComponent 成 %23000，样式文本里不该出现裸的颜色字面量。
+    && !/#[0-9a-fA-F]{3,8}/u.test(navStyleText)
+    && !/rgba?\(|hsla?\(/u.test(navStyleText),
+  JSON.stringify({ pairs: geometryPairsOf(navMaskSvg).length, same: geometryPairsOf(navMaskSvg).join('|') === geometryPairsOf(navIconSvgText).join('|') }).slice(0, 220),
+)
+
+/* 语言切换（zh → en）：标签变了，标记必须跟过去，旧行不能留着 */
+localeState.lang = 'en'
+navDom.setRows(['Account', 'Models', 'Plugin Market', 'Image Bridge', 'Image Bridge Extra', 'Other'])
+navDom.fire()
+await settle()
+check(
+  '语言切换后重新认领：标记跟到英文行，旧行不残留、其它行不误伤',
+  enDict['nav'] === 'Image Bridge'
+    && markedNavLabels().join(',') === 'Image Bridge'
+    && navDom.rows.filter((row) => row.textContent === '生图桥').length === 0,
+  JSON.stringify({ marked: markedNavLabels(), lang: localeState.lang }).slice(0, 200),
+)
+
+/* 匹配不到时静默降级：不抛错，而且不能留下"藏了齿轮却没图形"的残留标记 */
+navDom.state.brokenSelector = true
+navDom.fire()
+await settle()
+const navDegraded = { marked: markedNavLabels(), observers: navDom.observerCount() }
+navDom.state.brokenSelector = false
+localeState.lang = 'zh'
+navDom.setRows(['账户', '模型', '生图桥'])
+navDom.fire()
+await settle()
+check(
+  '选择器匹配不到时静默降级：不抛错、不留任何标记（恢复后能重新认领）',
+  navDegraded.marked.length === 0
+    && navDegraded.observers >= 1
+    && markedNavLabels().join(',') === '生图桥',
+  JSON.stringify({ degraded: navDegraded, recovered: markedNavLabels() }).slice(0, 200),
+)
+
+/* 卸载（fiber 销毁）：标记与注入的样式表一起消失 */
+const navDisposers = effectDisposers.filter((entry) => entry.label === 'image-bridge: settings nav icon')
+const styleCountBefore = styles.filter((style) => style.dataset?.pluginCss === 'dsh-image-bridge/settings-nav-icon').length
+for (const entry of navDisposers) entry.cleanup()
+check(
+  '卸载后标记与注入的样式表都被移除，观察者也断开',
+  navDisposers.length >= 1
+    && styleCountBefore >= 1
+    && markedNavLabels().length === 0
+    && styles.every((style) => style.dataset?.pluginCss !== 'dsh-image-bridge/settings-nav-icon')
+    && navDom.observerCount() === 0,
+  JSON.stringify({ disposers: navDisposers.length, styles: styleCountBefore, marked: markedNavLabels().length, observers: navDom.observerCount(), allStyles: styles.length, allEffects: effects.length, allDisposers: effectDisposers.length }).slice(0, 300),
 )
 
 /* 硬约束：主题令牌与双语文案 */

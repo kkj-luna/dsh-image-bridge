@@ -1038,6 +1038,153 @@ window.__ModuleLoader__.load({
       { type: 'path', props: { d: 'M16.4 16.6V20' } },
     ]
 
+    /* ------------------------------------------------------------------ */
+    /* 认领导航行：把兜底齿轮换成我们自己的标记                              */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * 导航行的认领标记（属性名）与导航行选择器。
+     *
+     * 外壳把每个 `settings.section` 条目渲染成面板 `<nav>` 里的一个 `<button>`
+     * （见 dsh-client-ui-settings-general 的 SettingsPanel）。
+     */
+    const NAV_ICON_MARKER = 'data-dib-nav-icon'
+    const NAV_ROW_SELECTOR = '[role="dialog"] nav button'
+
+    /**
+     * 认领导航行：把外壳的兜底齿轮换成生图桥自己的标记。
+     *
+     * **为什么必须"认领"**：设置页导航的字形由外壳按 section id 从一张**封闭清单**里挑
+     * （`account` / `models` / `agent-presets` / `plugins` / `archived-sessions`），而
+     * `settings.section` 只投影 `id` / `order` / `label`——注册方没有 icon 可传，于是每个
+     * 第三方 section 都戴齿轮。社区通行的做法是：挂载后**认领自己那一行**，把齿轮换成
+     * 自己的标记（参考实现：`<profile>/node_modules/dshmarket/client/client.js` 的
+     * settings-nav-icon 段；`dsh-better-sidebar`、`dsh-skill-mcp-panel` 同法）。
+     *
+     * **这是权宜之计**：等 `settings.section` 长出 `icon` 字段那天，这个函数与它的调用
+     * 都应当删掉（插件市场自己也这么标注）。
+     *
+     * 边界刻意收窄：
+     * - 只给"可见文字等于本插件本地化标签"的那一行打标记，不碰外壳结构、不动其它行；
+     * - 标记与注入的样式表都属于一个 `ctx.effect`，fiber 卸载时一并移除；
+     * - 语言切换后由 MutationObserver 重新认领，标签与图形不会各说各话；
+     * - 对话框还没打开（行还不存在）、选择器匹配不到、DOM 结构变了……一律**静默降级**：
+     *   继续显示齿轮，不抛错、不留残留。
+     */
+    function installSettingsNavIcon(ctx, resolveLabel) {
+      if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return
+      try {
+        ctx.effect(() => {
+          const tag = document.createElement('style')
+          tag.dataset.plugin = 'dsh-image-bridge'
+          tag.dataset.pluginCss = 'dsh-image-bridge/settings-nav-icon'
+          tag.textContent = navIconCss(navIconMaskUrl())
+          if (document.head !== null && document.head !== undefined) document.head.appendChild(tag)
+          let disposed = false
+          let scheduled = false
+          /** 这一轮认领到的行（留着是为了在"选择器突然匹配不到"时清掉旧标记，不留残留）。 */
+          const claimed = new Set()
+          const sync = () => {
+            scheduled = false
+            if (disposed) return
+            const wanted = resolveLabel()
+            const next = new Set()
+            for (const row of document.querySelectorAll(NAV_ROW_SELECTOR)) {
+              if (isOwnNavRow(row.textContent, wanted)) {
+                row.setAttribute(NAV_ICON_MARKER, '')
+                next.add(row)
+              } else {
+                row.removeAttribute(NAV_ICON_MARKER)
+              }
+            }
+            /*
+             * 这一轮没再找到的行要把标记摘掉：外壳结构一变（或对话框被卸载重建），
+             * 选择器可能一个都匹配不到，光靠上面那个循环会留下一个"藏了齿轮却没有图形"的
+             * 空位。dshmarket 的参考实现没做这一步，这里补上——静默降级要真的干净。
+             */
+            for (const row of claimed) if (!next.has(row)) row.removeAttribute(NAV_ICON_MARKER)
+            claimed.clear()
+            for (const row of next) claimed.add(row)
+          }
+          const schedule = () => {
+            if (scheduled || disposed) return
+            scheduled = true
+            queueMicrotask(sync)
+          }
+          sync()
+          const target = document.body !== null && document.body !== undefined ? document.body : document.documentElement
+          const observer = new MutationObserver(schedule)
+          if (target !== null && target !== undefined) {
+            observer.observe(target, { childList: true, subtree: true, characterData: true })
+          }
+          return () => {
+            disposed = true
+            observer.disconnect()
+            for (const row of claimed) row.removeAttribute(NAV_ICON_MARKER)
+            claimed.clear()
+            for (const row of document.querySelectorAll(`[${NAV_ICON_MARKER}]`)) row.removeAttribute(NAV_ICON_MARKER)
+            tag.remove()
+          }
+        }, 'image-bridge: settings nav icon')
+      } catch (error) {
+        // 认领失败不影响任何功能：齿轮照旧，设置页其它部分完全不受影响。
+        report('warn', '认领导航行失败（静默降级为齿轮）', error instanceof Error ? error.message : String(error))
+      }
+    }
+
+    /**
+     * 认领判定：纯函数。
+     *
+     * 只认"可见文字恰好等于当前本地化标签"的那一行；标签为空时谁都不认领（本地化还没
+     * 解析出来时，绝不能把整排导航都标上）。
+     */
+    function isOwnNavRow(rowText, wantedLabel) {
+      const wanted = String(wantedLabel === null || wantedLabel === undefined ? '' : wantedLabel).trim()
+      if (wanted === '') return false
+      return String(rowText === null || rowText === undefined ? '' : rowText).trim() === wanted
+    }
+
+    /**
+     * 遮罩图形：与页头内联 SVG、`icon.svg` **同一份几何数据**（GLYPH_SHAPES）。
+     *
+     * 这里画成纯黑描边是**故意的**：`mask-image` 只读 alpha，可见颜色来自元素自己的
+     * `background-color: currentColor`，所以这个黑不是"界面颜色"、不参与主题。
+     */
+    function navIconMaskSvg() {
+      const shapes = GLYPH_SHAPES.map((shape) => {
+        const attrs = Object.entries(shape.props).map(([name, value]) => `${name}="${value}"`).join(' ')
+        return `<${shape.type} ${attrs}/>`
+      }).join('')
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${shapes}</svg>`
+    }
+
+    /** 遮罩 URL：运行时编码，绝不手写转义。 */
+    function navIconMaskUrl() {
+      return `data:image/svg+xml,${encodeURIComponent(navIconMaskSvg())}`
+    }
+
+    /** 认领行的样式：藏掉外壳齿轮，用遮罩画出我们自己的标记（颜色跟随主题）。 */
+    function navIconCss(maskUrl) {
+      return [
+        `[${NAV_ICON_MARKER}] > svg { display: none; }`,
+        `[${NAV_ICON_MARKER}]::before {`,
+        "  content: '';",
+        '  flex: none;',
+        '  width: 16px;',
+        '  height: 16px;',
+        '  background-color: currentColor;',
+        `  -webkit-mask-image: url("${maskUrl}");`,
+        `  mask-image: url("${maskUrl}");`,
+        '  -webkit-mask-repeat: no-repeat;',
+        '  mask-repeat: no-repeat;',
+        '  -webkit-mask-position: center;',
+        '  mask-position: center;',
+        '  -webkit-mask-size: 16px 16px;',
+        '  mask-size: 16px 16px;',
+        '}',
+      ].join('\n')
+    }
+
     /**
      * 默认尺寸的常用预设。
      *
@@ -2363,6 +2510,13 @@ window.__ModuleLoader__.load({
         } catch (error) {
           report('warn', 'locale.bind 失败，改用内置文案', error instanceof Error ? error.message : String(error))
         }
+
+        /*
+         * 认领导航行（权宜之计，见 installSettingsNavIcon 的注释）：标签用的是与
+         * `settings.section` 注册**同一个** thunk，保证"外壳投影的标签"与"我们认领的文字"
+         * 永远一致；失败只会留一条 warn，不影响任何功能。
+         */
+        installSettingsNavIcon(ctx, () => t('nav'))
 
         ctx.effect(() => {
           const style = document.createElement('style')
