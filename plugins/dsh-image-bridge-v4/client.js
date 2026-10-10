@@ -172,16 +172,16 @@ window.__ModuleLoader__.load({
         'edit.running': '正在修改图片…',
         'failed.title': '生图失败',
         'editFailed.title': '改图失败',
-        'hint.noVision': '当前模型不能直接查看图片，已保存到工作区文件。',
-        'hint.noGallery': '图片已生成，但当前界面未挂载图片展示能力。',
+        'hint.noVision': '当前模型不能直接查看图片，已保存到工作区文件',
+        'hint.noGallery': '图片已生成，但当前界面未挂载图片展示能力',
         'label.model': '模型',
         'label.file': '文件',
         'nav': '生图桥',
-        'intro': '把外部生图模型接给当前模型使用：先添加模型提供商（测试连接、获取模型），再在下面的「模型」区块里为生图与修图各指定一个模型。',
+        'intro': '把外部生图模型接给当前模型使用：先添加模型提供商（测试连接、获取模型），再在下面的「模型」区块里为生图与修图各指定一个模型',
         'loading': '正在载入当前配置…',
-        'unavailable': '配置界面暂时不可用（未能连上 Host 的配置服务）。',
+        'unavailable': '配置界面暂时不可用（未能连上 Host 的配置服务）',
         'loadFailed': '读取配置失败：',
-        'empty': '还没有配置模型提供商。',
+        'empty': '还没有配置模型提供商',
         'add': '添加模型提供商',
         'edit': '编辑',
         'remove': '删除',
@@ -192,30 +192,28 @@ window.__ModuleLoader__.load({
         'test': '测试连接',
         'testShort': '测试',
         'testing': '测试中…',
-        'testOk': '连接正常。',
-        'testFail': '连接失败。',
+        'testOk': '连接正常',
+        'testFail': '连接失败',
         'dot.ok': '最近一次测试连接成功',
         'dot.fail': '最近一次测试连接失败',
         'dot.untested': '尚未测试连接',
         'dot.connected': '已获取到可用模型列表',
         'editorAdd': '添加模型提供商',
         'editorEdit': '编辑模型提供商',
-        'keyNote': 'API Key 保存在凭据服务里，不会写进配置文件，也不会回传浏览器。',
+        'keyNote': 'API Key 保存在凭据服务里，不会写进配置文件，也不会回传浏览器',
         'name': '名称',
-        'name.hint': '用于在列表里区分，例如 智谱、OpenAI。',
+        'name.hint': '用于在列表里区分，例如 智谱、OpenAI',
         'name.placeholder': '例如 智谱',
         'baseUrl': '接口地址',
-        'baseUrl.hint': 'OpenAI 兼容地址，例如 https://api.openai.com/v1、https://open.bigmodel.cn/api/paas/v4。',
+        'baseUrl.hint': 'OpenAI 兼容地址，例如 https://api.openai.com/v1、https://open.bigmodel.cn/api/paas/v4',
         'baseUrl.placeholder': 'https://api.openai.com/v1',
         'apiKey': 'API Key',
-        'apiKey.set': '已保存密钥；留空表示不修改。',
-        'apiKey.unset': '尚未保存密钥。',
-        'apiKey.placeholder': '留空表示不修改已保存的密钥',
+        'apiKey.enter': '输入API密钥',
         'fetchModels': '获取可用模型',
         'fetching': '获取中…',
         'modelsFetched': '已获取模型：',
-        'modelsEmpty': '接口没有返回可用模型，请直接填写模型名。',
-        'noModelsHint': '没取到模型列表，可点「获取可用模型」，或直接填写模型名。',
+        'modelsEmpty': '接口没有返回可用模型，请直接填写模型名',
+        'noModelsHint': '没取到模型列表，可点「获取可用模型」，或直接填写模型名',
         'availableModels': '可用模型',
         'showAll': '显示全部模型',
         'hiddenModels': '已隐藏非生图模型：',
@@ -228,13 +226,13 @@ window.__ModuleLoader__.load({
         'editModel': '改图模型',
         'editModel.placeholder': '留空表示沿用生图模型',
         'manualOption': '手动输入…',
-        'noModelsYet': '还没有获取到模型列表：先点「测试连接」或「获取可用模型」，也可以直接填写模型名。',
+        'noModelsYet': '还没有获取到模型列表：先点「测试连接」或「获取可用模型」，也可以直接填写模型名',
         'none': '未选择',
         'inheritImage': '沿用生图模型',
-        'keyUnavailable': '凭据服务不可用，无法保存 API Key。',
-        'needBaseUrl': '请先填写接口地址。',
-        'size': '默认尺寸',
-        'size.hint': '对所有提供商生效；列表里没有的尺寸选「自定义…」自己填。',
+        'keyUnavailable': '凭据服务不可用，无法保存 API Key',
+        'needBaseUrl': '请先填写接口地址',
+        'size': '图片尺寸',
+        'size.hint': '对所有提供商生效；列表里没有的尺寸选「自定义…」自己填',
         'size.custom': '自定义…',
         'size.preset.1024x1024': '1024x1024（1:1 默认）',
         'size.preset.1024x1536': '1024x1536（2:3 竖版）',
@@ -246,8 +244,8 @@ window.__ModuleLoader__.load({
         'size.preset.1024x1792': '1024x1792（9:16 竖版）',
         'saveSize': '保存尺寸',
         'routes.title': '模型',
-        'routes.hint': '生图与修图各有一个主模型和一个备用模型：选项来自所有已获取过模型列表的服务商（按服务商分组）。备用模型在主模型超时或连接失败时自动接管。',
-        'routes.none': '先添加并测试连接一个模型提供商。',
+        'routes.hint': '生图与修图各有一个主模型和一个备用模型：选项来自所有已获取过模型列表的服务商（按服务商分组）。备用模型在主模型超时或连接失败时自动接管',
+        'routes.none': '先添加并测试连接一个模型提供商',
         'routes.showAll': '显示全部模型',
         'route.generate.primary': '生图模型',
         'route.generate.fallback': '生图备用模型',
@@ -255,21 +253,21 @@ window.__ModuleLoader__.load({
         'route.edit.fallback': '修图备用模型',
         'route.unset': '主模型',
         'route.noFallback': '备用模型',
-        'route.primaryHint': '工具调用时优先使用。',
-        'route.fallbackHint': '主模型超时仍未返回或连接失败，自动改用。',
+        'route.primaryHint': '工具调用时优先使用',
+        'route.fallbackHint': '主模型超时仍未返回或连接失败，自动改用',
         'route.manualHint': '手动填写的模型走当前生效服务商',
         'route.noActive': '当前没有生效的服务商',
         'routes.save': '保存模型设置',
-        'routes.saved': '模型设置已保存。',
+        'routes.saved': '模型设置已保存',
         'fallbackAfterMs': '主模型超时(毫秒)',
-        'fallbackAfterMs.hint': '主模型超过这个时间仍未返回响应，或连接失败，就自动改用备用模型；留空表示用默认 15000。',
+        'fallbackAfterMs.hint': '主模型超过这个时间仍未返回响应，或连接失败，就自动改用备用模型；留空表示用默认 15000',
         'fallbackAfterMs.placeholder': '15000',
-        'fallbackInvalid': '主模型超时必须是正整数毫秒数（也可以留空用默认值）。',
+        'fallbackInvalid': '主模型超时必须是正整数毫秒数（也可以留空用默认值）',
         'save': '保存',
         'saving': '保存中…',
-        'saved': '已保存。',
-        'savedKey': '密钥已保存。',
-        'removed': '已删除该提供商。',
+        'saved': '已保存',
+        'savedKey': '密钥已保存',
+        'removed': '已删除该提供商',
       },
       en: {
         'generate.title': 'Image generation',
@@ -314,9 +312,7 @@ window.__ModuleLoader__.load({
         'baseUrl.hint': 'An OpenAI-compatible base URL, e.g. https://api.openai.com/v1.',
         'baseUrl.placeholder': 'https://api.openai.com/v1',
         'apiKey': 'API key',
-        'apiKey.set': 'A key is stored; leave blank to keep it.',
-        'apiKey.unset': 'No key stored yet.',
-        'apiKey.placeholder': 'Leave blank to keep the stored key',
+        'apiKey.enter': 'Enter API key',
         'fetchModels': 'Fetch models',
         'fetching': 'Fetching…',
         'modelsFetched': 'Models fetched:',
@@ -339,7 +335,7 @@ window.__ModuleLoader__.load({
         'inheritImage': 'reuse the image model',
         'keyUnavailable': 'The credential service is unavailable, so the API key cannot be stored.',
         'needBaseUrl': 'Fill in the API base URL first.',
-        'size': 'Default size',
+        'size': 'Image size',
         'size.hint': 'Applies to every provider; pick "Custom…" to type a size that is not listed.',
         'size.custom': 'Custom…',
         'size.preset.1024x1024': '1024x1024 (1:1, default)',
@@ -458,7 +454,6 @@ window.__ModuleLoader__.load({
       '.dib-editor-close:disabled{opacity:0.4;cursor:default}',
       '.dib-editor-close:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
       '.dib-editor-body{display:flex;flex-direction:column;gap:12px;min-height:0;overflow-y:auto;padding:0 24px}',
-      '.dib-editor-note{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
       '.dib-editor-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
       '.dib-editor-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:16px 24px 20px}',
       '.dib-editor-footer .dib-status{flex:1 1 auto;text-align:right}',
@@ -1281,6 +1276,9 @@ window.__ModuleLoader__.load({
         }
       }, [state.baseUrl, state.keyDraft, declaredKeyRef, patch, tr])
 
+      /** 已配置密钥时占位提示用的星号个数（只是占位，不反映真实长度）。 */
+      const API_KEY_MASK_LENGTH = 12
+
       /** 交给上层落盘：settings 写记录，credentials 写密钥（两者互相独立）。 */
       const submit = (event) => {
         if (event !== null && event !== undefined && typeof event.preventDefault === 'function') event.preventDefault()
@@ -1321,11 +1319,22 @@ window.__ModuleLoader__.load({
       rows.push(field(
         'dib-provider-key',
         tr('apiKey'),
-        props.keyConfigured === true ? tr('apiKey.set') : tr('apiKey.unset'),
+        tr('keyNote'),
         state.keyDraft,
         locked,
         (value) => patch({ keyDraft: value }),
-        { type: 'password', placeholder: tr('apiKey.placeholder') },
+        {
+          /*
+           * 占位提示随"是否已配置"变化：没配过就提示输入，配过就用星号铺满。
+           *
+           * **星号只出现在 placeholder 里，绝不写进 value**：否则用户不动这个框直接保存，
+           * 就会把一串星号当成真密钥写进凭据服务，把已保存的密钥毁掉。value 始终是用户
+           * 真正输入的草稿（空 = 本次不修改），保存逻辑也一如既往只在非空时才调用
+           * `credentials.set`。这里也不用 type=password + 假值来冒充星号。
+           */
+          type: 'password',
+          placeholder: props.keyConfigured === true ? '*'.repeat(API_KEY_MASK_LENGTH) : tr('apiKey.enter'),
+        },
       ))
       rows.push(h('div', { key: 'actions', className: 'dib-editor-actions' }, [
         h('button', {
@@ -1345,7 +1354,6 @@ window.__ModuleLoader__.load({
           onClick: () => { void fetchModels() },
         }, state.phase === 'fetching' ? tr('fetching') : state.models.length > 0 ? tr('refetchModels') : tr('fetchModels')),
       ]))
-      rows.push(h('p', { key: 'note', className: 'dib-editor-note' }, tr('keyNote')))
 
       /*
        * 这一家的模型列表：**只作展示**。

@@ -110,6 +110,9 @@ plugin.apply(fakeCtx)
 
 check('注册了样式与词典两个 effect', effects.length >= 2, effects.join(','))
 check('词典覆盖 zh 与 en', dictionaries.length === 1 && Boolean(dictionaries[0].dicts.zh) && Boolean(dictionaries[0].dicts.en), JSON.stringify(dictionaries.map((d) => Object.keys(d.dicts))))
+/* 注册进来的两套词典：后面的文案断言直接查它们（英文渲染也要用到） */
+const zhDict = dictionaries[0].dicts.zh
+const enDict = dictionaries[0].dicts.en
 
 const toolviews = registrations.filter((entry) => entry.options.name === 'tool.call.toolview')
 const sections = registrations.filter((entry) => entry.options.name === 'settings.section')
@@ -747,9 +750,59 @@ check(
   editorTree.buttonTexts.join(','),
 )
 check(
-  '编辑面板有保存 / 取消，并在已配置密钥时提示「已保存密钥」',
-  editorTree.text.includes('已保存密钥') && buttonByText(editorTree, '保存') !== undefined && buttonByText(editorTree, '取消') !== undefined,
+  '编辑面板有保存 / 取消，并有密钥说明小字',
+  editorTree.text.includes('API Key 保存在凭据服务里，不会写进配置文件，也不会回传浏览器')
+    && buttonByText(editorTree, '保存') !== undefined
+    && buttonByText(editorTree, '取消') !== undefined,
   editorTree.buttonTexts.join(','),
+)
+
+/* API Key：占位提示随状态变化，星号只进 placeholder、绝不进 value */
+const keyInputOf = (configured) => {
+  const tree = pageWith(cardBundle, {
+    providers: [providerRecord],
+    activeProviderId: 'zhipu',
+    ...(configured ? { keyConfigured: { zhipu: true } } : {}),
+    editor: { mode: 'edit', initial: editorInitialFor(ALL_MODELS) },
+  })
+  return inputById(tree, 'dib-provider-key')
+}
+const keyInputUnconfigured = keyInputOf(false)
+const keyInputConfigured = keyInputOf(true)
+check(
+  'API Key 未配置时提示「输入API密钥」；已配置时用星号铺满 placeholder，两者 value 都为空',
+  keyInputUnconfigured?.props?.placeholder === '输入API密钥'
+    && keyInputUnconfigured?.props?.value === ''
+    && keyInputConfigured?.props?.placeholder === '*'.repeat(12)
+    && keyInputConfigured?.props?.value === ''
+    && String(keyInputConfigured?.props?.value ?? '').includes('*') === false,
+  JSON.stringify({
+    unconfigured: keyInputUnconfigured?.props?.placeholder ?? null,
+    configured: keyInputConfigured?.props?.placeholder ?? null,
+    value: keyInputConfigured?.props?.value ?? null,
+  }).slice(0, 200),
+)
+check(
+  '密钥说明小字是最终文案（不带结尾句号），英文包按英文习惯保留句末句号',
+  (() => {
+    const tree = pageWith(cardBundle, {
+      providers: [providerRecord],
+      activeProviderId: 'zhipu',
+      keyConfigured: { zhipu: true },
+      editor: { mode: 'edit', initial: editorInitialFor(ALL_MODELS) },
+    })
+    const hint = tree.nodes.find((node) => node.type === 'p' && node.props?.id === 'dib-provider-key-hint')
+    const text = hint === undefined ? '' : textOfElement(hint).trim()
+    return text === 'API Key 保存在凭据服务里，不会写进配置文件，也不会回传浏览器'
+      && zhDict['keyNote'] === 'API Key 保存在凭据服务里，不会写进配置文件，也不会回传浏览器'
+      && String(enDict['keyNote']).endsWith('.')
+  })(),
+  zhDict['keyNote'],
+)
+check(
+  'zh 词典里所有说明文案都不以「。」结尾（遍历整份词典，不逐个硬编码）',
+  Object.entries(zhDict).every(([, value]) => typeof value !== 'string' || !value.endsWith('。')),
+  JSON.stringify(Object.entries(zhDict).filter(([, value]) => typeof value === 'string' && value.endsWith('。')).map(([key, value]) => `${key}=${value}`)).slice(0, 240),
 )
 
 /* 模型列表（浮层里）：只作展示，选择已经搬到主页的模型区块 */
@@ -1123,8 +1176,6 @@ const hintTextOf = (tree, id) => {
   const node = tree.nodes.find((entry) => entry.type === 'p' && entry.props?.id === id)
   return node === undefined ? '' : textOfElement(node).trim()
 }
-const zhDict = dictionaries[0].dicts.zh
-const enDict = dictionaries[0].dicts.en
 check(
   '四个下拉的空选项按槽位命名：主模型 / 备用模型 / 主模型 / 备用模型',
   optionTextAt(selectById(routesTree, ROUTE_SELECTS['generate.primary']), 0) === '主模型'
@@ -1134,11 +1185,11 @@ check(
   JSON.stringify(Object.entries(ROUTE_SELECTS).map(([slot, id]) => `${slot}=${optionTextAt(selectById(routesTree, id), 0)}`)),
 )
 check(
-  '两条说明小字是最终文案，且 zh / en 两套字典逐字一致',
-  hintTextOf(routesTree, `${ROUTE_SELECTS['generate.primary']}-hint`) === '工具调用时优先使用。'
-    && hintTextOf(routesTree, `${ROUTE_SELECTS['generate.fallback']}-hint`) === '主模型超时仍未返回或连接失败，自动改用。'
-    && zhDict['route.primaryHint'] === '工具调用时优先使用。'
-    && zhDict['route.fallbackHint'] === '主模型超时仍未返回或连接失败，自动改用。'
+  '两条说明小字是最终文案（zh 不带句尾句号、en 保留英文句号）',
+  hintTextOf(routesTree, `${ROUTE_SELECTS['generate.primary']}-hint`) === '工具调用时优先使用'
+    && hintTextOf(routesTree, `${ROUTE_SELECTS['generate.fallback']}-hint`) === '主模型超时仍未返回或连接失败，自动改用'
+    && zhDict['route.primaryHint'] === '工具调用时优先使用'
+    && zhDict['route.fallbackHint'] === '主模型超时仍未返回或连接失败，自动改用'
     && zhDict['route.unset'] === '主模型'
     && zhDict['route.noFallback'] === '备用模型'
     && enDict['route.primaryHint'] === 'Used first when the tools call the API.'
@@ -1415,6 +1466,13 @@ const sizeFieldLabel = (() => {
   return found
 })()
 check(
+  '尺寸字段的标签是「图片尺寸」（英文包同步为 Image size）',
+  textOfElement(sizeFieldLabel).trim() === '图片尺寸'
+    && zhDict['size'] === '图片尺寸'
+    && enDict['size'] === 'Image size',
+  JSON.stringify({ rendered: textOfElement(sizeFieldLabel).trim(), zh: zhDict['size'], en: enDict['size'] }),
+)
+check(
   '「默认尺寸」的标签在控件上方（field 内独立 label，文档顺序在下拉之前）且仍与下拉关联',
   sizeFieldOrder[0] === 'div'
     && sizeFieldOrder[1] === 'label'
@@ -1621,6 +1679,38 @@ check(
   '诊断日志只记密钥长度 / 是否配置，不含密钥明文',
   !logPayloads().includes(secret) && logPayloads().includes('keyLength'),
   logPayloads().slice(0, 240),
+)
+
+/* 不动输入框直接保存：不能把星号当密钥写进去（credentials.set 一次都不能被调用） */
+const untouchedBundle = sectionWithRecording({ size: '1024x1024' })
+const untouchedSession = createSession(untouchedBundle.component, {
+  t: undefined,
+  close: () => {},
+  __initial: {
+    phase: 'idle',
+    providers: [providerRecord],
+    activeProviderId: 'zhipu',
+    keyConfigured: { zhipu: true },
+    editor: { mode: 'edit', initial: editorInitialFor(ALL_MODELS) },
+  },
+})
+const untouchedTree = untouchedSession.tree()
+const untouchedInput = inputById(untouchedTree, 'dib-provider-key')
+untouchedSession.submit(untouchedTree.forms[0])
+await sleep(30)
+check(
+  '已配置密钥时不动输入框直接保存：不调用 credentials.set，星号不会被当成密钥写进去',
+  untouchedInput?.props?.placeholder === '*'.repeat(12)
+    && untouchedInput?.props?.value === ''
+    && untouchedBundle.credentialSets.length === 0
+    && untouchedBundle.updates.length === 1
+    && !JSON.stringify(untouchedBundle.updates[0]?.patch ?? {}).includes('*'),
+  JSON.stringify({
+    placeholder: untouchedInput?.props?.placeholder ?? null,
+    value: untouchedInput?.props?.value ?? null,
+    credentialSets: untouchedBundle.credentialSets.length,
+    updates: untouchedBundle.updates.length,
+  }).slice(0, 220),
 )
 
 /* 卡片上不再有「设为当前」入口；activeProviderId 仍是保存时的字段（三级回退要用） */
