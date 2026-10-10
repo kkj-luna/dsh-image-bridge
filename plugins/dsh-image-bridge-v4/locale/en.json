@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Image Bridge",
+    "description": "Gives text-only models image generation and editing. Add model providers in the Web settings; after a successful connection test you pick the image and edit models straight from the dropdowns."
+  }
+}

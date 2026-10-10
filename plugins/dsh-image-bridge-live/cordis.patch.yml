@@ -1,0 +1,10 @@
+# 生图桥 bundle patch：把插件挂进 profile 层栈。
+# 用户可在此行同 id 覆盖 config（Web 设置页写入的也是同一处）。
+#
+# 行 id 同时就是设置命名空间：客户端的 SETTINGS_NS 必须与它一致。
+- insert:
+    - id: image-bridge-live
+      name: '@local/image-bridge-live'
+      config:
+        baseUrl: 'http://127.0.0.1:8799/v1'
+        model: 'gpt-image-1'

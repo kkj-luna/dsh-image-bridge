@@ -1,0 +1,15 @@
+# 生成产物（生图插件写入的图片）
+generated-images/
+
+# 临时文件与测试脚手架
+.dib-scratch/
+probe.txt
+*.log
+
+# 依赖
+node_modules/
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+*.swp

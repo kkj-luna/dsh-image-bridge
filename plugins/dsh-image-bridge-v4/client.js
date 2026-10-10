@@ -1,0 +1,1939 @@
+window.__ModuleLoader__.load({
+  id: '@local/image-bridge-v4',
+  factory(require) {
+    /**
+     * 生图桥 · Client 半。
+     *
+     * 两件事：
+     *
+     * 1. 为 `image_generate` / `image_edit` 注册自定义工具卡片。内置渲染没有为第三方
+     *    生图留位置——富图片卡片在 `dsh-client-ui-tool` 里按工具名硬编码只认
+     *    `read_image`，通用卡片又用 `flattenContent` 只取 text 块、直接丢弃 image 块。
+     *    所以生图结果必须由本插件自己渲染：从工具结果的 `meta`
+     *    （Host 侧 `output.presentationMeta`）取图片引用，再用调用方给的 `loadImage`
+     *    把附件画成 `<img>`。
+     * 2. 在「设置」里注册一个配置页，形态对齐官方的「设置 → 模型」页：
+     *    提供商卡片列表（名称 / 当前所用模型 / 连接状态点 / 编辑按钮）+ 列表底部虚线
+     *    「+ 添加模型提供商」按钮；点开后在页内展开编辑面板——名称、接口地址、
+     *    API Key、**测试连接**、**获取可用模型**，拉到的模型以可选列表呈现，分别
+     *    指定生图模型与改图模型（改图留空表示沿用生图）。
+     *
+     * 配置分两处存：`providers` / `activeProviderId` 走 `remote.settings`（写进本插件
+     * 行的 volatile 配置），每个提供商的 API Key 走 `remote.credentials`（引用名由
+     * `provider.id` 派生，Host 端不回传、不写进 profile 的 YAML）。
+     *
+     * 不导入任何 Harness 客户端包：React 由浏览器模块表提供，控件与样式全部自持，
+     * 颜色只用 `--dsw-alias-*` 主题令牌。所有组件都保持全域可执行——宿主对渲染期抛错
+     * 的插槽条目会永久弃用，所以任何字段缺失都退化成一行文本。
+     */
+    /**
+     * 诊断回报。
+     *
+     * 客户端半跑在浏览器里，它在加载或渲染期出的问题 Host 侧完全看不到——只能由
+     * 客户端主动回报。这里把关键信息 POST 给本插件的 Host 路由，由它落盘到
+     * `$DSH_HOME/dsh-image-bridge-client.log`。
+     * 回报本身绝不能引发新问题：全程 try/catch，且不等待结果。
+     */
+    function report(level, message, detail) {
+      try {
+        void fetch('/dsh-image-bridge/log', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            type: 'client-request',
+            rpcId: `log-${String(Date.now())}`,
+            method: 'log',
+            payload: { level, message, detail: detail === undefined ? '' : String(detail) },
+          }),
+        }).catch(() => {})
+      } catch {
+        /* 诊断通道自身失败时保持沉默 */
+      }
+    }
+
+    /*
+     * React 解析。
+     *
+     * 模块表给出的可能是 React 模块本身，也可能是一个命名空间对象（钩子挂在
+     * `.default` 上）。按「有没有 useState」判定并取正确的那一个——否则
+     * `React.useState` 会是 undefined，组件在首屏第一行就抛错，宿主随即把该
+     * 插槽条目永久弃用（页面只剩一个空的占位 div）。
+     */
+    let reactModule
+    try {
+      reactModule = require('react')
+    } catch (error) {
+      report('fatal', 'require("react") 失败', error instanceof Error ? error.stack : String(error))
+      throw error
+    }
+
+    const React = reactModule !== null && typeof reactModule === 'object' && typeof reactModule.useState !== 'function'
+      && reactModule.default !== undefined && reactModule.default !== null && typeof reactModule.default.useState === 'function'
+      ? reactModule.default
+      : reactModule
+    const h = React !== undefined && React !== null && typeof React.createElement === 'function' ? React.createElement : undefined
+
+    /**
+     * React 的真实形状。
+     *
+     * 同时用于两条诊断路径：上报到 Host 日志，以及——万一界面仍然渲染失败——
+     * 直接显示在错误边界里，让一张截图就能说明问题。
+     */
+    const reactShape = JSON.stringify({
+      moduleType: typeof reactModule,
+      moduleKeys: reactModule !== null && typeof reactModule === 'object' ? Object.keys(reactModule).slice(0, 40) : [],
+      moduleCreateElement: typeof reactModule?.createElement,
+      moduleUseState: typeof reactModule?.useState,
+      moduleComponent: typeof reactModule?.Component,
+      defaultType: typeof reactModule?.default,
+      defaultUseState: typeof reactModule?.default?.useState,
+      picked: React === reactModule ? 'module' : 'default',
+      h: typeof h,
+    })
+
+    // 把 React 的真实形状回报一次：钩子到底可不可用、要不要走 .default。
+    report('info', 'react shape', reactShape)
+
+    /**
+     * 自己的错误边界。
+     *
+     * 宿主对渲染期抛错的插槽条目会永久弃用，界面上只留一个空的 `data-slot-error`
+     * 占位——对用户就是「白屏且不知道为什么」。这里兜一层：即使真的出错，也把原因
+     * 显示成文字，而不是继续沉默。
+     */
+    /*
+     * 类组件基类。
+     *
+     * `class X extends React.Component` 是在模块加载期求值的：万一 React 对象不完整，
+     * 抛在这里会让整个客户端模块加载失败（连导航项都不会出现）。用一个最小基类兜底，
+     * 保证模块永远能加载——最坏情况只是失去错误边界的兜底能力。
+     */
+    const ComponentBase = typeof React.Component === 'function'
+      ? React.Component
+      : class { constructor(props) { this.props = props } }
+
+    class SectionBoundary extends ComponentBase {
+      constructor(props) {
+        super(props)
+        this.state = { error: null }
+      }
+
+      static getDerivedStateFromError(error) {
+        return { error }
+      }
+
+      componentDidCatch(error, info) {
+        report('error', `插槽条目渲染失败：${String(error?.message ?? error)}`, `${String(error?.stack ?? '')} | ${String(info?.componentStack ?? '')}`)
+      }
+
+      render() {
+        if (this.state.error !== null) {
+          return h('div', { className: 'dib-cfg' }, [
+            h('p', { key: 'title', className: 'dib-status dib-status-error' }, '生图桥界面渲染失败'),
+            h('p', { key: 'detail', className: 'dib-field-hint' }, String(this.state.error?.message ?? this.state.error)),
+            h('p', { key: 'shape', className: 'dib-field-hint' }, `react=${reactShape}`),
+          ])
+        }
+        return this.props.children
+      }
+    }
+
+    /** 把任意失败值整理成一行可读文字。 */
+    function messageOf(value) {
+      if (value instanceof Error) return value.message
+      if (value !== null && typeof value === 'object' && value.error !== undefined) {
+        const error = value.error
+        if (error !== null && typeof error === 'object' && error.message !== undefined) return String(error.message)
+        try {
+          return JSON.stringify(error)
+        } catch {
+          return String(error)
+        }
+      }
+      return String(value)
+    }
+
+    /** 文案命名空间。 */
+    const NS = 'dsh-image-bridge'
+    /** settings 写入的命名空间 = 本插件在 profile patch 里的行 id。 */
+    const SETTINGS_NS = 'image-bridge-v4'
+    /** 旧配置（单提供商时代）的 API Key 引用名；同时作为新记录的兼容回退。 */
+    const API_KEY_REF = 'DSH_IMAGE_BRIDGE_API_KEY'
+    /** 每个提供商的凭据引用前缀：keyRef = 前缀 + id 大写、非字母数字转下划线。 */
+    const KEY_REF_PREFIX = 'DSH_IMAGE_BRIDGE_KEY_'
+    /** Host 半注册的测试通道。 */
+    const RPC_CHANNEL = '/dsh-image-bridge'
+
+    const MESSAGES = {
+      zh: {
+        'generate.title': '生图',
+        'edit.title': '改图',
+        'generate.running': '正在生成图片…',
+        'edit.running': '正在修改图片…',
+        'failed.title': '生图失败',
+        'editFailed.title': '改图失败',
+        'hint.noVision': '当前模型不能直接查看图片，已保存到工作区文件。',
+        'hint.noGallery': '图片已生成，但当前界面未挂载图片展示能力。',
+        'label.model': '模型',
+        'label.file': '文件',
+        'nav': '生图桥',
+        'intro': '把外部生图模型接给当前模型使用：添加模型提供商，并选一个当前使用的，模型就能调用生图与改图能力。',
+        'loading': '正在载入当前配置…',
+        'unavailable': '配置界面暂时不可用（未能连上 Host 的配置服务）。',
+        'loadFailed': '读取配置失败：',
+        'empty': '还没有配置模型提供商。',
+        'add': '添加模型提供商',
+        'edit': '编辑',
+        'remove': '删除',
+        'removeConfirm': '确认删除',
+        'cancel': '取消',
+        'setActive': '设为当前',
+        'activeTag': '当前使用',
+        'legacyTag': '现有配置',
+        'legacyProviderName': '默认提供商',
+        'test': '测试连接',
+        'testShort': '测试',
+        'testing': '测试中…',
+        'testOk': '连接正常。',
+        'testFail': '连接失败。',
+        'dot.ok': '最近一次测试连接成功',
+        'dot.fail': '最近一次测试连接失败',
+        'dot.untested': '尚未测试连接',
+        'editorAdd': '添加模型提供商',
+        'editorEdit': '编辑模型提供商',
+        'keyNote': 'API Key 保存在凭据服务里，不会写进配置文件，也不会回传浏览器。',
+        'name': '名称',
+        'name.hint': '用于在列表里区分，例如 智谱、OpenAI。',
+        'name.placeholder': '例如 智谱',
+        'baseUrl': '接口地址',
+        'baseUrl.hint': 'OpenAI 兼容地址，例如 https://api.openai.com/v1、https://open.bigmodel.cn/api/paas/v4。',
+        'baseUrl.placeholder': 'https://api.openai.com/v1',
+        'apiKey': 'API Key',
+        'apiKey.set': '已保存密钥；留空表示不修改。',
+        'apiKey.unset': '尚未保存密钥。',
+        'apiKey.placeholder': '留空表示不修改已保存的密钥',
+        'fetchModels': '获取可用模型',
+        'fetching': '获取中…',
+        'modelsFetched': '已获取模型：',
+        'modelsEmpty': '接口没有返回可用模型，请直接填写模型名。',
+        'noModelsHint': '没取到模型列表，可点「获取可用模型」，或直接填写模型名。',
+        'availableModels': '可用模型',
+        'showAll': '显示全部模型',
+        'hiddenModels': '已隐藏非生图模型：',
+        'close': '关闭',
+        'refetchModels': '重新获取可用模型',
+        'useAsImage': '生图',
+        'useAsImageTitle': '设为生图模型',
+        'useAsEdit': '改图',
+        'useAsEditTitle': '设为改图模型',
+        'pickedImage': '当前生图模型',
+        'pickedEdit': '当前改图模型',
+        'imageModel': '生图模型',
+        'imageModel.hint': '从上面获取到的模型里选；列表里没有就选「手动输入…」。',
+        'imageModel.placeholder': '例如 gpt-image-1',
+        'editModel': '改图模型',
+        'editModel.hint': '留空表示沿用生图模型。',
+        'editModel.placeholder': '留空表示沿用生图模型',
+        'manualOption': '手动输入…',
+        'noModelsYet': '还没有获取到模型列表：先点「测试连接」或「获取可用模型」，也可以直接填写模型名。',
+        'none': '未选择',
+        'inheritImage': '沿用生图模型',
+        'keyConfigured': '密钥已配置',
+        'keyMissing': '密钥未配置',
+        'keyUnavailable': '凭据服务不可用，无法保存 API Key。',
+        'needBaseUrl': '请先填写接口地址。',
+        'size': '默认尺寸',
+        'size.hint': '对所有提供商生效，例如 1024x1024、1024x1536、1536x1024。',
+        'saveSize': '保存尺寸',
+        'save': '保存',
+        'saving': '保存中…',
+        'saved': '已保存。',
+        'savedKey': '密钥已保存。',
+        'activeSwitched': '已切换当前提供商。',
+        'removed': '已删除该提供商。',
+      },
+      en: {
+        'generate.title': 'Image generation',
+        'edit.title': 'Image edit',
+        'generate.running': 'Generating image…',
+        'edit.running': 'Editing image…',
+        'failed.title': 'Image generation failed',
+        'editFailed.title': 'Image edit failed',
+        'hint.noVision': 'The current model cannot view images; the result was saved to a workspace file.',
+        'hint.noGallery': 'The image was generated, but no image gallery is mounted in this UI.',
+        'label.model': 'Model',
+        'label.file': 'File',
+        'nav': 'Image Bridge',
+        'intro': 'Bridges an external image model into the current model: add a provider and pick the active one, then the model can generate and edit images.',
+        'loading': 'Loading current settings…',
+        'unavailable': 'Configuration is unavailable (the Host configuration service is not reachable).',
+        'loadFailed': 'Reading the configuration failed: ',
+        'empty': 'No model provider configured yet.',
+        'add': 'Add model provider',
+        'edit': 'Edit',
+        'remove': 'Delete',
+        'removeConfirm': 'Confirm delete',
+        'cancel': 'Cancel',
+        'setActive': 'Use this one',
+        'activeTag': 'In use',
+        'legacyTag': 'Existing config',
+        'legacyProviderName': 'Default provider',
+        'test': 'Test connection',
+        'testShort': 'Test',
+        'testing': 'Testing…',
+        'testOk': 'Connection is fine.',
+        'testFail': 'Connection failed.',
+        'dot.ok': 'The last connection test succeeded',
+        'dot.fail': 'The last connection test failed',
+        'dot.untested': 'Not tested yet',
+        'editorAdd': 'Add model provider',
+        'editorEdit': 'Edit model provider',
+        'keyNote': 'The API key lives in the credential service: it is never written to the config file and never sent back to the browser.',
+        'name': 'Name',
+        'name.hint': 'Shown in the list, for example OpenAI or Zhipu.',
+        'name.placeholder': 'e.g. OpenAI',
+        'baseUrl': 'API base URL',
+        'baseUrl.hint': 'An OpenAI-compatible base URL, e.g. https://api.openai.com/v1.',
+        'baseUrl.placeholder': 'https://api.openai.com/v1',
+        'apiKey': 'API key',
+        'apiKey.set': 'A key is stored; leave blank to keep it.',
+        'apiKey.unset': 'No key stored yet.',
+        'apiKey.placeholder': 'Leave blank to keep the stored key',
+        'fetchModels': 'Fetch models',
+        'fetching': 'Fetching…',
+        'modelsFetched': 'Models fetched:',
+        'modelsEmpty': 'The endpoint returned no models; type a model name instead.',
+        'noModelsHint': 'No model list was returned; use "Fetch models", or type a model name.',
+        'availableModels': 'Available models',
+        'showAll': 'Show all models',
+        'hiddenModels': 'Hidden non-image models:',
+        'close': 'Close',
+        'refetchModels': 'Refetch available models',
+        'useAsImage': 'Generate',
+        'useAsImageTitle': 'Use as the image model',
+        'useAsEdit': 'Edit',
+        'useAsEditTitle': 'Use as the edit model',
+        'pickedImage': 'Current image model',
+        'pickedEdit': 'Current edit model',
+        'imageModel': 'Image model',
+        'imageModel.hint': 'Pick from the models fetched above; choose "Type a model name…" if it is not listed.',
+        'imageModel.placeholder': 'e.g. gpt-image-1',
+        'editModel': 'Edit model',
+        'editModel.hint': 'Leave blank to reuse the image model.',
+        'editModel.placeholder': 'Blank reuses the image model',
+        'manualOption': 'Type a model name…',
+        'noModelsYet': 'No model list yet: run "Test connection" or "Fetch models" first — you can also type a model name.',
+        'none': 'not selected',
+        'inheritImage': 'reuse the image model',
+        'keyConfigured': 'Key configured',
+        'keyMissing': 'No key configured',
+        'keyUnavailable': 'The credential service is unavailable, so the API key cannot be stored.',
+        'needBaseUrl': 'Fill in the API base URL first.',
+        'size': 'Default size',
+        'size.hint': 'Applies to every provider, e.g. 1024x1024, 1024x1536, 1536x1024.',
+        'saveSize': 'Save size',
+        'save': 'Save',
+        'saving': 'Saving…',
+        'saved': 'Saved.',
+        'savedKey': 'Key stored.',
+        'activeSwitched': 'Active provider switched.',
+        'removed': 'Provider deleted.',
+      },
+    }
+
+    const CSS = [
+      /* 工具卡片 */
+      '.dib-row{display:flex;flex-direction:column;gap:6px;padding:6px 0;font-size:13px;line-height:1.5}',
+      '.dib-head{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-primary);font-size:13px}',
+      '.dib-badge{color:var(--dsw-alias-label-secondary);font-weight:400}',
+      '.dib-prompt{color:var(--dsw-alias-label-secondary);white-space:pre-wrap;word-break:break-word}',
+      '.dib-pending{color:var(--dsw-alias-state-idle-primary)}',
+      '.dib-error{color:var(--dsw-alias-state-error-primary);white-space:pre-wrap;word-break:break-word}',
+      '.dib-hint{color:var(--dsw-alias-state-warn-primary)}',
+      '.dib-files{display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--dsw-alias-label-secondary)}',
+      '.dib-file{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.dib-count{color:var(--dsw-alias-label-secondary)}',
+      '.dib-gallery{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start}',
+      '.dib-image{max-width:100%;max-height:320px;border-radius:var(--dsw-radius-md);border:0.5px solid var(--dsw-alias-border-l2);display:block}',
+      /* 设置页骨架 */
+      '.dib-cfg{display:flex;flex-direction:column;max-width:640px}',
+      '.dib-cfg-intro{margin:0 0 4px;font-size:13px;line-height:1.6;color:var(--dsw-alias-label-secondary)}',
+      '.dib-field{display:flex;flex-direction:column;gap:6px;padding:12px 0}',
+      '.dib-field+.dib-field{border-top:0.5px solid var(--dsw-alias-border-l2)}',
+      '.dib-label{font-size:13px;font-weight:500;line-height:1.5;color:var(--dsw-alias-label-primary)}',
+      '.dib-input{height:34px;padding:0 12px;border:0.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-3);font:inherit;font-size:13px;line-height:1.5;color:var(--dsw-alias-label-primary)}',
+      '.dib-input:focus-visible{outline:none;border-color:var(--dsw-alias-state-business-primary)}',
+      '.dib-input:disabled{color:var(--dsw-alias-label-tertiary);cursor:default}',
+      '.dib-input-narrow{width:150px}',
+      '.dib-select{width:100%;max-width:320px;padding-right:8px;cursor:pointer}',
+      '.dib-select:disabled{cursor:default;background:var(--dsw-alias-bg-layer-2)}',
+      '.dib-field-hint{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}',
+      '.dib-btn{appearance:none;border:1px solid transparent;border-radius:var(--dsw-radius-md);padding:5px 14px;font:inherit;font-size:13px;line-height:1.5;cursor:pointer;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}',
+      '.dib-btn:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}',
+      '.dib-btn:disabled{opacity:0.4;cursor:default}',
+      '.dib-btn:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
+      '.dib-btn-secondary{background:transparent;border-color:var(--dsw-alias-border-l4);color:var(--dsw-alias-label-primary)}',
+      '.dib-btn-secondary:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2)}',
+      '.dib-status{flex:1 1 100%;margin:0;font-size:12px;line-height:1.6}',
+      '.dib-status-ok{color:var(--dsw-alias-state-success-primary)}',
+      '.dib-status-error{color:var(--dsw-alias-state-error-primary)}',
+      '.dib-status-info{color:var(--dsw-alias-label-secondary)}',
+      /* 提供商卡片列表 */
+      '.dib-list{display:flex;flex-direction:column;gap:8px;margin:12px 0 0;padding:0;list-style:none}',
+      '.dib-card{border:0.5px solid var(--dsw-alias-settings-card-stroke,var(--dsw-alias-border-l2));background:var(--dsw-alias-settings-card-fill,var(--dsw-alias-bg-layer-2));border-radius:var(--dsw-radius-xl);display:flex;flex-direction:column;gap:10px;padding:12px 14px}',
+      '.dib-card-head{display:flex;align-items:center;gap:8px;min-width:0}',
+      '.dib-card-name{font-size:14px;font-weight:500;line-height:22px;color:var(--dsw-alias-label-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.dib-card-tag{flex:none;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-xs);color:var(--dsw-alias-label-secondary);padding:1px 6px;font-size:11px;line-height:16px;white-space:nowrap}',
+      '.dib-card-tag-on{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary)}',
+      '.dib-card-actions{display:inline-flex;align-items:center;gap:4px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}',
+      '.dib-card-body{display:flex;flex-direction:column;gap:2px}',
+      '.dib-card-sub{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.dib-card-url{color:var(--dsw-alias-label-secondary)}',
+      '.dib-dot{flex:none;display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-state-idle-primary)}',
+      '.dib-dot-ok{background:var(--dsw-alias-state-success-primary)}',
+      '.dib-dot-fail{background:var(--dsw-alias-state-error-primary)}',
+      /* 卡片内的小按钮 */
+      '.dib-mini{appearance:none;flex:none;height:26px;padding:0 8px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px;cursor:pointer}',
+      '.dib-mini:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-bg-layer-2))}',
+      '.dib-mini:disabled{opacity:0.4;cursor:default}',
+      '.dib-mini:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
+      '.dib-mini-on{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary)}',
+      '.dib-mini-danger{color:var(--dsw-alias-state-error-primary)}',
+      /* 虚线添加入口 */
+      '.dib-add-btn{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;height:44px;margin-top:12px;border:1px dashed var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:22px;cursor:pointer}',
+      '.dib-add-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}',
+      '.dib-add-btn:disabled{opacity:0.4;cursor:default}',
+      '.dib-add-btn:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
+      /* 编辑浮层：遮罩 + 居中面板卡片
+       *
+       * 层级取 1200：宿主自己的浮层分别是 1000（Modal / 图片灯箱）、1100（Toast、
+       * 挂了 portal 的 Tooltip）、100/101（菜单），1200 稳压它们一头，又不会离谱到
+       * 盖住浏览器原生 UI。遮罩与卡片样式对着宿主 Modal 的令牌抄，深浅色都跟着主题走。
+       */
+      '.dib-overlay{position:fixed;inset:0;z-index:1200;display:flex;align-items:center;justify-content:center;padding:24px}',
+      '.dib-overlay-mask{position:absolute;inset:0;background:var(--dsw-alias-bg-mask-1);backdrop-filter:var(--dsw-mask-blur,none)}',
+      '.dib-editor{position:relative;z-index:1;box-sizing:border-box;display:flex;flex-direction:column;gap:0;width:min(560px,100%);max-height:100%;overflow:hidden;border:0;border-radius:var(--dsw-radius-panel,var(--dsw-radius-lg));background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-elevation-prominent)}',
+      '.dib-editor-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:20px 14px 12px 24px}',
+      '.dib-editor-title{margin:0;font-size:16px;font-weight:500;line-height:24px;color:var(--dsw-alias-label-primary)}',
+      '.dib-editor-close{flex:none;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:none;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:16px;line-height:1;cursor:pointer}',
+      '.dib-editor-close:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}',
+      '.dib-editor-close:disabled{opacity:0.4;cursor:default}',
+      '.dib-editor-close:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
+      '.dib-editor-body{display:flex;flex-direction:column;gap:12px;min-height:0;overflow-y:auto;padding:0 24px}',
+      '.dib-editor-note{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}',
+      '.dib-editor-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      '.dib-editor-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:16px 24px 20px}',
+      '.dib-editor-footer .dib-status{flex:1 1 auto;text-align:right}',
+      '.dib-picker{display:flex;flex-direction:column;gap:6px}',
+      '.dib-picker-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}',
+      '.dib-toggle{display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);cursor:pointer}',
+      '.dib-toggle input{cursor:pointer}',
+      '.dib-model-list{display:flex;flex-direction:column;gap:2px;max-height:240px;overflow-y:auto;margin:0;padding:0;list-style:none}',
+      '.dib-model-row{display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:var(--dsw-radius-md)}',
+      '.dib-model-row:hover{background:var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-bg-layer-2))}',
+      '.dib-model-id{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary)}',
+      /* 全局默认值 */
+      '.dib-defaults{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:16px;padding-top:16px;border-top:0.5px solid var(--dsw-alias-border-l2)}',
+      '.dib-defaults .dib-field-hint{flex:1 1 100%}',
+    ].join('')
+
+    /* ------------------------------------------------------------------ */
+    /* 工具卡片                                                             */
+    /* ------------------------------------------------------------------ */
+
+    /** 取结果里所有 text 块的拼接文本；用于错误信息与兜底展示。 */
+    function textOf(content) {
+      if (!Array.isArray(content)) return ''
+      const parts = []
+      for (const block of content) {
+        if (block && block.type === 'text' && typeof block.text === 'string') parts.push(block.text)
+      }
+      return parts.join('\n')
+    }
+
+    /**
+     * 收集可展示的图片引用。
+     *
+     * 优先用 Host 的 `presentationMeta.images`（与模型视觉能力无关，纯文本模型下也在），
+     * 缺失时退回工具结果内容里的 image 块。
+     */
+    function imagesOf(meta, content) {
+      const out = []
+      const declared = meta !== null && typeof meta === 'object' && Array.isArray(meta.images) ? meta.images : null
+      if (declared !== null) {
+        for (const image of declared) {
+          if (image !== null && typeof image === 'object' && typeof image.attachmentId === 'string') {
+            out.push({ attachment: image })
+          }
+        }
+      }
+      if (out.length === 0 && Array.isArray(content)) {
+        for (const block of content) {
+          if (block && block.type === 'image' && block.attachment && typeof block.attachment.attachmentId === 'string') {
+            out.push({ attachment: block.attachment })
+          }
+        }
+      }
+      return out
+    }
+
+    function filesOf(meta) {
+      const saved = meta !== null && typeof meta === 'object' && Array.isArray(meta.savedPaths) ? meta.savedPaths : []
+      return saved.filter((path) => typeof path === 'string' && path !== '')
+    }
+
+    /** 运行中的调用：参数在调用节点上，结果节点还不存在。 */
+    function argsOf(block) {
+      if (block === null || typeof block !== 'object') return {}
+      if (block.args !== null && typeof block.args === 'object') return block.args
+      if (block.call !== null && typeof block.call === 'object' && block.call.args !== null && typeof block.call.args === 'object') return block.call.args
+      return {}
+    }
+
+    /**
+     * 一张已生成图片。
+     *
+     * 不走宿主的 `tool.call.images` 画廊（那个子插槽已被内置 read_image 卡片声明），
+     * 改用调用方传入的 `loadImage(attachment)`：它返回可直接放进 `src` 的地址，
+     * 并带有可选的同步 `peek` 缓存。加载失败只影响这一张，不会波及卡片。
+     */
+    function GeneratedImage(props) {
+      const { attachment, loadImage } = props
+      const peek = () => {
+        try {
+          const cached = typeof loadImage.peek === 'function' ? loadImage.peek(attachment) : undefined
+          return cached === undefined ? null : cached
+        } catch {
+          return null
+        }
+      }
+      const [url, setUrl] = React.useState(peek)
+      const [failed, setFailed] = React.useState(false)
+
+      React.useEffect(() => {
+        let live = true
+        setFailed(false)
+        const cached = peek()
+        if (cached !== null) {
+          setUrl(cached)
+          return () => { live = false }
+        }
+        Promise.resolve()
+          .then(() => loadImage(attachment))
+          .then((next) => { if (live) setUrl(next) })
+          .catch(() => { if (live) setFailed(true) })
+        return () => { live = false }
+      }, [attachment, loadImage])
+
+      if (failed) return h('div', { className: 'dib-hint' }, '图片加载失败')
+      if (url === null || url === undefined) return h('div', { className: 'dib-pending' }, '图片加载中…')
+      return h('img', {
+        className: 'dib-image',
+        src: url,
+        alt: typeof attachment?.name === 'string' ? attachment.name : 'generated image',
+        loading: 'lazy',
+      })
+    }
+
+    /** 一次生图/改图调用的卡片。 */
+    function ImageResultRow(props) {
+      const tr = translate(props.t)
+      const block = props.block
+      const isEdit = props.toolName === 'image_edit'
+      const settled = block !== null && typeof block === 'object' && block.kind !== undefined
+      const meta = settled && block.meta !== null && typeof block.meta === 'object' ? block.meta : null
+      const args = argsOf(block)
+      const prompt = typeof meta?.prompt === 'string' ? meta.prompt : typeof args.prompt === 'string' ? args.prompt : ''
+      const model = typeof meta?.model === 'string' ? meta.model : typeof args.model === 'string' ? args.model : ''
+
+      if (!settled) {
+        return h('div', { className: 'dib-row' }, [
+          h('div', { key: 'head', className: 'dib-head' }, tr(isEdit ? 'edit.title' : 'generate.title')),
+          h('div', { key: 'pending', className: 'dib-pending' }, tr(isEdit ? 'edit.running' : 'generate.running')),
+          prompt === '' ? null : h('div', { key: 'prompt', className: 'dib-prompt' }, prompt),
+        ])
+      }
+
+      const failed = block.isError === true
+      const content = block.content
+      const rows = [h('div', { key: 'head', className: 'dib-head' }, failed
+        ? tr(isEdit ? 'editFailed.title' : 'failed.title')
+        : [
+          h('span', { key: 'title' }, tr(isEdit ? 'edit.title' : 'generate.title')),
+          model === '' ? null : h('span', { key: 'model', className: 'dib-badge' }, `${tr('label.model')} ${model}`),
+        ])]
+
+      if (failed) {
+        const message = textOf(content).trim()
+        rows.push(h('div', { key: 'error', className: 'dib-error' }, message === '' ? 'unknown error' : message))
+        return h('div', { className: 'dib-row' }, rows)
+      }
+
+      if (prompt !== '') rows.push(h('div', { key: 'prompt', className: 'dib-prompt' }, prompt))
+
+      const images = imagesOf(meta, content)
+      const files = filesOf(meta)
+
+      if (images.length > 0) {
+        if (typeof props.loadImage === 'function') {
+          rows.push(h('div', { key: 'gallery', className: 'dib-gallery' }, images.map((image, index) => (
+            h(GeneratedImage, { key: String(index), attachment: image.attachment, loadImage: props.loadImage })
+          ))))
+        } else {
+          rows.push(h('div', { key: 'nogallery', className: 'dib-hint' }, tr('hint.noGallery')))
+        }
+      }
+
+      if (meta !== null && meta.imageCapable === false) {
+        rows.push(h('div', { key: 'novision', className: 'dib-hint' }, tr('hint.noVision')))
+      }
+
+      if (files.length > 0) {
+        rows.push(h('div', { key: 'files', className: 'dib-files' }, files.map((path, index) => (
+          h('div', { key: String(index), className: 'dib-file', title: path }, `${tr('label.file')} ${path}`)
+        ))))
+      } else if (images.length === 0) {
+        const message = textOf(content).trim()
+        rows.push(h('div', { key: 'empty', className: 'dib-prompt' }, message === '' ? tr('hint.noGallery') : message))
+      }
+
+      return h('div', { className: 'dib-row' }, rows)
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* 基础设施                                                             */
+    /* ------------------------------------------------------------------ */
+
+    /** 取不到 locale 面时回退到中文文案，绝不让 `t` 缺失变成渲染崩溃。 */
+    function translate(t) {
+      return (key) => {
+        if (typeof t === 'function') {
+          const value = t(key)
+          if (typeof value === 'string' && value !== '' && value !== key) return value
+        }
+        return MESSAGES.zh[key] ?? key
+      }
+    }
+
+    /**
+     * 找一个远程命名空间。
+     *
+     * 关键点：`ctx.get('remote')` 返回的对象受 Cordis 的属性访问守卫保护——
+     * 对**未在 `inject` 里声明的服务**做属性访问会抛
+     * `cannot get property "remote.settings" without inject`。
+     * 所以这里一律走"查找"而不是"取属性"：
+     *   ① 服务本身就以 `remote.<ns>` 为键注册，`ctx.get()` 不触发守卫；
+     *   ② 退一步调用网关自己的 `get()` 方法（方法调用同样不是属性访问）；
+     *   ③ 最后才试属性访问，并接受它可能被守卫拒绝。
+     * 三条路都失败时返回 undefined，由调用方降级成一行提示。
+     */
+    function remoteNamespace(ctx, name) {
+      const tried = []
+      try {
+        const direct = ctx.get(`remote.${name}`)
+        if (direct !== undefined && direct !== null) {
+          report('info', '远程命名空间解析', `${name} → ctx.get("remote.${name}")`)
+          return direct
+        }
+        tried.push('get:undefined')
+      } catch (error) {
+        tried.push(`get:throw(${String(error?.message ?? error)})`)
+      }
+      try {
+        const gateway = ctx.get('remote')
+        if (gateway !== undefined && gateway !== null && typeof gateway.get === 'function') {
+          const nested = gateway.get(name)
+          if (nested !== undefined && nested !== null) {
+            report('info', '远程命名空间解析', `${name} → ctx.get("remote").get("${name}")`)
+            return nested
+          }
+          tried.push('gateway.get:undefined')
+        } else {
+          tried.push('gateway:no-get')
+        }
+      } catch (error) {
+        tried.push(`gateway.get:throw(${String(error?.message ?? error)})`)
+      }
+      try {
+        const property = ctx.remote
+        if (property !== undefined && property !== null && property[name] !== undefined) {
+          report('info', '远程命名空间解析', `${name} → ctx.remote.${name}`)
+          return property[name]
+        }
+        tried.push('property:undefined')
+      } catch (error) {
+        tried.push(`property:throw(${String(error?.message ?? error)})`)
+      }
+      report('warn', '远程命名空间解析失败', `${name} tried=${tried.join(' | ')}`)
+      return undefined
+    }
+
+    let rpcSeq = 0
+
+    /** 调 Host 的测试通道，拆掉 {ok,value} 信封。 */
+    async function callHost(endpoint, payload) {
+      const response = await fetch(`${RPC_CHANNEL}/${endpoint}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'client-request', rpcId: `image-bridge-${(rpcSeq += 1)}`, method: endpoint, payload }),
+      })
+      if (!response.ok) throw new Error(`测试通道返回 HTTP ${response.status}`)
+      const envelope = await response.json()
+      if (envelope === null || typeof envelope !== 'object' || envelope.type !== 'server-response') {
+        throw new Error('测试通道响应格式不正确')
+      }
+      const result = envelope.result
+      if (result === null || typeof result !== 'object' || result.ok !== true) {
+        throw new Error(result !== null && typeof result === 'object' && result.error !== undefined ? String(result.error.message) : '测试通道调用失败')
+      }
+      return result.value
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* 提供商记录                                                           */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * 生成 provider.id：小写、非 [a-z0-9] 折叠成 '-'。
+     *
+     * 中文名会折叠成空串，调用方再用接口地址的主机名兜底。
+     */
+    function slugify(value) {
+      return String(value === null || value === undefined ? '' : value)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/gu, '-')
+        .replace(/^-+|-+$/gu, '')
+        .slice(0, 40)
+    }
+
+    /** 接口地址里的主机名，作为 id 的兜底来源。 */
+    function hostSlugOf(baseUrl) {
+      const match = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]+)/iu.exec(String(baseUrl === null || baseUrl === undefined ? '' : baseUrl))
+      if (match === null) return ''
+      return slugify(match[1].replace(/^[^@]*@/u, '').replace(/:[0-9]+$/u, ''))
+    }
+
+    /** provider.id → 凭据引用名：前缀 + id 大写、非字母数字转下划线（与 Host 半同规则）。 */
+    function keyRefOf(id) {
+      return `${KEY_REF_PREFIX}${String(id === null || id === undefined ? '' : id).toUpperCase().replace(/[^A-Z0-9]/gu, '_')}`
+    }
+
+    /** 凭据引用的语法：与 Host 半的守卫一致，形状不对的引用一律不能发给 Host。 */
+    const KEY_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u
+
+    /**
+     * 校验一个凭据引用名；不合法就按"没有引用"处理并回报一条 warn。
+     *
+     * 非法值（例如手改 profile 塞进来的）发给 Host 只会被它忽略，界面却会一直显示
+     * "密钥未配置"、保存也不会自愈——所以这里就地把它归零，让两侧行为一致。
+     * 空值不算异常，静默返回空串；合法值原样返回。
+     */
+    function safeKeyRef(value) {
+      if (typeof value !== 'string' || value === '') return ''
+      if (KEY_REF_PATTERN.test(value)) return value
+      report('warn', '凭据引用名不合法，按未配置处理', JSON.stringify({
+        length: value.length,
+        // 只记形状，不把整条值抄进日志（引用名不该承载密钥，但手改的配置里什么都可能有）。
+        sample: value.slice(0, 6).replace(/[^A-Za-z0-9_]/gu, '?'),
+      }))
+      return ''
+    }
+
+    /** 列表内唯一的 id：重复时追加 -2、-3…（凭据引用由 id 派生，撞了就会串密钥）。 */
+    function uniqueId(seed, taken) {
+      const base = seed === '' ? 'provider' : seed
+      if (!taken.includes(base)) return base
+      let index = 2
+      while (taken.includes(`${base}-${index}`)) index += 1
+      return `${base}-${index}`
+    }
+
+    /** 把配置里的任意形状归一成卡片记录；id 缺失时由 label / baseUrl 派生。 */
+    function normalizeProvider(raw, taken) {
+      const value = raw !== null && typeof raw === 'object' ? raw : {}
+      const label = typeof value.label === 'string' ? value.label.trim() : ''
+      const baseUrl = typeof value.baseUrl === 'string' ? value.baseUrl.trim() : ''
+      const declaredId = typeof value.id === 'string' ? slugify(value.id) : ''
+      const seed = declaredId !== '' ? declaredId : slugify(label) !== '' ? slugify(label) : hostSlugOf(baseUrl)
+      const id = uniqueId(seed, taken)
+      taken.push(id)
+      const declaredRef = safeKeyRef(value.keyRef)
+      const keyRef = declaredRef !== '' ? declaredRef : keyRefOf(id)
+      const models = Array.isArray(value.models) ? value.models.filter((model) => typeof model === 'string' && model !== '') : []
+      const imageModel = typeof value.imageModel === 'string' ? value.imageModel : ''
+      const editModel = typeof value.editModel === 'string' ? value.editModel : ''
+      return { id, label: label === '' ? id : label, baseUrl, keyRef, models, imageModel, editModel }
+    }
+
+    /**
+     * 旧配置合成一张卡片。
+     *
+     * 单提供商时代只有 baseUrl/model/editModel，它们仍然是 Host 的回退来源。
+     * 升级后如果这里不显示出来，用户会以为自己的配置丢了——所以没有 providers 时
+     * 把它合成一张「现有配置」卡片，且沿用旧的凭据引用名，密钥不会失联。
+     */
+    function legacyProviderOf(value) {
+      const baseUrl = typeof value.baseUrl === 'string' ? value.baseUrl : ''
+      const model = typeof value.model === 'string' ? value.model : ''
+      const editModel = typeof value.editModel === 'string' ? value.editModel : ''
+      if (baseUrl === '' && model === '' && editModel === '') return null
+      return { id: 'default', label: '', baseUrl, keyRef: API_KEY_REF, models: [], imageModel: model, editModel, legacy: true }
+    }
+
+    /** 写回配置的精简记录：只保留契约里的 7 个字段（legacy 之类的界面状态不落盘）。 */
+    function plainProvider(provider) {
+      return {
+        id: provider.id,
+        label: provider.label,
+        baseUrl: provider.baseUrl,
+        keyRef: provider.keyRef,
+        models: Array.isArray(provider.models) ? provider.models : [],
+        imageModel: provider.imageModel,
+        editModel: provider.editModel,
+      }
+    }
+
+    /** 远程调用统一返回 {ok,value} / {ok:false,error} 信封；出错给文案，成功给 null。 */
+    function failureOf(value) {
+      if (value === null || typeof value !== 'object') return null
+      if (value.ok === true) return null
+      if (value.ok === false) return messageOf(value)
+      return null
+    }
+
+    /** settings.describe() 的两种形状：{writable,namespaces:[…]} 与行数组。 */
+    function namespacesOf(described) {
+      const value = described !== null && typeof described === 'object' && 'value' in described ? described.value : described
+      if (Array.isArray(value)) return value
+      if (value !== null && typeof value === 'object' && Array.isArray(value.namespaces)) return value.namespaces
+      return []
+    }
+
+    /** 同上，取可写标记；读不到时按可写处理，让真正的错误从写入路径暴露。 */
+    function writableOf(described) {
+      const value = described !== null && typeof described === 'object' && 'value' in described ? described.value : described
+      return !(value !== null && typeof value === 'object' && value.writable === false)
+    }
+
+    /** models RPC 的返回：callHost 已拆过一层信封，这里再容忍一次没拆的。 */
+    function modelsOfResult(result) {
+      let value = result
+      if (value !== null && typeof value === 'object' && value.ok === true && 'value' in value) value = value.value
+      const list = Array.isArray(value)
+        ? value
+        : value !== null && typeof value === 'object' && Array.isArray(value.models) ? value.models : []
+      return list.filter((model) => typeof model === 'string' && model !== '')
+    }
+
+    /**
+     * test 返回体里的模型列表；没有这个字段时返回 null。
+     *
+     * 与「返回了空数组」区分开：前者说明服务商这一侧根本没给列表（别把用户已经拉到
+     * 的列表清空），后者说明确实一个模型都没有。
+     */
+    function modelsFieldOf(value) {
+      if (value === null || typeof value !== 'object' || !Array.isArray(value.models)) return null
+      return value.models.filter((model) => typeof model === 'string' && model !== '')
+    }
+
+    /**
+     * test RPC 的返回：{ok,message,models} 或 {ok:true,value:{ok,message,models}} 都要能读。
+     *
+     * `models` 是 host-core 新加的字段：测试连接成功时顺带把服务商的模型列表带回来，
+     * 用户就不必再点一次「获取可用模型」。取不到时为 null（见 modelsFieldOf）。
+     */
+    function testOutcomeOf(result) {
+      let value = result
+      if (value !== null && typeof value === 'object' && value.ok === true && 'value' in value) value = value.value
+      if (value !== null && typeof value === 'object') {
+        return {
+          ok: value.ok !== false,
+          message: typeof value.message === 'string' ? value.message : '',
+          models: modelsFieldOf(value),
+        }
+      }
+      return { ok: true, message: typeof value === 'string' ? value : '', models: null }
+    }
+
+    /*
+     * 生图模型的判定。
+     *
+     * 用户的 Key 实测有 176 个模型，绝大多数是语言/语音/向量模型；把整张表铺出来
+     * 等于没有列表。这里只挑生图模型，规则刻意做得**窄**：
+     *
+     *   ① 按 `[^a-z0-9]+` 切成 token，再逐 token 比对——绝不做整名子串匹配。
+     *      `qwen-mt-uni`、`qwen3.7-text-embedding-flash`、`glm-5.3` 这类名字里同样
+     *      有 qwen/text/uni/glm 这些词，宽松的正则会成片误判。
+     *   ② token 里含 `image` 即判为生图：image / imagen / imagegen / text2image /
+     *      z-image / qwen-image-3.0 / wan2.7-image 全覆盖。
+     *   ③ 再认一组生图专有词（精确命中，或带版本号前缀）：t2i、i2i、flux、kolors、
+     *      dall(e)、seedream、cogview、diffusion、sdxl、wanx、midjourney、imagen。
+     *
+     * 语言模型名里不会出现 `image` 这个词，因此 ①+② 已足够；③ 只是把其它家系的
+     * 生图模型（名字里不含 image）也放进来。
+     */
+    const IMAGE_MODEL_TOKENS = ['t2i', 'i2i', 'flux', 'kolors', 'dall', 'dalle', 'seedream', 'cogview', 'diffusion', 'sdxl', 'sd3', 'wanx', 'midjourney', 'imagen']
+    const IMAGE_MODEL_STEMS = ['flux', 'kolors', 'dall', 'seedream', 'cogview', 'sdxl', 'wanx', 'midjourney', 'imagen']
+
+    /** 这个模型名看起来是不是生图模型（见上面的规则说明）。 */
+    function isImageModel(modelId) {
+      const text = String(modelId === null || modelId === undefined ? '' : modelId).toLowerCase()
+      if (text === '') return false
+      for (const token of text.split(/[^a-z0-9]+/gu)) {
+        if (token === '') continue
+        if (token.includes('image')) return true
+        if (IMAGE_MODEL_TOKENS.includes(token)) return true
+        if (IMAGE_MODEL_STEMS.some((stem) => token.startsWith(stem))) return true
+      }
+      return false
+    }
+
+    /** 去重后的模型列表：同一行重复出现会让 React 的 key 冲突。 */
+    function uniqueModels(list) {
+      const seen = []
+      for (const model of list) {
+        if (typeof model === 'string' && model !== '' && !seen.includes(model)) seen.push(model)
+      }
+      return seen
+    }
+
+    /**
+     * 「手动输入…」在下拉里的取值。
+     *
+     * 用一个不可能与模型名混淆的保留值：它只活在下拉里，永远不会被写进
+     * imageModel / editModel——选中它只是把文本框露出来。
+     */
+    const MANUAL_MODEL_VALUE = '__dib_manual__'
+
+    /** 状态文案的样式类。 */
+    function statusClassOf(kind) {
+      return kind === 'ok' ? 'dib-status dib-status-ok' : kind === 'error' ? 'dib-status dib-status-error' : 'dib-status dib-status-info'
+    }
+
+    /**
+     * 一个受控字段行。
+     *
+     * `options`：`type`（默认 text）、`placeholder`、`autoFocus`。所有可见文案都由
+     * 调用方从词典里取，这里只负责结构。
+     */
+    function field(id, label, hint, value, disabled, onChange, options) {
+      const opts = options !== null && options !== undefined ? options : {}
+      return h('div', { className: 'dib-field', key: id }, [
+        h('label', { key: 'label', className: 'dib-label', htmlFor: id }, label),
+        h('input', {
+          key: 'input',
+          id,
+          className: 'dib-input',
+          type: typeof opts.type === 'string' ? opts.type : 'text',
+          placeholder: typeof opts.placeholder === 'string' ? opts.placeholder : '',
+          value,
+          disabled,
+          spellCheck: false,
+          autoComplete: 'off',
+          autoFocus: opts.autoFocus === true,
+          'aria-describedby': `${id}-hint`,
+          onChange: (event) => onChange(event.target.value),
+        }),
+        h('p', { key: 'hint', id: `${id}-hint`, className: 'dib-field-hint' }, hint),
+      ])
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* 提供商编辑面板                                                       */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * 提供商编辑浮层。
+     *
+     * 固定定位的遮罩 + 居中面板卡片：标题在左、关闭在右，底部取消/保存；点遮罩或按
+     * Esc 也能关。不依赖宿主的基础组件包，所以没有 portal 可用来把它挂到 body 上——
+     * 这里就用 `position:fixed` 就地铺满视口，层级取 1200 压过宿主的浮层（Modal /
+     * 灯箱 1000、Toast 与挂了 portal 的 Tooltip 1100、菜单 100）。遮罩与卡片用的是
+     * 宿主 Modal 那一套主题令牌，深浅色都跟着主题走。
+     *
+     * 它是**额外的**一层：卡片列表与「＋ 添加模型提供商」始终在原地，开浮层不会把
+     * 设置页那棵树卸载重建，也就不存在 hook 顺序问题；浮层自己则在打开时挂载、
+     * 关闭时卸载。
+     *
+     * `initial` 是打开时带进来的记录（也是进程外验证的注入点）：运行时的提供商记录里
+     * 永远不含 API Key，`keyDraft` 只可能来自用户在输入框里的输入。
+     */
+    function ProviderEditor(props) {
+      const tr = translate(props.t)
+      const initial = props.initial !== null && props.initial !== undefined && typeof props.initial === 'object' ? props.initial : {}
+      const locked = props.disabled === true || props.busy === true
+      const [state, setState] = React.useState({
+        label: typeof initial.label === 'string' ? initial.label : '',
+        baseUrl: typeof initial.baseUrl === 'string' ? initial.baseUrl : '',
+        imageModel: typeof initial.imageModel === 'string' ? initial.imageModel : '',
+        editModel: typeof initial.editModel === 'string' ? initial.editModel : '',
+        models: uniqueModels(Array.isArray(initial.models) ? initial.models : []),
+        keyDraft: typeof initial.keyDraft === 'string' ? initial.keyDraft : '',
+        testState: typeof initial.testState === 'string' ? initial.testState : 'untested',
+        // 「显示全部模型」：默认只列生图模型，打开后连语言模型一起列出来。
+        showAll: initial.showAll === true,
+        // 「手动输入…」：选中它才露出文本框（进程外验证也会用这两个字段摆状态）。
+        imageManual: initial.imageManual === true,
+        editManual: initial.editManual === true,
+        phase: 'idle',
+        status: '',
+        statusKind: 'info',
+      })
+      const patch = React.useCallback((next) => setState((current) => ({ ...current, ...next })), [])
+      const busy = state.phase !== 'idle'
+
+      /**
+       * 关掉浮层：关闭按钮 / 取消 / 遮罩 / Esc 四条路都走这里。
+       *
+       * 刻意**不**看 `disabled`（配置行不可写）也不看 `busy`：关闭不是写操作，而一个
+       * 关不掉的浮层会把整个设置页挡住——宁可让用户关掉，也不要让他被困在里面。
+       */
+      const close = React.useCallback(() => {
+        props.onCancel()
+      }, [props])
+
+      /*
+       * Esc 关闭。
+       *
+       * 用 document 上的监听而不是给浮层加 tabIndex：焦点可能还在输入框里，键盘事件
+       * 不保证冒泡到浮层节点。effect 里任何一步失败都只是失去 Esc（还有关闭/取消/
+       * 遮罩三条路），绝不能让监听把自己拖崩。
+       */
+      React.useEffect(() => {
+        try {
+          if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return undefined
+          const onKeyDown = (event) => {
+            if (event !== null && typeof event === 'object' && event.key === 'Escape') close()
+          }
+          document.addEventListener('keydown', onKeyDown)
+          return () => {
+            try {
+              document.removeEventListener('keydown', onKeyDown)
+            } catch {
+              /* 卸载期失败无所谓 */
+            }
+          }
+        } catch {
+          return undefined
+        }
+      }, [close])
+
+      /*
+       * 这条记录自己的凭据引用名（形状校验见 safeKeyRef）。
+       *
+       * 必须随 test / models 一起发给 Host：用户点开的可能是**不是当前生效**的那张卡片，
+       * 此时输入框是空的，只能靠 keyRef 让 Host 找到这张卡片自己的密钥——Host 的解析
+       * 顺序是 payload.apiKey → payload.keyRef → 当前生效服务商。
+       * 空 keyRef 表示**这张卡片还没有已保存的密钥**：Host 连请求都不发，直接返回
+       * "没有可用的 API Key，请先填写密钥并保存"，**绝不会**沿用其他服务商的凭据。
+       */
+      const declaredKeyRef = typeof initial.keyRef === 'string' ? initial.keyRef : ''
+
+      /**
+       * 测试连接：结果同时写进面板状态与 Host 日志（绝不记录密钥本身）。
+       *
+       * 成功时 Host 会把该服务商的模型列表一起带回来（`value.models`），这里直接采用
+       * ——用户点一次「测试连接」就能看到可选模型，不用再点一次「获取可用模型」。
+       * 返回体里没有 models 字段（服务商不提供列表）时保留已有列表，不要把它清空。
+       */
+      const test = React.useCallback(async () => {
+        patch({ phase: 'testing', status: '', statusKind: 'info' })
+        try {
+          const keyRef = safeKeyRef(declaredKeyRef)
+          const result = await callHost('test', { baseUrl: state.baseUrl, apiKey: state.keyDraft, keyRef })
+          const outcome = testOutcomeOf(result)
+          const returned = outcome.models
+          const adopted = returned !== null && returned.length > 0 ? uniqueModels(returned) : null
+          report(outcome.ok ? 'info' : 'warn', '测试连接结果', JSON.stringify({
+            baseUrl: state.baseUrl,
+            keyRef,
+            ok: outcome.ok,
+            message: outcome.message,
+            // 顺手记下返回的模型规模与其中判为生图的数量，便于对着真实 /models 核对筛选规则。
+            returnedModels: returned === null ? null : returned.length,
+            imageModels: returned === null ? null : uniqueModels(returned).filter(isImageModel).length,
+            adoptedModels: adopted === null ? null : adopted.length,
+            keyProvided: state.keyDraft.length > 0,
+            keyLength: state.keyDraft.length,
+          }))
+          const message = outcome.message === '' ? (outcome.ok ? tr('testOk') : tr('testFail')) : outcome.message
+          /*
+           * 成功但没带模型列表（服务商不提供 /models、返回体不是合法 JSON、或 404 软提示）
+           * 时，如果手上一个模型都没有，就明确告诉用户还有哪两条路可走。
+           */
+          const hint = adopted !== null
+            ? `${tr('modelsFetched')} ${adopted.length}`
+            : outcome.ok && state.models.length === 0 ? tr('noModelsHint') : ''
+          patch({
+            phase: 'idle',
+            testState: outcome.ok ? 'ok' : 'fail',
+            ...(adopted === null ? {} : { models: adopted }),
+            status: hint === '' ? message : `${message} ${hint}`,
+            statusKind: outcome.ok ? 'ok' : 'error',
+          })
+        } catch (error) {
+          report('error', '测试连接失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
+          patch({ phase: 'idle', testState: 'fail', status: messageOf(error), statusKind: 'error' })
+        }
+      }, [state.baseUrl, state.keyDraft, declaredKeyRef, patch, tr])
+
+      /** 取可用模型：GET {baseUrl}/models 由 Host 代理，客户端只拿模型名。 */
+      const fetchModels = React.useCallback(async () => {
+        patch({ phase: 'fetching', status: '', statusKind: 'info' })
+        try {
+          const keyRef = safeKeyRef(declaredKeyRef)
+          const result = await callHost('models', { baseUrl: state.baseUrl, apiKey: state.keyDraft, keyRef })
+          const models = uniqueModels(modelsOfResult(result))
+          report(models.length > 0 ? 'info' : 'warn', '获取可用模型结果', JSON.stringify({
+            baseUrl: state.baseUrl,
+            keyRef,
+            count: models.length,
+            imageModels: models.filter(isImageModel).length,
+            models: models.slice(0, 12),
+            keyProvided: state.keyDraft.length > 0,
+            keyLength: state.keyDraft.length,
+          }))
+          patch({
+            phase: 'idle',
+            models,
+            status: models.length === 0 ? tr('modelsEmpty') : `${tr('modelsFetched')} ${models.length}`,
+            statusKind: models.length === 0 ? 'error' : 'ok',
+          })
+        } catch (error) {
+          report('error', '获取可用模型失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
+          patch({ phase: 'idle', status: messageOf(error), statusKind: 'error' })
+        }
+      }, [state.baseUrl, state.keyDraft, declaredKeyRef, patch, tr])
+
+      /** 交给上层落盘：settings 写记录，credentials 写密钥（两者互相独立）。 */
+      const submit = (event) => {
+        if (event !== null && event !== undefined && typeof event.preventDefault === 'function') event.preventDefault()
+        if (locked) return
+        const baseUrl = state.baseUrl.trim()
+        if (baseUrl === '') {
+          patch({ status: tr('needBaseUrl'), statusKind: 'error' })
+          return
+        }
+        props.onSubmit({
+          id: typeof initial.id === 'string' ? initial.id : '',
+          label: state.label.trim(),
+          baseUrl,
+          keyRef: typeof initial.keyRef === 'string' ? initial.keyRef : '',
+          models: state.models,
+          imageModel: state.imageModel.trim(),
+          editModel: state.editModel.trim(),
+        }, state.keyDraft)
+      }
+
+      const rows = []
+      const titleId = `dib-editor-title-${initial.id === undefined || initial.id === '' ? 'new' : initial.id}`
+      rows.push(h('div', { key: 'head', className: 'dib-editor-head' }, [
+        h('h3', { key: 'title', id: titleId, className: 'dib-editor-title' }, initial.id === undefined || initial.id === '' ? tr('editorAdd') : tr('editorEdit')),
+        h('button', {
+          key: 'close',
+          type: 'button',
+          className: 'dib-editor-close',
+          title: tr('close'),
+          'aria-label': tr('close'),
+          onClick: close,
+        }, '×'),
+      ]))
+      rows.push(field('dib-provider-label', tr('name'), tr('name.hint'), state.label, locked, (value) => patch({ label: value }), { placeholder: tr('name.placeholder'), autoFocus: true }))
+      rows.push(field('dib-provider-base-url', tr('baseUrl'), tr('baseUrl.hint'), state.baseUrl, locked, (value) => patch({ baseUrl: value }), { placeholder: tr('baseUrl.placeholder') }))
+      rows.push(field(
+        'dib-provider-key',
+        tr('apiKey'),
+        props.keyConfigured === true ? tr('apiKey.set') : tr('apiKey.unset'),
+        state.keyDraft,
+        locked,
+        (value) => patch({ keyDraft: value }),
+        { type: 'password', placeholder: tr('apiKey.placeholder') },
+      ))
+      rows.push(h('div', { key: 'actions', className: 'dib-editor-actions' }, [
+        h('button', {
+          key: 'test',
+          type: 'button',
+          className: 'dib-btn dib-btn-secondary',
+          'data-dib-action': 'test',
+          disabled: locked,
+          onClick: () => { void test() },
+        }, state.phase === 'testing' ? tr('testing') : tr('test')),
+        h('button', {
+          key: 'models',
+          type: 'button',
+          className: 'dib-btn dib-btn-secondary',
+          'data-dib-action': 'fetch-models',
+          disabled: locked,
+          onClick: () => { void fetchModels() },
+        }, state.phase === 'fetching' ? tr('fetching') : state.models.length > 0 ? tr('refetchModels') : tr('fetchModels')),
+      ]))
+      rows.push(h('p', { key: 'note', className: 'dib-editor-note' }, tr('keyNote')))
+
+      /*
+       * 只显示生图模型。
+       *
+       * 用户的 Key 实测有 176 个模型，绝大多数是语言模型，全铺出来等于没有列表
+       * （判定规则见 isImageModel）。当前已选中的两个模型即使不像生图也保留在列表里
+       * ——否则用户手填的位置会「消失」，看不到自己选的是哪一个。
+       */
+      const imageModels = state.models.filter((model) => isImageModel(model) || model === state.imageModel || model === state.editModel)
+      const visibleModels = state.showAll ? state.models : imageModels
+      const hiddenCount = state.models.length - imageModels.length
+
+      if (state.models.length > 0) {
+        const countText = visibleModels.length === state.models.length
+          ? `${tr('availableModels')}（${state.models.length}）`
+          : `${tr('availableModels')}（${visibleModels.length} / ${state.models.length}）`
+        rows.push(h('div', { key: 'picker', className: 'dib-picker' }, [
+          h('div', { key: 'head', className: 'dib-picker-head' }, [
+            h('p', { key: 'title', className: 'dib-label' }, countText),
+            h('label', { key: 'toggle', className: 'dib-toggle' }, [
+              h('input', {
+                key: 'box',
+                type: 'checkbox',
+                checked: state.showAll,
+                disabled: locked,
+                onChange: (event) => patch({ showAll: event !== null && event.target !== null && event.target.checked === true }),
+              }),
+              h('span', { key: 'text' }, tr('showAll')),
+            ]),
+          ]),
+          hiddenCount > 0 ? h('p', { key: 'hidden', className: 'dib-field-hint' }, `${tr('hiddenModels')} ${hiddenCount}`) : null,
+          h('ul', { key: 'list', className: 'dib-model-list' }, visibleModels.map((model) => {
+            const asImage = state.imageModel === model
+            const asEdit = state.editModel === model
+            return h('li', { key: model, className: 'dib-model-row' }, [
+              h('span', { key: 'id', className: 'dib-model-id', title: model }, model),
+              asImage ? h('span', { key: 'picked-image', className: 'dib-card-tag dib-card-tag-on' }, tr('pickedImage')) : null,
+              asEdit ? h('span', { key: 'picked-edit', className: 'dib-card-tag dib-card-tag-on' }, tr('pickedEdit')) : null,
+              h('button', {
+                key: 'image',
+                type: 'button',
+                className: asImage ? 'dib-mini dib-mini-on' : 'dib-mini',
+                'aria-pressed': asImage ? 'true' : 'false',
+                title: tr('useAsImageTitle'),
+                disabled: locked,
+                // 同时清掉「手动输入」：下面那份列表与上面的下拉读写的都是 state.imageModel，
+                // 点这里之后下拉必须跟着跳到这个模型，两处状态不允许分裂。
+                onClick: () => patch({ imageModel: asImage ? '' : model, imageManual: false }),
+              }, tr('useAsImage')),
+              h('button', {
+                key: 'edit',
+                type: 'button',
+                className: asEdit ? 'dib-mini dib-mini-on' : 'dib-mini',
+                'aria-pressed': asEdit ? 'true' : 'false',
+                title: tr('useAsEditTitle'),
+                disabled: locked,
+                onClick: () => patch({ editModel: asEdit ? '' : model, editManual: false }),
+              }, tr('useAsEdit')),
+            ])
+          })),
+        ]))
+      }
+
+      /*
+       * 模型字段：下拉选择 + 手动输入。
+       *
+       * 选项就是上面那份列表（默认只列生图模型，勾了「显示全部模型」就是全部），末尾多一个
+       * 「手动输入…」——选中它才露出文本框。当前值一定会出现在选项里，否则受控下拉会显示成
+       * 空白；没获取过模型时下拉禁用，同时强制走手动输入，保证没网没密钥也能把卡片配完。
+       */
+      const hasModels = state.models.length > 0
+      const imageOptions = uniqueModels([...visibleModels, state.imageModel])
+      const editOptions = uniqueModels([...visibleModels, state.editModel])
+      const imageManual = state.imageManual === true || !hasModels
+      const editManual = state.editManual === true || !hasModels
+
+      /** 一个「下拉 + 可选手动输入」的字段。 */
+      const modelField = (selectId, inputId, label, hint, valueKey, manualFlagKey, manual, options, emptyLabel) => {
+        const nodes = []
+        nodes.push(h('div', { key: 'field', className: 'dib-field' }, [
+          h('label', { key: 'label', className: 'dib-label', htmlFor: selectId }, label),
+          h('select', {
+            key: 'select',
+            id: selectId,
+            className: 'dib-input dib-select',
+            value: manual ? MANUAL_MODEL_VALUE : state[valueKey],
+            disabled: locked || !hasModels,
+            onChange: (event) => {
+              const next = event !== null && event.target !== null && typeof event.target.value === 'string' ? event.target.value : ''
+              if (next === MANUAL_MODEL_VALUE) patch({ [manualFlagKey]: true })
+              else patch({ [manualFlagKey]: false, [valueKey]: next })
+            },
+          }, [
+            h('option', { key: 'empty', value: '' }, emptyLabel),
+            ...options.map((model) => h('option', { key: model, value: model }, model)),
+            h('option', { key: 'manual', value: MANUAL_MODEL_VALUE }, tr('manualOption')),
+          ]),
+          h('p', { key: 'hint', id: `${selectId}-hint`, className: 'dib-field-hint' }, hint),
+        ]))
+        if (manual) {
+          nodes.push(field(inputId, tr('manualOption'), hint, state[valueKey], locked, (value) => patch({ [valueKey]: value }), { placeholder: valueKey === 'imageModel' ? tr('imageModel.placeholder') : tr('editModel.placeholder') }))
+        }
+        return nodes
+      }
+
+      if (!hasModels) rows.push(h('p', { key: 'nomodels', className: 'dib-field-hint' }, tr('noModelsYet')))
+      for (const node of modelField('dib-provider-image-model-select', 'dib-provider-image-model', tr('imageModel'), tr('imageModel.hint'), 'imageModel', 'imageManual', imageManual, imageOptions, tr('none'))) rows.push(node)
+      for (const node of modelField('dib-provider-edit-model-select', 'dib-provider-edit-model', tr('editModel'), tr('editModel.hint'), 'editModel', 'editManual', editManual, editOptions, tr('inheritImage'))) rows.push(node)
+
+      const body = h('div', { key: 'body', className: 'dib-editor-body' }, rows)
+      const footer = h('div', { key: 'footer', className: 'dib-editor-footer' }, [
+        state.status === '' ? null : h('p', { key: 'status', className: statusClassOf(state.statusKind), role: 'status' }, state.status),
+        h('button', {
+          key: 'cancel',
+          type: 'button',
+          className: 'dib-btn dib-btn-secondary',
+          onClick: close,
+        }, tr('cancel')),
+        h('button', { key: 'save', type: 'submit', className: 'dib-btn', disabled: locked }, tr('save')),
+      ])
+
+      /*
+       * 浮层结构：遮罩（点它关闭）+ 居中卡片。
+       *
+       * 卡片是 `<form>`，所以回车就能保存；遮罩单独挂在卡片下面的兄弟节点上，
+       * 点卡片内部不会触发关闭。
+       */
+      return h('div', { className: 'dib-overlay' }, [
+        h('div', { key: 'mask', className: 'dib-overlay-mask', onClick: close }),
+        h('form', {
+          key: 'dialog',
+          className: 'dib-editor',
+          role: 'dialog',
+          'aria-modal': 'true',
+          'aria-labelledby': titleId,
+          onSubmit: submit,
+        }, [body, footer]),
+      ])
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* 设置页                                                               */
+    /* ------------------------------------------------------------------ */
+
+    /** 设置页首屏状态；`__initial` 是进程外验证（verify-client.mjs）的注入点。 */
+    function initialStateOf(injected) {
+      const base = {
+        phase: 'loading',
+        available: true,
+        writable: true,
+        providers: [],
+        activeProviderId: '',
+        size: '',
+        keyConfigured: {},
+        testState: {},
+        legacy: { baseUrl: '', model: '', editModel: '' },
+        editor: null,
+        confirmDelete: '',
+        busyId: '',
+        status: '',
+        statusKind: 'info',
+      }
+      if (injected === null || injected === undefined || typeof injected !== 'object') return base
+      const merged = { ...base, ...injected }
+      // 渲染路径绝不能因为一个字段形状不对而抛错，注入的状态同样如此。
+      if (!Array.isArray(merged.providers)) merged.providers = base.providers
+      if (merged.keyConfigured === null || typeof merged.keyConfigured !== 'object') merged.keyConfigured = base.keyConfigured
+      if (merged.testState === null || typeof merged.testState !== 'object') merged.testState = base.testState
+      if (merged.legacy === null || typeof merged.legacy !== 'object') merged.legacy = base.legacy
+      return merged
+    }
+
+    function ConfigBody(props) {
+      const tr = translate(props.t)
+      const ctx = props.__ctx
+      const [state, setState] = React.useState(() => initialStateOf(props.__initial))
+
+      const patch = React.useCallback((next) => setState((current) => ({ ...current, ...next })), [])
+
+      /*
+       * 文案函数每次渲染都是新的：把它放进 ref，effect 就能安全地用它，
+       * 又不必把它写进依赖数组（否则每次渲染都会重跑载入逻辑）。
+       */
+      const trRef = React.useRef(tr)
+      trRef.current = tr
+
+      /*
+       * 远程命名空间只在 effect 里解析：渲染路径保持纯粹，不会因为服务发现失败
+       * 而把整个插槽条目拖进「渲染抛错」的处理路径。
+       */
+      const remotes = React.useRef(null)
+
+      React.useEffect(() => {
+        let live = true
+        ;(async () => {
+          try {
+            const settings = remoteNamespace(ctx, 'settings')
+            const credentials = remoteNamespace(ctx, 'credentials')
+            remotes.current = { settings, credentials }
+            if (settings === undefined) {
+              if (live) patch({ phase: 'idle', available: false, status: trRef.current('unavailable'), statusKind: 'error' })
+              return
+            }
+            const described = await settings.describe()
+            if (!live) return
+            if (described !== null && typeof described === 'object' && described.ok === false) {
+              patch({ phase: 'idle', available: false, status: `${trRef.current('loadFailed')}${messageOf(described)}`, statusKind: 'error' })
+              return
+            }
+            const views = namespacesOf(described)
+            const view = views.find((candidate) => candidate !== null && typeof candidate === 'object' && candidate.ns === SETTINGS_NS)
+            const value = view !== undefined && view.value !== null && typeof view.value === 'object' ? view.value : {}
+            const taken = []
+            const stored = Array.isArray(value.providers) ? value.providers : []
+            const configured = stored.map((raw) => normalizeProvider(raw, taken))
+            const legacy = legacyProviderOf(value)
+            // 没有 providers 时把旧配置合成一张卡片，让既有配置在界面上看得见。
+            const providers = configured.length > 0 ? configured : legacy === null ? [] : [legacy]
+            const declaredActive = typeof value.activeProviderId === 'string' ? value.activeProviderId : ''
+            const activeProviderId = providers.some((provider) => provider.id === declaredActive)
+              ? declaredActive
+              : providers.length > 0 ? providers[0].id : ''
+
+            // 一次 describe 拿到所有引用名的配置状态（凭据值本身永远不过线）。
+            const refToId = {}
+            for (const provider of providers) refToId[provider.keyRef] = provider.id
+            const refs = Object.keys(refToId)
+            const keyConfigured = {}
+            if (credentials !== undefined && refs.length > 0) {
+              // 凭据服务一次最多描述 64 个引用；分批只为不撞上那条线（正常用不到）。
+              for (let start = 0; start < refs.length; start += 32) {
+                const batch = refs.slice(start, start + 32)
+                const credentialView = await credentials.describe(batch)
+                if (!live) return
+                if (credentialView === null || typeof credentialView !== 'object' || credentialView.ok !== true
+                  || credentialView.value === null || typeof credentialView.value !== 'object') {
+                  report('warn', '凭据描述失败', JSON.stringify({
+                    ok: credentialView === null || typeof credentialView !== 'object' ? null : credentialView.ok,
+                    error: messageOf(credentialView),
+                  }))
+                  continue
+                }
+                for (const ref of batch) {
+                  const info = credentialView.value[ref]
+                  keyConfigured[refToId[ref]] = info !== null && typeof info === 'object' && info.configured === true
+                }
+                // 记下凭据视图的真实形状，省得下次还要猜（CredentialInfo 里没有值可泄露）。
+                report('info', '凭据视图', JSON.stringify({
+                  refs: batch.length,
+                  keys: Object.keys(credentialView.value).slice(0, 8),
+                  sample: credentialView.value[batch[0]] === undefined ? null : credentialView.value[batch[0]],
+                }))
+              }
+            }
+
+            report('info', '配置已载入', JSON.stringify({
+              ns: SETTINGS_NS,
+              namespaceFound: view !== undefined,
+              writable: writableOf(described),
+              providers: providers.length,
+              activeProviderId,
+              models: providers.map((provider) => provider.models.length),
+              keyConfigured: Object.keys(keyConfigured).filter((id) => keyConfigured[id] === true).length,
+            }))
+            patch({
+              phase: 'idle',
+              writable: writableOf(described),
+              providers,
+              activeProviderId,
+              size: typeof value.size === 'string' ? value.size : '',
+              keyConfigured,
+              legacy: {
+                baseUrl: typeof value.baseUrl === 'string' ? value.baseUrl : '',
+                model: typeof value.model === 'string' ? value.model : '',
+                editModel: typeof value.editModel === 'string' ? value.editModel : '',
+              },
+            })
+          } catch (error) {
+            if (!live) return
+            patch({ phase: 'idle', available: false, status: messageOf(error), statusKind: 'error' })
+          }
+        })()
+        return () => {
+          live = false
+        }
+      }, [ctx, patch])
+
+      /** 打开编辑面板：`null` 表示新增，其余为编辑已有记录。 */
+      const openEditor = React.useCallback((provider) => {
+        if (provider === null || provider === undefined) {
+          patch({
+            editor: {
+              mode: 'add',
+              initial: {
+                label: '',
+                baseUrl: state.legacy.baseUrl,
+                keyRef: '',
+                models: [],
+                imageModel: state.legacy.model,
+                editModel: '',
+              },
+            },
+            status: '',
+            statusKind: 'info',
+            confirmDelete: '',
+          })
+          return
+        }
+        patch({
+          editor: {
+            mode: 'edit',
+            initial: {
+              id: provider.id,
+              keyRef: provider.keyRef,
+              label: provider.label !== '' ? provider.label : provider.legacy === true ? trRef.current('legacyProviderName') : provider.id,
+              baseUrl: provider.baseUrl,
+              models: provider.models,
+              imageModel: provider.imageModel,
+              editModel: provider.editModel,
+              testState: state.testState[provider.id],
+            },
+          },
+          status: '',
+          statusKind: 'info',
+          confirmDelete: '',
+        })
+      }, [state.legacy, state.testState, patch])
+
+      /** 切换当前使用的提供商：只写 activeProviderId，立刻落盘。 */
+      const activate = React.useCallback(async (id) => {
+        const current = remotes.current
+        const settings = current === null || current === undefined ? undefined : current.settings
+        if (settings === undefined) return
+        patch({ phase: 'switching', status: '', statusKind: 'info' })
+        try {
+          const written = await settings.update(SETTINGS_NS, { activeProviderId: id }, undefined)
+          const failure = failureOf(written)
+          if (failure !== null) throw new Error(failure)
+          patch({ phase: 'idle', activeProviderId: id, status: trRef.current('activeSwitched'), statusKind: 'ok' })
+          report('info', '已切换当前提供商', JSON.stringify({ activeProviderId: id }))
+        } catch (error) {
+          report('error', '切换当前提供商失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
+          patch({ phase: 'idle', status: messageOf(error), statusKind: 'error' })
+        }
+      }, [patch])
+
+      /** 删除提供商：从列表里移除并落盘；密钥留在凭据服务里（不替用户做破坏性清理）。 */
+      const removeProvider = React.useCallback(async (provider) => {
+        const current = remotes.current
+        const settings = current === null || current === undefined ? undefined : current.settings
+        const next = state.providers.filter((item) => item.id !== provider.id).map(plainProvider)
+        const activeProviderId = state.activeProviderId === provider.id ? (next.length > 0 ? next[0].id : '') : state.activeProviderId
+        if (settings === undefined) {
+          patch({ confirmDelete: '' })
+          return
+        }
+        patch({ phase: 'saving', status: '', statusKind: 'info' })
+        try {
+          const written = await settings.update(SETTINGS_NS, { providers: next, activeProviderId }, undefined)
+          const failure = failureOf(written)
+          if (failure !== null) throw new Error(failure)
+          patch({ phase: 'idle', providers: next, activeProviderId, confirmDelete: '', status: trRef.current('removed'), statusKind: 'ok' })
+          report('info', '提供商已删除', JSON.stringify({ id: provider.id, keyRef: provider.keyRef, remaining: next.length, activeProviderId, keyKept: true }))
+        } catch (error) {
+          report('error', '删除提供商失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
+          patch({ phase: 'idle', confirmDelete: '', status: messageOf(error), statusKind: 'error' })
+        }
+      }, [state.providers, state.activeProviderId, patch])
+
+      /**
+       * 保存编辑面板的内容。
+       *
+       * 两处写入互相独立：`settings.update` 落 providers/activeProviderId，
+       * `credentials.set` 只在用户真的输入了密钥时才写。密钥本身绝不进日志、
+       * 绝不进 settings patch。
+       */
+      const submitProvider = React.useCallback(async (draft, keyDraft) => {
+        const current = remotes.current
+        const settings = current === null || current === undefined ? undefined : current.settings
+        const credentials = current === null || current === undefined ? undefined : current.credentials
+        if (settings === undefined) {
+          patch({ editor: null, status: trRef.current('unavailable'), statusKind: 'error' })
+          return
+        }
+        patch({ phase: 'saving', status: '', statusKind: 'info' })
+        try {
+          const taken = state.providers.filter((item) => item.id !== draft.id).map((item) => item.id)
+          const seed = slugify(draft.label) !== '' ? slugify(draft.label) : hostSlugOf(draft.baseUrl)
+          const id = draft.id !== '' ? draft.id : uniqueId(seed, taken)
+          // 声明了引用名就沿用（过形状校验），否则按 id 派生——非法值正好借这次保存自愈。
+          const declaredRef = safeKeyRef(draft.keyRef)
+          const keyRef = declaredRef !== '' ? declaredRef : keyRefOf(id)
+          const record = {
+            id,
+            label: draft.label === '' ? id : draft.label,
+            baseUrl: draft.baseUrl,
+            keyRef,
+            models: Array.isArray(draft.models) ? draft.models : [],
+            imageModel: draft.imageModel,
+            editModel: draft.editModel,
+          }
+          const next = state.providers.map(plainProvider)
+          const index = state.providers.findIndex((item) => item.id === id)
+          if (index >= 0) next[index] = record
+          else next.push(record)
+          const activeProviderId = state.activeProviderId === '' ? id : state.activeProviderId
+
+          const written = await settings.update(SETTINGS_NS, { providers: next, activeProviderId }, undefined)
+          const failure = failureOf(written)
+          if (failure !== null) throw new Error(failure)
+
+          let keyConfigured = state.keyConfigured
+          let keySaved = false
+          if (keyDraft !== '') {
+            if (credentials === undefined) throw new Error(trRef.current('keyUnavailable'))
+            const stored = await credentials.set(keyRef, keyDraft)
+            const keyFailure = failureOf(stored)
+            if (keyFailure !== null) throw new Error(keyFailure)
+            keyConfigured = { ...state.keyConfigured, [id]: true }
+            keySaved = true
+          }
+
+          patch({
+            phase: 'idle',
+            providers: next,
+            activeProviderId,
+            keyConfigured,
+            editor: null,
+            status: keySaved ? `${trRef.current('saved')} ${trRef.current('savedKey')}` : trRef.current('saved'),
+            statusKind: 'ok',
+          })
+          // 只记长度与是否保存，绝不记密钥本身。
+          report('info', '提供商已保存', JSON.stringify({
+            id,
+            keyRef,
+            providers: next.length,
+            activeProviderId,
+            models: record.models.length,
+            imageModel: record.imageModel,
+            editModel: record.editModel,
+            keySaved,
+            keyLength: keyDraft.length,
+          }))
+        } catch (error) {
+          report('error', '提供商保存失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
+          patch({ phase: 'idle', status: messageOf(error), statusKind: 'error' })
+        }
+      }, [state.providers, state.activeProviderId, state.keyConfigured, patch])
+
+      /** 全局默认尺寸：对所有提供商生效，单独保存。 */
+      const saveSize = React.useCallback(async () => {
+        const current = remotes.current
+        const settings = current === null || current === undefined ? undefined : current.settings
+        if (settings === undefined) return
+        patch({ phase: 'saving', status: '', statusKind: 'info' })
+        try {
+          const written = await settings.update(SETTINGS_NS, { size: state.size }, undefined)
+          const failure = failureOf(written)
+          if (failure !== null) throw new Error(failure)
+          patch({ phase: 'idle', status: trRef.current('saved'), statusKind: 'ok' })
+          report('info', '默认尺寸已保存', JSON.stringify({ size: state.size }))
+        } catch (error) {
+          report('error', '默认尺寸保存失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
+          patch({ phase: 'idle', status: messageOf(error), statusKind: 'error' })
+        }
+      }, [state.size, patch])
+
+      /** 卡片上的「测试」：用这张卡片自己的密钥打一次 test，结果决定状态点的颜色。 */
+      const testProvider = React.useCallback(async (provider) => {
+        patch({ busyId: provider.id, status: '', statusKind: 'info' })
+        try {
+          // 同样带上 keyRef（先过形状校验）：卡片上的测试多半就发生在"不是当前生效"的那张卡上。
+          const keyRef = safeKeyRef(provider.keyRef)
+          const result = await callHost('test', { baseUrl: provider.baseUrl, apiKey: '', keyRef })
+          const outcome = testOutcomeOf(result)
+          report(outcome.ok ? 'info' : 'warn', '测试连接结果', JSON.stringify({
+            id: provider.id,
+            baseUrl: provider.baseUrl,
+            keyRef,
+            ok: outcome.ok,
+            message: outcome.message,
+            keyProvided: false,
+          }))
+          patch({
+            busyId: '',
+            testState: { ...state.testState, [provider.id]: outcome.ok ? 'ok' : 'fail' },
+            status: outcome.message === '' ? (outcome.ok ? trRef.current('testOk') : trRef.current('testFail')) : outcome.message,
+            statusKind: outcome.ok ? 'ok' : 'error',
+          })
+        } catch (error) {
+          report('error', '测试连接失败', `${provider.id}: ${messageOf(error)}`)
+          patch({
+            busyId: '',
+            testState: { ...state.testState, [provider.id]: 'fail' },
+            status: messageOf(error),
+            statusKind: 'error',
+          })
+        }
+      }, [state.testState, patch])
+
+      if (state.phase === 'loading') {
+        return h('div', { className: 'dib-cfg' }, h('p', { className: 'dib-field-hint' }, tr('loading')))
+      }
+      if (state.available === false) {
+        return h('div', { className: 'dib-cfg' }, [
+          h('p', { key: 'msg', className: 'dib-field-hint' }, tr('unavailable')),
+          state.status === '' ? null : h('p', { key: 'why', className: 'dib-status dib-status-error' }, state.status),
+        ])
+      }
+
+      const disabled = state.writable === false
+      const busy = state.phase !== 'idle'
+
+      /** 一张提供商卡片。纯函数：不持有状态，出错只会影响这张。 */
+      const cardOf = (provider) => {
+        const outcome = state.testState[provider.id]
+        const dotClass = outcome === 'ok' ? 'dib-dot dib-dot-ok' : outcome === 'fail' ? 'dib-dot dib-dot-fail' : 'dib-dot'
+        const dotTitle = outcome === 'ok' ? tr('dot.ok') : outcome === 'fail' ? tr('dot.fail') : tr('dot.untested')
+        const active = state.activeProviderId === provider.id
+        const confirming = state.confirmDelete === provider.id
+        const name = provider.label !== '' ? provider.label : provider.legacy === true ? tr('legacyProviderName') : provider.id
+        return h('li', { key: provider.id, className: 'dib-card' }, [
+          h('div', { key: 'head', className: 'dib-card-head' }, [
+            h('span', { key: 'dot', className: dotClass, title: dotTitle, 'aria-label': dotTitle, role: 'img' }),
+            h('span', { key: 'name', className: 'dib-card-name', title: provider.id }, name),
+            provider.legacy === true ? h('span', { key: 'legacy', className: 'dib-card-tag' }, tr('legacyTag')) : null,
+            active ? h('span', { key: 'active', className: 'dib-card-tag dib-card-tag-on' }, tr('activeTag')) : null,
+            h('div', { key: 'actions', className: 'dib-card-actions' }, [
+              h('button', {
+                key: 'test',
+                type: 'button',
+                className: 'dib-mini',
+                disabled: disabled || busy,
+                onClick: () => { void testProvider(provider) },
+              }, state.busyId === provider.id ? tr('testing') : tr('testShort')),
+              active ? null : h('button', {
+                key: 'use',
+                type: 'button',
+                className: 'dib-mini',
+                disabled: disabled || busy,
+                onClick: () => { void activate(provider.id) },
+              }, tr('setActive')),
+              h('button', {
+                key: 'edit',
+                type: 'button',
+                className: 'dib-mini',
+                disabled,
+                onClick: () => openEditor(provider),
+              }, tr('edit')),
+              confirming
+                ? h('button', {
+                  key: 'confirm',
+                  type: 'button',
+                  className: 'dib-mini dib-mini-danger',
+                  disabled: disabled || busy,
+                  onClick: () => { void removeProvider(provider) },
+                }, tr('removeConfirm'))
+                : h('button', {
+                  key: 'remove',
+                  type: 'button',
+                  className: 'dib-mini dib-mini-danger',
+                  disabled,
+                  onClick: () => patch({ confirmDelete: provider.id }),
+                }, tr('remove')),
+              confirming ? h('button', {
+                key: 'abort',
+                type: 'button',
+                className: 'dib-mini',
+                disabled,
+                onClick: () => patch({ confirmDelete: '' }),
+              }, tr('cancel')) : null,
+            ]),
+          ]),
+          h('div', { key: 'body', className: 'dib-card-body' }, [
+            h('span', { key: 'image', className: 'dib-card-sub' }, `${tr('imageModel')}：${provider.imageModel === '' ? tr('none') : provider.imageModel}`),
+            h('span', { key: 'edit', className: 'dib-card-sub' }, `${tr('editModel')}：${provider.editModel === '' ? tr('inheritImage') : provider.editModel}`),
+            provider.baseUrl === '' ? null : h('span', { key: 'url', className: 'dib-card-sub dib-card-url', title: provider.baseUrl }, provider.baseUrl),
+            h('span', { key: 'key', className: 'dib-card-sub' }, state.keyConfigured[provider.id] === true ? tr('keyConfigured') : tr('keyMissing')),
+          ]),
+        ])
+      }
+
+      const editor = state.editor
+      const editorTarget = editor === null || editor === undefined || editor.initial === null || editor.initial === undefined
+        ? undefined
+        : editor.initial
+      const editorId = editorTarget !== null && editorTarget !== undefined && typeof editorTarget.id === 'string' ? editorTarget.id : ''
+
+      return h('div', { className: 'dib-cfg' }, [
+        h('p', { key: 'intro', className: 'dib-cfg-intro' }, tr('intro')),
+        state.providers.length === 0 ? null : h('ul', { key: 'list', className: 'dib-list' }, state.providers.map(cardOf)),
+        state.providers.length === 0 ? h('p', { key: 'empty', className: 'dib-field-hint' }, tr('empty')) : null,
+        editor === null || editor === undefined
+          ? h('button', {
+            key: 'add',
+            type: 'button',
+            className: 'dib-add-btn',
+            disabled,
+            onClick: () => openEditor(null),
+          }, `＋ ${tr('add')}`)
+          : h(ProviderEditor, {
+            key: `editor:${editor.mode}:${editorId === '' ? 'new' : editorId}`,
+            t: props.t,
+            initial: editorTarget,
+            keyConfigured: editorId !== '' && state.keyConfigured[editorId] === true,
+            disabled,
+            busy: state.phase === 'saving',
+            onCancel: () => {
+              // 关浮层是个会改变界面的动作，留一行日志便于事后对齐"我明明点了取消"这类反馈。
+              report('info', '编辑浮层已关闭', JSON.stringify({ mode: editor.mode, id: editorId }))
+              patch({ editor: null, status: '', statusKind: 'info' })
+            },
+            onSubmit: (draft, keyDraft) => { void submitProvider(draft, keyDraft) },
+          }),
+        h('div', { key: 'defaults', className: 'dib-defaults' }, [
+          h('label', { key: 'label', className: 'dib-label', htmlFor: 'dib-size' }, tr('size')),
+          h('input', {
+            key: 'input',
+            id: 'dib-size',
+            className: 'dib-input dib-input-narrow',
+            type: 'text',
+            value: state.size,
+            disabled: disabled || busy,
+            spellCheck: false,
+            autoComplete: 'off',
+            onChange: (event) => patch({ size: event.target.value }),
+          }),
+          h('button', {
+            key: 'save',
+            type: 'button',
+            className: 'dib-btn dib-btn-secondary',
+            disabled: disabled || busy,
+            onClick: () => { void saveSize() },
+          }, tr('saveSize')),
+          h('p', { key: 'hint', className: 'dib-field-hint' }, tr('size.hint')),
+        ]),
+        state.status === '' ? null : h('p', { key: 'status', className: statusClassOf(state.statusKind), role: 'status' }, state.status),
+      ])
+    }
+
+    /** 两个工具名共用同一个视图。 */
+    const TOOL_KEYS = ['image_generate', 'image_edit']
+
+    /**
+     * 注册体：外层只做一次 createElement，不用任何钩子，因此自身不会抛错；
+     * 真正的渲染在错误边界之内，出错也只是显示一行原因。
+     */
+    function ImageToolview(props) {
+      return h(SectionBoundary, null, h(ImageResultRow, props))
+    }
+
+    function ImageBridgeSection(props) {
+      return h(SectionBoundary, null, h(ConfigBody, props))
+    }
+
+    return {
+      inject: ['slots', 'locale'],
+      apply(ctx) {
+        report('info', 'client apply 开始', '')
+
+        ctx.effect(() => {
+          try {
+            return ctx.locale.register(NS, { zh: MESSAGES.zh, en: MESSAGES.en })
+          } catch (error) {
+            // HMR 重载时命名空间可能已经注册过，重复注册会抛错；
+            // 绝不能让它带崩整个 apply（那会让两个插槽注册一起消失）。
+            report('warn', 'locale 词典注册失败', error instanceof Error ? error.message : String(error))
+            return () => {}
+          }
+        }, 'image-bridge: dictionaries')
+
+        let t = (key) => MESSAGES.zh[key] ?? key
+        try {
+          const bound = ctx.locale.bind(NS)
+          if (typeof bound === 'function') t = bound
+        } catch (error) {
+          report('warn', 'locale.bind 失败，改用内置文案', error instanceof Error ? error.message : String(error))
+        }
+
+        ctx.effect(() => {
+          const style = document.createElement('style')
+          style.dataset.plugin = 'dsh-image-bridge'
+          style.textContent = CSS
+          document.head.appendChild(style)
+          return () => style.remove()
+        }, 'image-bridge: styles')
+
+        /*
+         * 启动即探测一次远程命名空间。
+         *
+         * 配置页里的解析只在组件挂载时才跑，所以页面没被打开时无法判断解析路径是否
+         * 可用。这里在 apply 期先探一次并写进日志——这样"设置页到底能不能连上 Host
+         * 配置服务"这个问题，不必等用户点开页面就有答案。
+         */
+        try {
+          const probeSettings = remoteNamespace(ctx, 'settings')
+          const probeCredentials = remoteNamespace(ctx, 'credentials')
+          report('info', 'apply 期探测远程命名空间', JSON.stringify({
+            settings: probeSettings !== undefined,
+            credentials: probeCredentials !== undefined,
+          }))
+        } catch (error) {
+          report('warn', 'apply 期探测远程命名空间抛错', String(error?.message ?? error))
+        }
+
+        /* 临时诊断：把本插件那一行的设置快照打进日志，确认配置是否真的落到行上。 */
+        try {
+          const snapshotClient = remoteNamespace(ctx, 'settings')
+          if (snapshotClient !== undefined && typeof snapshotClient.describe === 'function') {
+            Promise.resolve(snapshotClient.describe())
+              .then((result) => {
+                const payload = result !== null && typeof result === 'object' && 'value' in result ? result.value : result
+                const list = Array.isArray(payload) ? payload : []
+                const mine = list.filter((row) => row !== null && typeof row === 'object' && row.ns === SETTINGS_NS)
+                report('info', '设置行快照', JSON.stringify({
+                  total: list.length,
+                  namespaces: list.slice(0, 12).map((row) => (row !== null && typeof row === 'object' ? row.ns : null)),
+                  mine: mine.slice(0, 2),
+                }).slice(0, 900))
+              })
+              .catch((error) => report('warn', '设置行快照失败', String(error?.message ?? error)))
+          }
+        } catch (error) {
+          report('warn', '设置行快照抛错', String(error?.message ?? error))
+        }
+
+        try {
+          ctx.slots.inject('tool.call.toolview', function* registerImageViews() {
+            for (const key of TOOL_KEYS) {
+              yield ctx.slots.register({
+                name: 'tool.call.toolview',
+                key,
+                locale: NS,
+                /*
+                 * 这里**不能**声明 `tool.call.images` 子插槽：内置的 read_image 卡片
+                 * （read-image-toolview）已经声明了它，而一个子插槽只允许有一个声明者，
+                 * 再声明会抛 "already declared"，导致本条目整个注册失败。
+                 * 图片改由本插件自己用 loadImage 渲染。
+                 */
+              }, ImageToolview)
+            }
+          })
+        } catch (error) {
+          report('fatal', 'tool.call.toolview 注册失败', error instanceof Error ? error.stack : String(error))
+        }
+
+        try {
+          ctx.slots.inject('settings.section', () => ctx.slots.register({
+            name: 'settings.section',
+            id: 'dsh-image-bridge-config',
+            order: 120,
+            /*
+             * 用负优先级：列表插槽里同一个 id 重复注册会抛错，而热重载时上一代模块的
+             * 注册尚未释放。优先级更低者渲染，于是新的一次注册遮住旧的那一条，
+             * 既不会抛错，界面上也只会看到一份。
+             */
+            priority: -1,
+            label: () => t('nav'),
+            locale: NS,
+          }, (props) => h(SectionBoundary, null, h(ConfigBody, { ...props, __ctx: ctx }))))
+        } catch (error) {
+          report('fatal', 'settings.section 注册失败', error instanceof Error ? error.stack : String(error))
+        }
+
+        report('info', 'client apply 完成', '')
+      },
+    }
+  },
+})
