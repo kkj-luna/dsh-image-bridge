@@ -984,8 +984,11 @@ check(
     && glyphPairs.length >= 10
     && glyphPairs.every((pair) => iconSvgText.includes(pair))
     && glyphPairs.every((pair) => !colorPattern.test(pair))
-    && !colorPattern.test(JSON.stringify(inlineGlyph?.props ?? {})),
-  JSON.stringify({ shapes: glyphChildren.map((shape) => shape.type), pairs: glyphPairs.length, missing: glyphPairs.filter((pair) => !iconSvgText.includes(pair)) }).slice(0, 260),
+    && !colorPattern.test(JSON.stringify(inlineGlyph?.props ?? {}))
+    // 它是所有用户唯一看得到的专属图标，不能被缩成一个点：至少与标题同量级。
+    && Number(inlineGlyph?.props?.width) >= 20
+    && Number(inlineGlyph?.props?.height) === Number(inlineGlyph?.props?.width),
+  JSON.stringify({ shapes: glyphChildren.map((shape) => shape.type), pairs: glyphPairs.length, size: inlineGlyph?.props?.width ?? null, missing: glyphPairs.filter((pair) => !iconSvgText.includes(pair)) }).slice(0, 260),
 )
 const cfgNode = headerTree.nodes.find((node) => node.props?.className === 'dib-cfg')
 const cfgChildren = (Array.isArray(cfgNode?.props?.children) ? cfgNode.props.children : []).filter(Boolean)

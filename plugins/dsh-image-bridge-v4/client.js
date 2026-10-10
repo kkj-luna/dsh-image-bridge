@@ -403,7 +403,7 @@ window.__ModuleLoader__.load({
       /* 页头：形态对齐官方「插件市场」页（图标 + 标题 + 等宽徽标，第二行副标题） */
       '.dib-page-head{display:flex;flex-direction:column;gap:6px;margin:0 0 4px}',
       '.dib-page-title-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}',
-      '.dib-page-glyph{flex:0 0 auto;color:var(--dsw-alias-label-primary)}',
+      '.dib-page-glyph{flex:0 0 auto;display:block;color:var(--dsw-alias-label-primary)}',
       '.dib-page-title{margin:0;font-size:20px;font-weight:500;line-height:28px;color:var(--dsw-alias-label-primary)}',
       '.dib-page-badge{border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary);padding:0 6px;font-size:11px;line-height:18px;white-space:nowrap;font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}',
       '.dib-page-sub{margin:0}',
@@ -2196,15 +2196,19 @@ window.__ModuleLoader__.load({
 
       /*
        * 页头：与官方「插件市场」页同一形态 —— 第一行 [单色图标] 标题 [包名 版本 徽标]，
-       * 第二行是原来那句说明（副标题）。图标是内联 SVG：只用 currentColor，随主题着色，
-       * 不引外部图片、不硬编码颜色。
+       * 第二行是原来那句说明（副标题）。
+       *
+       * 这个内联 SVG 是**所有用户唯一能看到"生图桥专属图标"的地方**（导航字形由外壳按
+       * section id 硬编码，第三方 section 拿不到），所以它按 22px 渲染、与 20px 的标题
+       * 视觉等重，几何数据与随包分发的 `icon.svg` 完全同源（跨文件一致性断言盯着）。
+       * 只用 currentColor，随主题着色；不引外部图片、不硬编码颜色。
        */
       const pageGlyph = h('svg', {
         key: 'glyph',
         className: 'dib-page-glyph',
         viewBox: '0 0 24 24',
-        width: 20,
-        height: 20,
+        width: 22,
+        height: 22,
         fill: 'none',
         stroke: 'currentColor',
         strokeWidth: 1.7,
