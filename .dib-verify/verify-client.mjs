@@ -1158,6 +1158,113 @@ check(
 )
 
 
+/* ------------------------------------------------------------------ *
+ * 默认尺寸：常用预设下拉 + 「自定义…」
+ * ------------------------------------------------------------------ */
+
+const SIZE_SELECT = 'dib-size'
+const SIZE_CUSTOM_INPUT = 'dib-size-custom'
+const CUSTOM_SIZE_VALUE_FOR_TEST = '__dib_custom_size__'
+const SIZE_PRESETS_EXPECTED = ['1024x1024', '1024x1536', '1536x1024', '768x1024', '1024x768', '512x512', '1792x1024', '1024x1792']
+
+const sizeTree = pageWith(routesBundle, { size: '1024x1024' })
+const sizeSelect = selectById(sizeTree, SIZE_SELECT)
+const sizeOptionValues = optionValuesOf(sizeSelect)
+check(
+  '默认尺寸是预设下拉：八个常用尺寸 + 「自定义…」，默认选中 1024x1024',
+  sizeOptionValues.slice(0, SIZE_PRESETS_EXPECTED.length).join(',') === SIZE_PRESETS_EXPECTED.join(',')
+    && sizeOptionValues[SIZE_PRESETS_EXPECTED.length] === CUSTOM_SIZE_VALUE_FOR_TEST
+    && sizeSelect?.props.value === '1024x1024'
+    && inputById(sizeTree, SIZE_CUSTOM_INPUT) === undefined,
+  JSON.stringify({ options: sizeOptionValues.length, value: sizeSelect?.props.value ?? null }).slice(0, 220),
+)
+check(
+  '预设把比例写在文案里（value 仍是尺寸本身），zh / en 都有这些文案',
+  optionTextAt(sizeSelect, 0) === '1024x1024（1:1 默认）'
+    && optionTextAt(sizeSelect, 1) === '1024x1536（2:3 竖版）'
+    && optionTextAt(sizeSelect, 4) === '1024x768（4:3 横版）'
+    && optionValuesOf(sizeSelect)[1] === '1024x1536'
+    && zhDict['size.preset.768x1024'] === '768x1024（3:4 竖版）'
+    && enDict['size.preset.768x1024'] === '768x1024 (3:4 portrait)'
+    && zhDict['size.custom'] === '自定义…'
+    && enDict['size.custom'] === 'Custom…',
+  JSON.stringify({ first: optionTextAt(sizeSelect, 0), second: optionTextAt(sizeSelect, 1), en: enDict['size.preset.768x1024'] }).slice(0, 220),
+)
+check(
+  '配置里没写尺寸时显示默认 1024x1024，且不进入自定义模式',
+  selectById(pageWith(routesBundle, { size: '' }), SIZE_SELECT)?.props.value === '1024x1024'
+    && inputById(pageWith(routesBundle, { size: '' }), SIZE_CUSTOM_INPUT) === undefined,
+  String(selectById(pageWith(routesBundle, { size: '' }), SIZE_SELECT)?.props.value ?? null),
+)
+
+/* 手填尺寸：选「自定义…」→ 出现文本框 → 保存后 patch.size 就是它 */
+const sizeSaveBundle = sectionWithRecording({ size: '1024x1024' })
+const sizeSession = createSession(sizeSaveBundle.component, {
+  t: undefined,
+  close: () => {},
+  __initial: { phase: 'idle', providers: [zhipuFull], activeProviderId: 'zhipu', size: '1024x1024' },
+})
+let sizeLiveTree = sizeSession.tree()
+sizeSession.change(selectById(sizeLiveTree, SIZE_SELECT), CUSTOM_SIZE_VALUE_FOR_TEST)
+sizeLiveTree = sizeSession.tree()
+const sizeCustomInput = inputById(sizeLiveTree, SIZE_CUSTOM_INPUT)
+check(
+  '选「自定义…」后下拉切到保留值，并出现尺寸文本框',
+  selectById(sizeLiveTree, SIZE_SELECT)?.props.value === CUSTOM_SIZE_VALUE_FOR_TEST && sizeCustomInput !== undefined,
+  JSON.stringify({ value: selectById(sizeLiveTree, SIZE_SELECT)?.props.value ?? null, input: sizeCustomInput !== undefined }),
+)
+sizeSession.change(sizeCustomInput, '1280*720')
+sizeLiveTree = sizeSession.tree()
+sizeSession.click(sizeLiveTree.nodes.find((node) => node.type === 'button' && textOfElement(node).trim() === '保存尺寸'))
+await sleep(30)
+check(
+  '自定义尺寸 1280*720 保存后 patch.size 就是它（且这一次只写 size）',
+  sizeSaveBundle.updates[0]?.patch?.size === '1280*720' && sizeSaveBundle.updates[0]?.patch?.providers === undefined,
+  JSON.stringify(sizeSaveBundle.updates[0]?.patch ?? null).slice(0, 200),
+)
+
+/* 非预设的历史值：自动进入自定义模式并原样回显，保存也不改写 */
+const legacySizeBundle = sectionWithRecording({ size: '999x999' })
+const legacySizeSession = createSession(legacySizeBundle.component, {
+  t: undefined,
+  close: () => {},
+  __initial: { phase: 'idle', providers: [zhipuFull], activeProviderId: 'zhipu', size: '999x999' },
+})
+const legacyTree = legacySizeSession.tree()
+const legacySizeInput = inputById(legacyTree, SIZE_CUSTOM_INPUT)
+check(
+  '配置里存着非预设尺寸（999x999）时自动进入自定义模式并原样回显',
+  selectById(legacyTree, SIZE_SELECT)?.props.value === CUSTOM_SIZE_VALUE_FOR_TEST && legacySizeInput?.props?.value === '999x999',
+  JSON.stringify({ value: selectById(legacyTree, SIZE_SELECT)?.props.value ?? null, input: legacySizeInput?.props?.value ?? null }),
+)
+legacySizeSession.click(legacyTree.nodes.find((node) => node.type === 'button' && textOfElement(node).trim() === '保存尺寸'))
+await sleep(30)
+check(
+  '回显的非预设值保存后原样写回，没有被悄悄改写',
+  legacySizeBundle.updates[0]?.patch?.size === '999x999',
+  JSON.stringify(legacySizeBundle.updates[0]?.patch?.size ?? null),
+)
+
+/* 同一条不变量也要在**载入路径**上成立：从配置里读到 999x999，界面同样是自定义 + 回显 */
+const loadSizeBundle = sectionWithRecording({ size: '999x999', baseUrl: 'https://api.example.com/v1', model: 'cogview-4' })
+const loadSizeSession = createSession(loadSizeBundle.component, {
+  t: undefined,
+  close: () => {},
+  __initial: { phase: 'loading' },
+})
+loadSizeSession.tree()
+await sleep(30)
+const loadedSizeTree = loadSizeSession.tree()
+check(
+  '载入路径上读到非预设尺寸也进入自定义模式并回显（不是只有注入状态才对）',
+  selectById(loadedSizeTree, SIZE_SELECT)?.props.value === CUSTOM_SIZE_VALUE_FOR_TEST
+    && inputById(loadedSizeTree, SIZE_CUSTOM_INPUT)?.props?.value === '999x999',
+  JSON.stringify({
+    value: selectById(loadedSizeTree, SIZE_SELECT)?.props.value ?? null,
+    input: inputById(loadedSizeTree, SIZE_CUSTOM_INPUT)?.props?.value ?? null,
+  }),
+)
+
 /* 非法 keyRef（手改 profile 塞进来的）不能进 payload，按空处理并留一条 warn */
 const badRefBundle = sectionWithRecording({ size: '1024x1024' })
 const badRefProvider = { ...providerRecord, keyRef: 'bad ref!' }

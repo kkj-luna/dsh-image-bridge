@@ -237,7 +237,16 @@ window.__ModuleLoader__.load({
         'keyUnavailable': '凭据服务不可用，无法保存 API Key。',
         'needBaseUrl': '请先填写接口地址。',
         'size': '默认尺寸',
-        'size.hint': '对所有提供商生效，例如 1024x1024、1024x1536、1536x1024。',
+        'size.hint': '对所有提供商生效；列表里没有的尺寸选「自定义…」自己填。',
+        'size.custom': '自定义…',
+        'size.preset.1024x1024': '1024x1024（1:1 默认）',
+        'size.preset.1024x1536': '1024x1536（2:3 竖版）',
+        'size.preset.1536x1024': '1536x1024（3:2 横版）',
+        'size.preset.768x1024': '768x1024（3:4 竖版）',
+        'size.preset.1024x768': '1024x768（4:3 横版）',
+        'size.preset.512x512': '512x512（1:1 小图）',
+        'size.preset.1792x1024': '1792x1024（16:9 横版）',
+        'size.preset.1024x1792': '1024x1792（9:16 竖版）',
         'saveSize': '保存尺寸',
         'routes.title': '模型',
         'routes.hint': '生图与修图各有一个主模型和一个备用模型：选项来自所有已获取过模型列表的服务商（按服务商分组）。备用模型在主模型超时或连接失败时自动接管。',
@@ -338,7 +347,16 @@ window.__ModuleLoader__.load({
         'keyUnavailable': 'The credential service is unavailable, so the API key cannot be stored.',
         'needBaseUrl': 'Fill in the API base URL first.',
         'size': 'Default size',
-        'size.hint': 'Applies to every provider, e.g. 1024x1024, 1024x1536, 1536x1024.',
+        'size.hint': 'Applies to every provider; pick "Custom…" to type a size that is not listed.',
+        'size.custom': 'Custom…',
+        'size.preset.1024x1024': '1024x1024 (1:1, default)',
+        'size.preset.1024x1536': '1024x1536 (2:3 portrait)',
+        'size.preset.1536x1024': '1536x1024 (3:2 landscape)',
+        'size.preset.768x1024': '768x1024 (3:4 portrait)',
+        'size.preset.1024x768': '1024x768 (4:3 landscape)',
+        'size.preset.512x512': '512x512 (1:1 small)',
+        'size.preset.1792x1024': '1792x1024 (16:9 wide)',
+        'size.preset.1024x1792': '1024x1792 (9:16 tall)',
         'saveSize': 'Save size',
         'routes.title': 'Models',
         'routes.hint': 'Generation and editing each have a primary and a fallback model. Options come from every provider whose model list has been fetched, grouped by provider; the fallback takes over when the primary times out or fails to connect.',
@@ -945,6 +963,19 @@ window.__ModuleLoader__.load({
     /** 主模型超时的默认值（毫秒），与 Host 侧 Config 的默认值一致。 */
     const DEFAULT_FALLBACK_MS = 15000
 
+    /**
+     * 默认尺寸的常用预设。
+     *
+     * 比例只写进**界面文案**（词典键 `size.preset.<值>`），不塞进 option 的 value——value
+     * 必须是能直接发给服务商的尺寸字符串。当前值不在这个列表里时自动进入自定义模式并
+     * 回显原值，绝不显示空白、也绝不改写。
+     */
+    const SIZE_PRESETS = ['1024x1024', '1024x1536', '1536x1024', '768x1024', '1024x768', '512x512', '1792x1024', '1024x1792']
+    /** 尺寸的默认值：配置里没写时按它显示（也是 Host 侧 Config 的默认值）。 */
+    const DEFAULT_SIZE = '1024x1024'
+    /** 「自定义…」在尺寸下拉里的保留取值。 */
+    const CUSTOM_SIZE_VALUE = '__dib_custom_size__'
+
     /** 四个模型槽位。`modelRoutes` 就是按这个结构写进配置的。 */
     const ROUTE_IDS = ['generate.primary', 'generate.fallback', 'edit.primary', 'edit.fallback']
 
@@ -1382,6 +1413,8 @@ window.__ModuleLoader__.load({
         providers: [],
         activeProviderId: '',
         size: '',
+        // 「自定义…」：尺寸不在预设里（或用户主动选了它）时露出文本框。
+        sizeCustom: false,
         keyConfigured: {},
         testState: {},
         legacy: { baseUrl: '', model: '', editModel: '' },
@@ -1879,6 +1912,17 @@ window.__ModuleLoader__.load({
       const editorId = editorTarget !== null && editorTarget !== undefined && typeof editorTarget.id === 'string' ? editorTarget.id : ''
 
       /*
+       * 尺寸下拉的两个派生值。
+       *
+       * `sizeIsCustom`：用户主动选了「自定义…」，或配置里存着一个不在预设里的尺寸。
+       * `sizeSelectValue`：预设命中就选它；配置里没写尺寸时显示默认值——Host 读取时
+       * 也是把空值当归一到 1024x1024（`nonEmptyString(value.size, '1024x1024')`），两边一致。
+       */
+      const sizeIsPreset = SIZE_PRESETS.includes(state.size)
+      const sizeIsCustom = state.sizeCustom === true || (state.size !== '' && !sizeIsPreset)
+      const sizeSelectValue = sizeIsPreset ? state.size : DEFAULT_SIZE
+
+      /*
        * 模型区块：四个槽位（生图/修图 × 主/备）+ 主模型超时。
        *
        * 选项是**所有已获取过模型列表的服务商的并集**（每个 provider 记录里存着它的
@@ -2045,9 +2089,38 @@ window.__ModuleLoader__.load({
         routesBlock,
         h('div', { key: 'defaults', className: 'dib-defaults' }, [
           h('label', { key: 'label', className: 'dib-label', htmlFor: 'dib-size' }, tr('size')),
-          h('input', {
-            key: 'input',
+          /*
+           * 尺寸：常用预设 + 「自定义…」。
+           *
+           * 与四个模型下拉同一条不变量——当前值一定出现在选项里：配置里存着预设之外的
+           * 尺寸（例如以前手填的 `1280*720`）时自动进入自定义模式、把原值回显到文本框，
+           * 既不显示空白，也不改写它。比例只写在选项文案里，value 始终是尺寸本身。
+           */
+          h('select', {
+            key: 'select',
             id: 'dib-size',
+            className: 'dib-input dib-select',
+            value: sizeIsCustom ? CUSTOM_SIZE_VALUE : sizeSelectValue,
+            disabled: disabled || busy,
+            onChange: (event) => {
+              const next = event !== null && event.target !== null && typeof event.target.value === 'string' ? event.target.value : ''
+              if (next === CUSTOM_SIZE_VALUE) {
+                patch({ sizeCustom: true })
+                return
+              }
+              patch({ sizeCustom: false, size: next })
+            },
+          }, [
+            ...SIZE_PRESETS.map((preset) => {
+              const key = `size.preset.${preset}`
+              const label = tr(key)
+              return h('option', { key: preset, value: preset }, label === key ? preset : label)
+            }),
+            h('option', { key: 'custom', value: CUSTOM_SIZE_VALUE }, tr('size.custom')),
+          ]),
+          sizeIsCustom ? h('input', {
+            key: 'custom-input',
+            id: 'dib-size-custom',
             className: 'dib-input dib-input-narrow',
             type: 'text',
             value: state.size,
@@ -2055,7 +2128,7 @@ window.__ModuleLoader__.load({
             spellCheck: false,
             autoComplete: 'off',
             onChange: (event) => patch({ size: event.target.value }),
-          }),
+          }) : null,
           h('button', {
             key: 'save',
             type: 'button',
