@@ -76,6 +76,18 @@ check(
   '中英两份 README 都要写许可',
 )
 
+/*
+ * 版本号的**单一事实来源**是 package.json；CHANGELOG 的首条必须是它。
+ * 升版本时少改一处不会有任何报错，只会让人对着两份不同的版本号猜哪个是真的。
+ */
+const changelog = await readFile(join(ROOT, '..', '..', 'CHANGELOG.md'), 'utf8').catch(() => '')
+const changelogTop = /^##\s+v?([0-9]+\.[0-9]+\.[0-9]+)/mu.exec(changelog)?.[1] ?? ''
+check(
+  'CHANGELOG 首条版本 = package.json 的 version',
+  changelogTop !== '' && changelogTop === manifest.version,
+  `changelog=${changelogTop || '(没读到)'} package.json=${manifest.version}`,
+)
+
 /* ---------------------------------------------- bundle patch */
 
 check('声明了 dsh.bundle.patch', manifest.dsh?.bundle?.patch === './cordis.patch.yml', String(manifest.dsh?.bundle?.patch))

@@ -21,7 +21,7 @@ plugin_manager  action: install_bundle
 
 Installation writes a `link:` dependency into the profile and inserts the plugin row into the profile's config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). **Restart `dsh web` afterwards**, then open **Settings → Image Bridge**.
 
-Package name `@local/dsh-image-bridge` (the `@local/` prefix is DSH convention for a locally authored plugin that is not published to npm), version `0.1.0`.
+Package name `@local/dsh-image-bridge` (the `@local/` prefix is DSH convention for a locally authored plugin that is not published to npm), version `0.2.0`.
 
 ## What you can do
 
@@ -38,7 +38,7 @@ The entry point is **Settings → Image Bridge**. Top to bottom the page is: pag
 
 ### Page header
 
-`[icon] Image Bridge  dsh-image-bridge  v0.1.0`, with one subtitle line below. The badge links to the GitHub repository (opens in a new tab) and shows only the repository name — no `@local/` prefix. The icon follows the theme colour.
+`[icon] Image Bridge  dsh-image-bridge  v0.2.0`, with one subtitle line below. The badge links to the GitHub repository (opens in a new tab) and shows only the repository name — no `@local/` prefix. The icon follows the theme colour.
 
 ### Provider cards
 
@@ -268,10 +268,10 @@ dsh-image-bridge-v4/
 └── icon.svg            Plugin icon
 ```
 
-The regression suites live in `.dib-verify/` at the repository root. They need **no network and no real key**, and total 380 assertions:
+The regression suites live in `.dib-verify/` at the repository root. They need **no network and no real key**, and total 381 assertions:
 
 ```bash
-node .dib-verify/verify-manifest.mjs   # 40
+node .dib-verify/verify-manifest.mjs   # 41
 node .dib-verify/verify-client.mjs     # 157
 node .dib-verify/verify-host.mjs       # 139
 node .dib-verify/verify-security.mjs   # 12
