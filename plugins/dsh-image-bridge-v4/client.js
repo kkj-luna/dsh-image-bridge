@@ -413,6 +413,9 @@ window.__ModuleLoader__.load({
       '.dib-input-narrow{width:150px}',
       '.dib-select{width:100%;max-width:320px;padding-right:8px;cursor:pointer}',
       '.dib-select:disabled{cursor:default;background:var(--dsw-alias-bg-layer-2)}',
+      /* 分组标题更粗更大（font-size 未必被认，所以文本层还加了破折号与大写） */
+      '.dib-select optgroup{font-weight:700;font-style:normal;color:var(--dsw-alias-label-primary)}',
+      '.dib-select option{font-weight:400}',
       '.dib-field-hint{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}',
       '.dib-btn{appearance:none;border:1px solid transparent;border-radius:var(--dsw-radius-md);padding:5px 14px;font:inherit;font-size:13px;line-height:1.5;cursor:pointer;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}',
       '.dib-btn:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}',
@@ -952,6 +955,22 @@ window.__ModuleLoader__.load({
         if (typeof model === 'string' && model !== '' && !seen.includes(model)) seen.push(model)
       }
       return seen
+    }
+
+    /**
+     * 分组标题（optgroup label）。
+     *
+     * 原生 select 对 optgroup 的样式支持有限（font-weight 多数浏览器认、font-size 未必），
+     * 只靠 CSS 不足以让人一眼分清「这是服务商、不是模型」——英文服务商名（`other`）和模型名
+     * （`gemini-3.1-flash-image`）在界面上几乎一样。所以除了 CSS，再做一个**文本层面的标记**：
+     * 名字两侧加破折号包裹，ASCII 字母整体大写（中文名不受影响）。
+     *
+     * 只动分组标题，**模型名一个字都不改写**（它们是真实 id）。
+     */
+    function groupLabelOf(name) {
+      const text = typeof name === 'string' ? name.trim() : ''
+      if (text === '') return ''
+      return `— ${text.replace(/[a-z]+/gu, (part) => part.toUpperCase())} —`
     }
 
     /**
@@ -1989,10 +2008,20 @@ window.__ModuleLoader__.load({
             patchRoute(id, { manual: false, providerId: picked.providerId, model: picked.model })
           },
         }, [
-          h('option', { key: 'unset', value: '' }, fallbackSlot ? tr('route.noFallback') : tr('route.unset')),
+          /*
+           * 占位条目：`hidden` 让它在展开的列表里不出现，`disabled` 保证点不中，而当这个
+           * 槽位还没选模型时（受控 value 为空）浏览器仍然显示这行文案——**显示的占位与状态
+           * 一致**，不会静默跳到第一个模型（那会造成"显示某个模型、状态却是空"的错位）。
+           */
+          h('option', {
+            key: 'unset',
+            value: '',
+            hidden: true,
+            disabled: true,
+          }, fallbackSlot ? tr('route.noFallback') : tr('route.unset')),
           ...groupsFor(id).map((group) => h('optgroup', {
             key: `g:${group.provider.id}`,
-            label: group.provider.label !== '' ? group.provider.label : group.provider.id,
+            label: groupLabelOf(group.provider.label !== '' ? group.provider.label : group.provider.id),
           }, group.models.map((model) => h('option', {
             key: `${group.provider.id}:${model}`,
             value: routeValueOf(group.provider.id, model),

@@ -910,12 +910,40 @@ const openaiProvider = {
   editModel: '',
 }
 const zhipuFull = { ...providerRecord, models: ALL_MODELS }
-/** 主页（不开浮层）的模型路由视图：两家服务商，各自的模型列表都已获取过。 */
+/* 截图里那个小写英文服务商名 other：与模型名最容易混淆的那一种，必须能一眼分出。 */
+const otherProvider = {
+  id: 'other',
+  label: 'other',
+  baseUrl: 'https://other.example.com/v1',
+  keyRef: 'DSH_IMAGE_BRIDGE_KEY_OTHER',
+  models: ['gemini-3.1-flash-image', 'gpt-image-2'],
+  imageModel: 'gemini-3.1-flash-image',
+  editModel: '',
+}
+const OTHER_MODELS = otherProvider.models
+/** 主页（不开浮层）的模型路由视图：三家服务商，各自的模型列表都已获取过。 */
 const routesPageWith = (bundle, extra) => treeOf(invoke(bundle.component, {
   t: undefined,
   close: () => {},
-  __initial: { phase: 'idle', providers: [zhipuFull, openaiProvider], activeProviderId: 'zhipu', ...extra },
+  __initial: { phase: 'idle', providers: [zhipuFull, openaiProvider, otherProvider], activeProviderId: 'zhipu', ...extra },
 }).element)
+
+/** 一个 select 底下的全部 option（含 optgroup 里的），按渲染顺序。 */
+const allOptionsOf = (select) => {
+  const out = []
+  const children = Array.isArray(select?.props?.children) ? select.props.children : []
+  for (const child of children) {
+    if (child === null || typeof child !== 'object') continue
+    if (child.type === 'optgroup') {
+      for (const option of Array.isArray(child.props.children) ? child.props.children : []) {
+        if (option !== null && typeof option === 'object') out.push(option)
+      }
+      continue
+    }
+    out.push(child)
+  }
+  return out
+}
 
 /* ① 四个下拉存在，选项是所有服务商模型的并集，按服务商分组 */
 const routesBundle = sectionWithRecording({ size: '1024x1024' })
@@ -932,10 +960,10 @@ check(
 )
 check(
   '选项是所有服务商模型的并集，且按服务商分组（optgroup 标签 = 服务商名）',
-  generateGroups.length === 2
-    && generateGroups.map((group) => group.props.label).join(',') === '智谱,OpenAI'
-    && generateOptionNames.join(',') === 'qwen-image-2.1-pro,qwen-image-3.0-pro,qwen-image-3.0,qwen-image-2.0-pro,qwen-image-2.0-2026-03-03,qwen-image-2.0-pro-2026-04-22,wan2.7-image,wan2.7-image-pro,z-image-turbo,gpt-image-1,dall-e-3',
-  JSON.stringify({ groups: generateGroups.map((group) => group.props.label), options: generateOptionNames.length }).slice(0, 240),
+  generateGroups.length === 3
+    && generateGroups.map((group) => group.props.label).join(',') === '— 智谱 —,— OPENAI —,— OTHER —'
+    && generateOptionNames.join(',') === 'qwen-image-2.1-pro,qwen-image-3.0-pro,qwen-image-3.0,qwen-image-2.0-pro,qwen-image-2.0-2026-03-03,qwen-image-2.0-pro-2026-04-22,wan2.7-image,wan2.7-image-pro,z-image-turbo,gpt-image-1,dall-e-3,gemini-3.1-flash-image,gpt-image-2',
+  JSON.stringify({ groups: generateGroups.map((group) => group.props.label), options: generateOptionNames.length }).slice(0, 260),
 )
 check(
   '选项里每项都带 providerId 与 model（跨服务商选择知道用哪家的地址与凭据）',
@@ -943,10 +971,72 @@ check(
   JSON.stringify(generateGroups[1]?.props.children[0]?.props ?? null).slice(0, 200),
 )
 
+/* ①b 占位条目不出现在展开列表里，但也绝不静默跳到第一个模型 */
+const unsetSelect = selectById(routesTree, ROUTE_SELECTS['generate.primary'])
+const unsetOptions = allOptionsOf(unsetSelect)
+const unsetPlaceholder = unsetOptions.find((option) => String(option.props?.value ?? '') === '')
+check(
+  '未设置时：value 为空、占位条目带 hidden + disabled（展开列表里看不到也点不中）',
+  unsetSelect?.props.value === ''
+    && unsetPlaceholder !== undefined
+    && unsetPlaceholder.props.hidden === true
+    && unsetPlaceholder.props.disabled === true
+    && textOfElement(unsetPlaceholder).trim() === '主模型',
+  JSON.stringify({
+    value: unsetSelect?.props.value ?? null,
+    hidden: unsetPlaceholder?.props?.hidden ?? null,
+    disabled: unsetPlaceholder?.props?.disabled ?? null,
+  }),
+)
+check(
+  '未设置时不会静默跳到第一个模型（受控值有空值选项可匹配，显示的占位与状态一致）',
+  (() => {
+    const value = String(unsetSelect?.props.value ?? '')
+    const matched = unsetOptions.find((option) => String(option.props?.value ?? '') === value)
+    // 浏览器只在"没有匹配项"时才回退到第一个选项；这里必须能精确匹配到占位条目。
+    return matched !== undefined
+      && matched.props.disabled === true
+      && generateOptionNames.every((model) => matched.props['data-model'] !== model)
+  })(),
+  JSON.stringify({ value: unsetSelect?.props.value ?? null, firstOption: String(unsetOptions[0]?.props?.value ?? '') }).slice(0, 160),
+)
+check(
+  '已设置时选中的就是那个模型（服务商 + 模型合成值能精确匹配）',
+  (() => {
+    const setTree = routesPageWith(routesBundle, {
+      routes: routesSeed({ 'generate.primary': routeItem('other', 'gemini-3.1-flash-image') }),
+    })
+    const setSelect = selectById(setTree, ROUTE_SELECTS['generate.primary'])
+    const matched = allOptionsOf(setSelect).find((option) => String(option.props?.value ?? '') === String(setSelect?.props?.value ?? ''))
+    return setSelect?.props.value === 'other::gemini-3.1-flash-image'
+      && matched !== undefined
+      && matched.props['data-provider'] === 'other'
+      && matched.props['data-model'] === 'gemini-3.1-flash-image'
+  })(),
+  String(selectById(routesPageWith(routesBundle, { routes: routesSeed({ 'generate.primary': routeItem('other', 'gemini-3.1-flash-image') }) }), ROUTE_SELECTS['generate.primary'])?.props.value ?? null),
+)
+
+/* ①c 分组标题的区分策略：文本标记 + 加粗样式，模型名一个字不改 */
+check(
+  '分组标题带文本标记（破折号包裹 + ASCII 大写），并配有加粗样式规则',
+  generateGroups.every((group) => /^— .+ —$/u.test(String(group.props.label)))
+    && generateGroups.map((group) => group.props.label).join(',') === '— 智谱 —,— OPENAI —,— OTHER —'
+    && styles.map((style) => style.textContent).join('').includes('.dib-select optgroup{font-weight:700'),
+  JSON.stringify(generateGroups.map((group) => group.props.label)),
+)
+check(
+  '模型名没有被改写（只有分组标题加标记；含截图里那两类真实 id）',
+  generateOptionNames.includes('gemini-3.1-flash-image')
+    && generateOptionNames.includes('gpt-image-2')
+    && generateGroups.flatMap((group) => group.props.children).every((option) => textOfElement(option).trim() === option.props['data-model'])
+    && generateOptionNames.every((model) => !model.includes('—') && model === model.trim()),
+  JSON.stringify(generateOptionNames.slice(-4)),
+)
+
 /* ② 默认只含生图模型；勾「显示全部模型」后含语言模型 */
 check(
   '默认只含生图模型（11 个语言/向量/语音模型一个都不在）',
-  generateOptionNames.length === IMAGE_MODELS.length + 2
+  generateOptionNames.length === IMAGE_MODELS.length + 4
     && NON_IMAGE_MODELS.every((model) => !generateOptionNames.includes(model))
     && !generateOptionNames.includes('gpt-4o'),
   JSON.stringify({ count: generateOptionNames.length, leaked: NON_IMAGE_MODELS.filter((m) => generateOptionNames.includes(m)) }).slice(0, 200),
@@ -957,7 +1047,7 @@ const allOptionNames = (selectById(routesAllTree, ROUTE_SELECTS['generate.primar
   .flatMap((group) => group.props.children.map((option) => option.props['data-model']))
 check(
   '勾「显示全部模型」后选项含语言模型（并集 + 语言模型）',
-  NON_IMAGE_MODELS.every((model) => allOptionNames.includes(model)) && allOptionNames.includes('gpt-4o') && allOptionNames.length === ALL_MODELS.length + 3,
+  NON_IMAGE_MODELS.every((model) => allOptionNames.includes(model)) && allOptionNames.includes('gpt-4o') && allOptionNames.length === ALL_MODELS.length + 5,
   JSON.stringify({ count: allOptionNames.length }).slice(0, 160),
 )
 
