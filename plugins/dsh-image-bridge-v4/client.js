@@ -481,9 +481,10 @@ window.__ModuleLoader__.load({
       /* 备用那行没有可见标签，上内边距一并收掉，主用的说明小字与它紧邻。 */
       '.dib-routes .dib-route-fallback{padding-top:0}',
       '.dib-toggle-row{display:flex;align-items:center;gap:8px;padding:8px 0}',
-      /* 全局默认值 */
-      '.dib-defaults{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:16px;padding-top:16px;border-top:0.5px solid var(--dsw-alias-border-l2)}',
-      '.dib-defaults .dib-field-hint{flex:1 1 100%}',
+      /* 默认尺寸：与其它字段同一套 field 结构（标签在上），只补一条段落分隔 */
+      '.dib-size-field{margin-top:16px;padding-top:16px;border-top:0.5px solid var(--dsw-alias-border-l2)}',
+      '.dib-size-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      '.dib-size-controls .dib-select{flex:0 1 320px;width:auto;min-width:200px}',
     ].join('')
 
     /* ------------------------------------------------------------------ */
@@ -2121,55 +2122,61 @@ window.__ModuleLoader__.load({
             onSubmit: (draft, keyDraft) => { void submitProvider(draft, keyDraft) },
           }),
         routesBlock,
-        h('div', { key: 'defaults', className: 'dib-defaults' }, [
+        /*
+         * 默认尺寸：与「生图模型 / 主模型 / 备用模型」同一套 `.dib-field` 结构——
+         * 标签在**控件上方**，控件在中间一行，说明小字在下。不再用左侧内联标签。
+         */
+        h('div', { key: 'defaults', className: 'dib-field dib-size-field', 'data-dib-field': 'size' }, [
           h('label', { key: 'label', className: 'dib-label', htmlFor: 'dib-size' }, tr('size')),
-          /*
-           * 尺寸：常用预设 + 「自定义…」。
-           *
-           * 与四个模型下拉同一条不变量——当前值一定出现在选项里：配置里存着预设之外的
-           * 尺寸（例如以前手填的 `1280*720`）时自动进入自定义模式、把原值回显到文本框，
-           * 既不显示空白，也不改写它。比例只写在选项文案里，value 始终是尺寸本身。
-           */
-          h('select', {
-            key: 'select',
-            id: 'dib-size',
-            className: 'dib-input dib-select',
-            value: sizeIsCustom ? CUSTOM_SIZE_VALUE : sizeSelectValue,
-            disabled: disabled || busy,
-            onChange: (event) => {
-              const next = event !== null && event.target !== null && typeof event.target.value === 'string' ? event.target.value : ''
-              if (next === CUSTOM_SIZE_VALUE) {
-                patch({ sizeCustom: true })
-                return
-              }
-              patch({ sizeCustom: false, size: next })
-            },
-          }, [
-            ...SIZE_PRESETS.map((preset) => {
-              const key = `size.preset.${preset}`
-              const label = tr(key)
-              return h('option', { key: preset, value: preset }, label === key ? preset : label)
-            }),
-            h('option', { key: 'custom', value: CUSTOM_SIZE_VALUE }, tr('size.custom')),
+          h('div', { key: 'controls', className: 'dib-size-controls' }, [
+            /*
+             * 尺寸：常用预设 + 「自定义…」。
+             *
+             * 与四个模型下拉同一条不变量——当前值一定出现在选项里：配置里存着预设之外的
+             * 尺寸（例如以前手填的 `1280*720`）时自动进入自定义模式、把原值回显到文本框，
+             * 既不显示空白，也不改写它。比例只写在选项文案里，value 始终是尺寸本身。
+             */
+            h('select', {
+              key: 'select',
+              id: 'dib-size',
+              className: 'dib-input dib-select',
+              value: sizeIsCustom ? CUSTOM_SIZE_VALUE : sizeSelectValue,
+              disabled: disabled || busy,
+              onChange: (event) => {
+                const next = event !== null && event.target !== null && typeof event.target.value === 'string' ? event.target.value : ''
+                if (next === CUSTOM_SIZE_VALUE) {
+                  patch({ sizeCustom: true })
+                  return
+                }
+                patch({ sizeCustom: false, size: next })
+              },
+            }, [
+              ...SIZE_PRESETS.map((preset) => {
+                const key = `size.preset.${preset}`
+                const label = tr(key)
+                return h('option', { key: preset, value: preset }, label === key ? preset : label)
+              }),
+              h('option', { key: 'custom', value: CUSTOM_SIZE_VALUE }, tr('size.custom')),
+            ]),
+            sizeIsCustom ? h('input', {
+              key: 'custom-input',
+              id: 'dib-size-custom',
+              className: 'dib-input dib-input-narrow',
+              type: 'text',
+              value: state.size,
+              disabled: disabled || busy,
+              spellCheck: false,
+              autoComplete: 'off',
+              onChange: (event) => patch({ size: event.target.value }),
+            }) : null,
+            h('button', {
+              key: 'save',
+              type: 'button',
+              className: 'dib-btn dib-btn-secondary',
+              disabled: disabled || busy,
+              onClick: () => { void saveSize() },
+            }, tr('saveSize')),
           ]),
-          sizeIsCustom ? h('input', {
-            key: 'custom-input',
-            id: 'dib-size-custom',
-            className: 'dib-input dib-input-narrow',
-            type: 'text',
-            value: state.size,
-            disabled: disabled || busy,
-            spellCheck: false,
-            autoComplete: 'off',
-            onChange: (event) => patch({ size: event.target.value }),
-          }) : null,
-          h('button', {
-            key: 'save',
-            type: 'button',
-            className: 'dib-btn dib-btn-secondary',
-            disabled: disabled || busy,
-            onClick: () => { void saveSize() },
-          }, tr('saveSize')),
           h('p', { key: 'hint', className: 'dib-field-hint' }, tr('size.hint')),
         ]),
         state.status === '' ? null : h('p', { key: 'status', className: statusClassOf(state.statusKind), role: 'status' }, state.status),

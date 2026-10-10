@@ -1396,6 +1396,58 @@ check(
   String(selectById(pageWith(routesBundle, { size: '' }), SIZE_SELECT)?.props.value ?? null),
 )
 
+/* 字段排版：标签在控件上方（与其它字段同一套 .dib-field 结构） */
+const tagOrderOf = (node) => {
+  const order = []
+  walk(node, (item) => {
+    if (item !== null && typeof item === 'object' && typeof item.type === 'string') order.push(item.type)
+  })
+  return order
+}
+const dibClassesOf = (node) => String(node?.props?.className ?? '').split(/\s+/u).filter((name) => name.startsWith('dib-'))
+const sizeFieldNode = sizeTree.nodes.find((node) => node.props?.['data-dib-field'] === 'size')
+const sizeFieldOrder = tagOrderOf(sizeFieldNode)
+const sizeFieldLabel = (() => {
+  let found
+  walk(sizeFieldNode, (item) => {
+    if (found === undefined && item !== null && typeof item === 'object' && item.type === 'label') found = item
+  })
+  return found
+})()
+check(
+  '「默认尺寸」的标签在控件上方（field 内独立 label，文档顺序在下拉之前）且仍与下拉关联',
+  sizeFieldOrder[0] === 'div'
+    && sizeFieldOrder[1] === 'label'
+    && sizeFieldOrder.indexOf('select') > sizeFieldOrder.indexOf('label')
+    && sizeFieldOrder.lastIndexOf('label') < sizeFieldOrder.indexOf('select')
+    && sizeFieldLabel?.props?.htmlFor === 'dib-size'
+    && selectById(sizeTree, SIZE_SELECT)?.props?.id === 'dib-size'
+    // field 是纵向排列（标签在上、控件在下），而不是把两者并排放在一个行内盒子里。
+    && styles.map((style) => style.textContent).join('').includes('.dib-field{display:flex;flex-direction:column;'),
+  JSON.stringify({ order: sizeFieldOrder.slice(0, 6), htmlFor: sizeFieldLabel?.props?.htmlFor ?? null }).slice(0, 200),
+)
+check(
+  '默认尺寸与路由字段共用同一套 field 结构/类名（不会再退回左侧内联）',
+  dibClassesOf(sizeFieldNode).includes('dib-field')
+    && dibClassesOf(slotGroupOf(sizeTree, 'generate.primary')?.props?.children?.[0]).includes('dib-field')
+    && tagOrderOf(sizeFieldNode).slice(0, 2).join(',') === tagOrderOf(slotGroupOf(sizeTree, 'generate.primary')?.props?.children?.[0]).slice(0, 2).join(',')
+    && sizeTree.nodes.every((node) => node.props?.className !== 'dib-defaults'),
+  JSON.stringify({ size: dibClassesOf(sizeFieldNode), route: dibClassesOf(slotGroupOf(sizeTree, 'generate.primary')?.props?.children?.[0]) }),
+)
+check(
+  '「保存尺寸」与下拉同处一行（同一 controls 容器 + 可换行），不与下拉抢宽度',
+  (() => {
+    const controls = (sizeFieldNode?.props?.children ?? []).find((child) => child?.props?.className === 'dib-size-controls')
+    const order = tagOrderOf(controls)
+    return controls !== undefined
+      && order.includes('select')
+      && order.includes('button')
+      && order.indexOf('button') > order.indexOf('select')
+      && styles.map((style) => style.textContent).join('').includes('.dib-size-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}')
+  })(),
+  JSON.stringify(sizeFieldOrder.slice(0, 6)),
+)
+
 /* 手填尺寸：选「自定义…」→ 出现文本框 → 保存后 patch.size 就是它 */
 const sizeSaveBundle = sectionWithRecording({ size: '1024x1024' })
 const sizeSession = createSession(sizeSaveBundle.component, {
