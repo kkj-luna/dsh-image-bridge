@@ -1031,6 +1031,67 @@ check(
   JSON.stringify(routesTree.nodes.filter((node) => node.props?.className === 'dib-route-pair').length),
 )
 
+/* ③c 备用两行去掉可见标签，但语义（aria-label）保留 */
+const slotGroupOf = (tree, slot) => tree.nodes.find((node) => node.props?.['data-route-slot'] === slot)
+const labelsIn = (node) => {
+  const found = []
+  walk(node, (item) => {
+    if (item !== null && typeof item === 'object' && item.type === 'label') found.push(item)
+  })
+  return found
+}
+const routeCssText = styles.map((style) => style.textContent).join('')
+check(
+  '两个备用下拉不再有可见标签，但保留等价的 aria-label（视觉删、语义留）',
+  labelsIn(slotGroupOf(routesTree, 'generate.fallback')).length === 0
+    && labelsIn(slotGroupOf(routesTree, 'edit.fallback')).length === 0
+    && selectById(routesTree, ROUTE_SELECTS['generate.fallback'])?.props['aria-label'] === '生图备用模型'
+    && selectById(routesTree, ROUTE_SELECTS['edit.fallback'])?.props['aria-label'] === '修图备用模型'
+    && zhDict['route.generate.fallback'] === '生图备用模型'
+    && zhDict['route.edit.fallback'] === '修图备用模型'
+    && enDict['route.generate.fallback'] === 'Image fallback model'
+    && enDict['route.edit.fallback'] === 'Edit fallback model',
+  JSON.stringify({
+    generate: selectById(routesTree, ROUTE_SELECTS['generate.fallback'])?.props['aria-label'] ?? null,
+    edit: selectById(routesTree, ROUTE_SELECTS['edit.fallback'])?.props['aria-label'] ?? null,
+    labels: labelsIn(slotGroupOf(routesTree, 'generate.fallback')).length,
+  }).slice(0, 220),
+)
+check(
+  '两个主用下拉仍然带可见标签，并指向自己的下拉',
+  labelsIn(slotGroupOf(routesTree, 'generate.primary')).some((label) => label.props?.htmlFor === ROUTE_SELECTS['generate.primary'])
+    && labelsIn(slotGroupOf(routesTree, 'edit.primary')).some((label) => label.props?.htmlFor === ROUTE_SELECTS['edit.primary']),
+  JSON.stringify(labelsIn(slotGroupOf(routesTree, 'generate.primary')).map((label) => label.props?.htmlFor ?? null)),
+)
+check(
+  '删标签后收紧间隙：备用行没有空标签行，上内边距被收掉，对间分隔仍在',
+  labelsIn(slotGroupOf(routesTree, 'generate.fallback')).length === 0
+    && routeCssText.includes('.dib-routes .dib-route-fallback{padding-top:0}')
+    && routeCssText.includes('.dib-route-pair+.dib-route-pair{margin-top:'),
+  JSON.stringify({
+    tightened: routeCssText.includes('.dib-routes .dib-route-fallback{padding-top:0}'),
+    pairGap: routeCssText.includes('.dib-route-pair+.dib-route-pair{margin-top:'),
+  }),
+)
+/* 把 t 换成英文词典渲染一遍：aria-label 与空选项必须跟着语言包走，不能是硬编码中文 */
+const enRoutesTree = treeOf(invoke(routesBundle.component, {
+  t: (key) => enDict[key] ?? key,
+  close: () => {},
+  __initial: { phase: 'idle', providers: [zhipuFull, openaiProvider], activeProviderId: 'zhipu' },
+}).element)
+check(
+  '备用下拉的 aria-label 与四个空选项都走语言包（英文环境下是英文）',
+  selectById(enRoutesTree, ROUTE_SELECTS['generate.fallback'])?.props['aria-label'] === 'Image fallback model'
+    && selectById(enRoutesTree, ROUTE_SELECTS['edit.fallback'])?.props['aria-label'] === 'Edit fallback model'
+    && optionTextAt(selectById(enRoutesTree, ROUTE_SELECTS['generate.primary']), 0) === 'Primary model'
+    && optionTextAt(selectById(enRoutesTree, ROUTE_SELECTS['generate.fallback']), 0) === 'Fallback model'
+    && hintTextOf(enRoutesTree, `${ROUTE_SELECTS['generate.primary']}-hint`) === 'Used first when the tools call the API.',
+  JSON.stringify({
+    aria: selectById(enRoutesTree, ROUTE_SELECTS['generate.fallback'])?.props['aria-label'] ?? null,
+    empty: optionTextAt(selectById(enRoutesTree, ROUTE_SELECTS['generate.primary']), 0),
+  }).slice(0, 200),
+)
+
 /* ④ 没有任何已连接的模型时：四个下拉禁用 + 一行提示 */
 const noConnectedTree = routesPageWith(routesBundle, { providers: [{ ...providerRecord, models: [] }] })
 check(

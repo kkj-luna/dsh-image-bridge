@@ -486,6 +486,8 @@ window.__ModuleLoader__.load({
       '.dib-route-pair+.dib-route-pair{margin-top:14px;padding-top:6px;border-top:0.5px solid var(--dsw-alias-border-l2)}',
       '.dib-routes .dib-field{padding:4px 0}',
       '.dib-route-pair .dib-field+.dib-field{border-top:none}',
+      /* 备用那行没有可见标签，上内边距一并收掉，主用的说明小字与它紧邻。 */
+      '.dib-routes .dib-route-fallback{padding-top:0}',
       '.dib-toggle-row{display:flex;align-items:center;gap:8px;padding:8px 0}',
       /* 全局默认值 */
       '.dib-defaults{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:16px;padding-top:16px;border-top:0.5px solid var(--dsw-alias-border-l2)}',
@@ -1961,41 +1963,52 @@ window.__ModuleLoader__.load({
         const inputId = `${selectId}-manual`
         const selected = routeItemOf(id)
         const fallbackSlot = id.endsWith('.fallback')
-        const nodes = [h('div', { key: 'field', className: 'dib-field' }, [
-          h('label', { key: 'label', className: 'dib-label', htmlFor: selectId }, tr(`route.${id}`)),
-          h('select', {
-            key: 'select',
-            id: selectId,
-            className: 'dib-input dib-select',
-            'data-dib-route': id,
-            value: manual ? MANUAL_MODEL_VALUE : routeValueOf(route.providerId, route.model),
-            disabled: disabled || !hasConnected,
-            onChange: (event) => {
-              const next = event !== null && event.target !== null && typeof event.target.value === 'string' ? event.target.value : ''
-              if (next === MANUAL_MODEL_VALUE) {
-                patchRoute(id, { manual: true })
-                return
-              }
-              const picked = splitRouteValue(next)
-              patchRoute(id, { manual: false, providerId: picked.providerId, model: picked.model })
-            },
-          }, [
-            h('option', { key: 'unset', value: '' }, fallbackSlot ? tr('route.noFallback') : tr('route.unset')),
-            ...groupsFor(id).map((group) => h('optgroup', {
-              key: `g:${group.provider.id}`,
-              label: group.provider.label !== '' ? group.provider.label : group.provider.id,
-            }, group.models.map((model) => h('option', {
-              key: `${group.provider.id}:${model}`,
-              value: routeValueOf(group.provider.id, model),
-              'data-provider': group.provider.id,
-              'data-model': model,
-            }, model)))),
-            h('option', { key: 'manual', value: MANUAL_MODEL_VALUE }, tr('manualOption')),
-          ]),
-          h('p', { key: 'hint', id: `${selectId}-hint`, className: 'dib-field-hint' }, manual
-            ? `${tr('route.manualHint')}：${activeLabel}`
-            : fallbackSlot ? tr('route.fallbackHint') : tr('route.primaryHint')),
-        ])]
+        /*
+         * 备用那一行的可见标签被去掉了（下拉的空选项本身就写着「备用模型」，标签是重复的），
+         * 因此它必须带一个等价的 aria-label——**视觉上删掉、语义上保留**，读屏依旧能把
+         * 两个备用下拉和主用下拉区分开。文案照旧走语言包。
+         */
+        const fieldNodes = []
+        if (!fallbackSlot) fieldNodes.push(h('label', { key: 'label', className: 'dib-label', htmlFor: selectId }, tr(`route.${id}`)))
+        fieldNodes.push(h('select', {
+          key: 'select',
+          id: selectId,
+          className: 'dib-input dib-select',
+          'data-dib-route': id,
+          ...(fallbackSlot ? { 'aria-label': tr(`route.${id}`) } : {}),
+          'aria-describedby': `${selectId}-hint`,
+          value: manual ? MANUAL_MODEL_VALUE : routeValueOf(route.providerId, route.model),
+          disabled: disabled || !hasConnected,
+          onChange: (event) => {
+            const next = event !== null && event.target !== null && typeof event.target.value === 'string' ? event.target.value : ''
+            if (next === MANUAL_MODEL_VALUE) {
+              patchRoute(id, { manual: true })
+              return
+            }
+            const picked = splitRouteValue(next)
+            patchRoute(id, { manual: false, providerId: picked.providerId, model: picked.model })
+          },
+        }, [
+          h('option', { key: 'unset', value: '' }, fallbackSlot ? tr('route.noFallback') : tr('route.unset')),
+          ...groupsFor(id).map((group) => h('optgroup', {
+            key: `g:${group.provider.id}`,
+            label: group.provider.label !== '' ? group.provider.label : group.provider.id,
+          }, group.models.map((model) => h('option', {
+            key: `${group.provider.id}:${model}`,
+            value: routeValueOf(group.provider.id, model),
+            'data-provider': group.provider.id,
+            'data-model': model,
+          }, model)))),
+          h('option', { key: 'manual', value: MANUAL_MODEL_VALUE }, tr('manualOption')),
+        ]))
+        fieldNodes.push(h('p', { key: 'hint', id: `${selectId}-hint`, className: 'dib-field-hint' }, manual
+          ? `${tr('route.manualHint')}：${activeLabel}`
+          : fallbackSlot ? tr('route.fallbackHint') : tr('route.primaryHint')))
+        const nodes = [h('div', {
+          key: 'field',
+          // 备用行少了一行标签，上内边距一并收掉，免得留出突兀的空隙。
+          className: fallbackSlot ? 'dib-field dib-route-fallback' : 'dib-field',
+        }, fieldNodes)]
         if (manual) {
           nodes.push(field(inputId, tr('manualOption'), `${tr('route.manualHint')}：${activeLabel}`, typeof route.manualText === 'string' ? route.manualText : '', disabled, (value) => patchRoute(id, { manualText: value }), {
             placeholder: id.startsWith('generate') ? tr('imageModel.placeholder') : tr('editModel.placeholder'),
