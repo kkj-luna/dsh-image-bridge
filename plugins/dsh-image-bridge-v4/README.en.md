@@ -268,10 +268,10 @@ dsh-image-bridge-v4/
 └── icon.svg            Plugin icon
 ```
 
-The regression suites live in `.dib-verify/` at the repository root. They need **no network and no real key**, and total 376 assertions:
+The regression suites live in `.dib-verify/` at the repository root. They need **no network and no real key**, and total 380 assertions:
 
 ```bash
-node .dib-verify/verify-manifest.mjs   # 36
+node .dib-verify/verify-manifest.mjs   # 40
 node .dib-verify/verify-client.mjs     # 157
 node .dib-verify/verify-host.mjs       # 139
 node .dib-verify/verify-security.mjs   # 12
@@ -297,3 +297,6 @@ Related documents:
 | [Repository README](../../README.md) | Project overview, quick start, test commands |
 | [verify-report.md](../../.dib-verify/verify-report.md) | Independent verification report for the multi-provider rework |
 | [verify-report-2.md](../../.dib-verify/verify-report-2.md) | Independent verification report on rename safety, the dropdown rework, the empty state, and navigation-icon claiming |
+
+License: [MIT](LICENSE).
+

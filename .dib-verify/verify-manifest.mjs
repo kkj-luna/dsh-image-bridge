@@ -58,6 +58,24 @@ check(
 )
 check('files 列出了运行所需文件', ['index.js', 'client.js', 'cordis.patch.yml', 'locale', 'icon.svg'].every((entry) => manifest.files?.includes(entry)), JSON.stringify(manifest.files))
 
+/*
+ * 许可：声明、协议全文、README 三处必须一致。这三处不同步的后果不是报错，
+ * 而是别人不知道该按什么条款使用——所以宁可在这里红。
+ */
+check('package.json 声明了 MIT 许可', manifest.license === 'MIT', String(manifest.license))
+const licenseText = await readFile(join(ROOT, 'LICENSE'), 'utf8').catch(() => '')
+check(
+  '插件目录内有 MIT 协议全文',
+  licenseText.includes('MIT License') && licenseText.includes('WITHOUT WARRANTY OF ANY KIND'),
+  licenseText === '' ? 'LICENSE 文件不存在或读不到' : licenseText.slice(0, 60),
+)
+check('files 列出了 LICENSE（发布时带上协议）', manifest.files?.includes('LICENSE') === true, JSON.stringify(manifest.files))
+check(
+  'README 提到 MIT 并链接到 LICENSE',
+  /MIT/u.test(await readFile(join(ROOT, 'README.md'), 'utf8').catch(() => '')) && /MIT/u.test(await readFile(join(ROOT, 'README.en.md'), 'utf8').catch(() => '')),
+  '中英两份 README 都要写许可',
+)
+
 /* ---------------------------------------------- bundle patch */
 
 check('声明了 dsh.bundle.patch', manifest.dsh?.bundle?.patch === './cordis.patch.yml', String(manifest.dsh?.bundle?.patch))

@@ -74,7 +74,7 @@ dsh plugin --profile web add <本仓库绝对路径>/plugins/dsh-image-bridge-v4
 ## 测试
 
 ```sh
-node .dib-verify/verify-manifest.mjs   # 36   清单与跨文件一致性
+node .dib-verify/verify-manifest.mjs   # 40   清单与跨文件一致性
 node .dib-verify/verify-client.mjs     # 157  客户端注册与组件渲染
 node .dib-verify/verify-host.mjs       # 139  Host 端到端
 node .dib-verify/verify-security.mjs   # 12   安全边界（SSRF 拒收、回包上限）
@@ -82,7 +82,7 @@ node .dib-verify/verify-resolve.mjs    # 8    依赖解析健壮性
 node .dib-verify/verify-upgrade.mjs    # 24   升级后用户配置是否保留
 ```
 
-共 **376 条断言**，无需联网、无需真实密钥。跨进程端到端另需先起一个本地模拟接口：
+共 **380 条断言**，无需联网、无需真实密钥。跨进程端到端另需先起一个本地模拟接口：
 
 ```sh
 node .dib-verify/mock-image-api.mjs 8799   # 另开一个终端
@@ -112,3 +112,8 @@ generated-images/              生图输出（已忽略，不入库）
 | --- | --- |
 | [插件完整说明](plugins/dsh-image-bridge-v4/README.md) | 配置项、行为细节、排查、实现要点 |
 | [验证报告](.dib-verify/verify-report.md) · [第二轮](.dib-verify/verify-report-2.md) | 独立验证结论（含未覆盖范围） |
+
+## 许可
+
+[MIT](LICENSE)
+

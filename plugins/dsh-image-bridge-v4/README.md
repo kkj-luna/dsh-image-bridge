@@ -286,10 +286,10 @@ dsh-image-bridge-v4/
 └── icon.svg            插件图标
 ```
 
-回归测试在仓库根目录的 `.dib-verify/`，**无需联网、无需真实密钥**，共 376 条断言：
+回归测试在仓库根目录的 `.dib-verify/`，**无需联网、无需真实密钥**，共 380 条断言：
 
 ```bash
-node .dib-verify/verify-manifest.mjs   # 36
+node .dib-verify/verify-manifest.mjs   # 40
 node .dib-verify/verify-client.mjs     # 157
 node .dib-verify/verify-host.mjs       # 139
 node .dib-verify/verify-security.mjs   # 12
@@ -315,3 +315,6 @@ node .dib-verify/verify-cross.mjs
 | [仓库根 README](../../README.md) | 项目简介、快速开始、测试命令 |
 | [verify-report.md](../../.dib-verify/verify-report.md) | 多提供商改造的独立验证报告 |
 | [verify-report-2.md](../../.dib-verify/verify-report-2.md) | 改名安全性、下拉重构、空状态、导航认领的独立验证报告 |
+
+许可：[MIT](LICENSE)。
+
