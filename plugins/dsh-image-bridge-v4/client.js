@@ -400,6 +400,13 @@ window.__ModuleLoader__.load({
       /* 设置页骨架 */
       '.dib-cfg{display:flex;flex-direction:column;max-width:640px}',
       '.dib-cfg-intro{margin:0 0 4px;font-size:13px;line-height:1.6;color:var(--dsw-alias-label-secondary)}',
+      /* 页头：形态对齐官方「插件市场」页（图标 + 标题 + 等宽徽标，第二行副标题） */
+      '.dib-page-head{display:flex;flex-direction:column;gap:6px;margin:0 0 4px}',
+      '.dib-page-title-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}',
+      '.dib-page-glyph{flex:0 0 auto;color:var(--dsw-alias-label-primary)}',
+      '.dib-page-title{margin:0;font-size:20px;font-weight:500;line-height:28px;color:var(--dsw-alias-label-primary)}',
+      '.dib-page-badge{border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary);padding:0 6px;font-size:11px;line-height:18px;white-space:nowrap;font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}',
+      '.dib-page-sub{margin:0}',
       '.dib-field{display:flex;flex-direction:column;gap:6px;padding:12px 0}',
       '.dib-field+.dib-field{border-top:0.5px solid var(--dsw-alias-border-l2)}',
       '.dib-label{font-size:13px;font-weight:500;line-height:1.5;color:var(--dsw-alias-label-primary)}',
@@ -1006,6 +1013,30 @@ window.__ModuleLoader__.load({
 
     /** 主模型超时的默认值（毫秒），与 Host 侧 Config 的默认值一致。 */
     const DEFAULT_FALLBACK_MS = 15000
+
+    /*
+     * 页头徽标上的包名与版本。
+     *
+     * 这两行必须与 package.json 的 `name` / `version` 逐字一致——客户端模块拿不到清单，
+     * 只能写成常量，所以验收里有一条断言专门盯"改版本忘了同步"。
+     */
+    const PACKAGE_NAME = '@local/image-bridge-v4'
+    const PACKAGE_VERSION = '0.1.0'
+
+    /**
+     * 页头图标的图形数据。
+     *
+     * 与 `icon.svg` **同源**：同一套 rect / circle / path 数据，这里用 React 元素内联画出来
+     * （不引外部图片）。验收里有一条跨文件一致性断言，比对这两处的关键数据防止跑偏。
+     */
+    const GLYPH_SHAPES = [
+      { type: 'rect', props: { x: 3, y: 4, width: 18, height: 16, rx: 3 } },
+      { type: 'circle', props: { cx: 8.2, cy: 8.8, r: 1.5 } },
+      { type: 'path', props: { d: 'M4.6 16.6h14.8' } },
+      { type: 'path', props: { d: 'M7.6 16.6c0-2.5 1.9-4.2 4.4-4.2s4.4 1.7 4.4 4.2' } },
+      { type: 'path', props: { d: 'M7.6 16.6V20' } },
+      { type: 'path', props: { d: 'M16.4 16.6V20' } },
+    ]
 
     /**
      * 默认尺寸的常用预设。
@@ -2163,8 +2194,38 @@ window.__ModuleLoader__.load({
         ]),
       ])
 
+      /*
+       * 页头：与官方「插件市场」页同一形态 —— 第一行 [单色图标] 标题 [包名 版本 徽标]，
+       * 第二行是原来那句说明（副标题）。图标是内联 SVG：只用 currentColor，随主题着色，
+       * 不引外部图片、不硬编码颜色。
+       */
+      const pageGlyph = h('svg', {
+        key: 'glyph',
+        className: 'dib-page-glyph',
+        viewBox: '0 0 24 24',
+        width: 20,
+        height: 20,
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 1.7,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': 'true',
+        focusable: 'false',
+      }, GLYPH_SHAPES.map((shape, index) => h(shape.type, { key: `${shape.type}-${index}`, ...shape.props })))
+
+      const pageHead = h('header', { key: 'pageHead', className: 'dib-page-head' }, [
+        h('div', { key: 'titleRow', className: 'dib-page-title-row' }, [
+          pageGlyph,
+          h('h2', { key: 'title', className: 'dib-page-title' }, tr('nav')),
+          // 包名与版本是技术标识，不翻译（zh/en 同一串）。
+          h('code', { key: 'badge', className: 'dib-page-badge', title: `${PACKAGE_NAME} v${PACKAGE_VERSION}` }, `${PACKAGE_NAME}  v${PACKAGE_VERSION}`),
+        ]),
+        h('p', { key: 'subtitle', className: 'dib-cfg-intro dib-page-sub' }, tr('intro')),
+      ])
+
       return h('div', { className: 'dib-cfg' }, [
-        h('p', { key: 'intro', className: 'dib-cfg-intro' }, tr('intro')),
+        pageHead,
         state.providers.length === 0 ? null : h('ul', { key: 'list', className: 'dib-list' }, state.providers.map(cardOf)),
         state.providers.length === 0 ? h('p', { key: 'empty', className: 'dib-field-hint' }, tr('empty')) : null,
         // 提供商保存/删除的反馈落在列表下方（它的动作就在卡片/浮层上）。

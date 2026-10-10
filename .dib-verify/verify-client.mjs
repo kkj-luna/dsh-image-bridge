@@ -951,6 +951,60 @@ check(
   JSON.stringify({ bottom: bottomChildOf(okStatusTree)?.props?.className ?? null, bottomRole: bottomChildOf(okStatusTree)?.props?.role ?? null }).slice(0, 200),
 )
 
+/* 页头：与官方「插件市场」页同形态 —— 第一行 [单色图标] 标题 [包名 版本]，第二行副标题 */
+const headerTree = pageWith(cardBundle, { providers: [providerRecord], activeProviderId: 'zhipu' })
+const headerNode = headerTree.nodes.find((node) => node.props?.className === 'dib-page-head')
+const headerChildren = (Array.isArray(headerNode?.props?.children) ? headerNode.props.children : []).filter(Boolean)
+const titleRow = headerChildren[0]
+const titleRowChildren = (Array.isArray(titleRow?.props?.children) ? titleRow.props.children : []).filter(Boolean)
+const inlineGlyph = titleRowChildren.find((child) => child?.type === 'svg')
+const manifestJson = JSON.parse(await readFile(`${ROOT}/package.json`, 'utf8'))
+check(
+  '页头第一行：[单色图标] + 「生图桥」标题 + 包名版本徽标，且徽标与 package.json 逐字一致',
+  headerNode !== undefined
+    && titleRowChildren.map((child) => child?.type).join(',') === 'svg,h2,code'
+    && textOfElement(titleRowChildren[1]).trim() === '生图桥'
+    && zhDict['nav'] === '生图桥'
+    && textOfElement(titleRowChildren[2]).trim() === `${manifestJson.name}  v${manifestJson.version}`,
+  JSON.stringify({ row: titleRowChildren.map((child) => child?.type), badge: titleRowChildren[2] === undefined ? null : textOfElement(titleRowChildren[2]).trim() }).slice(0, 220),
+)
+const iconSvgText = await readFile(`${ROOT}/icon.svg`, 'utf8')
+/* 只比对几何数据（stub React 会把 key 留在 props 里，真实 React 不会）。 */
+const GEOMETRY_ATTRS = ['x', 'y', 'width', 'height', 'rx', 'cx', 'cy', 'r', 'd', 'points']
+const glyphChildren = (Array.isArray(inlineGlyph?.props?.children) ? inlineGlyph.props.children : []).filter(Boolean)
+const glyphPairs = glyphChildren.flatMap((shape) => Object.entries(shape.props ?? {})
+  .filter(([name]) => GEOMETRY_ATTRS.includes(name))
+  .map(([name, value]) => `${name}="${value}"`))
+const colorPattern = /#[0-9a-fA-F]{3,8}|rgba?\(|hsla?\(|(^|[^-])(white|black)\b/u
+check(
+  '页头图标是内联单色 SVG：随主题着色、无硬编码颜色，形状数据与 icon.svg 同源',
+  inlineGlyph?.props?.stroke === 'currentColor'
+    && inlineGlyph?.props?.fill === 'none'
+    && glyphChildren.map((shape) => shape.type).join(',') === 'rect,circle,path,path,path,path'
+    && glyphPairs.length >= 10
+    && glyphPairs.every((pair) => iconSvgText.includes(pair))
+    && glyphPairs.every((pair) => !colorPattern.test(pair))
+    && !colorPattern.test(JSON.stringify(inlineGlyph?.props ?? {})),
+  JSON.stringify({ shapes: glyphChildren.map((shape) => shape.type), pairs: glyphPairs.length, missing: glyphPairs.filter((pair) => !iconSvgText.includes(pair)) }).slice(0, 260),
+)
+const cfgNode = headerTree.nodes.find((node) => node.props?.className === 'dib-cfg')
+const cfgChildren = (Array.isArray(cfgNode?.props?.children) ? cfgNode.props.children : []).filter(Boolean)
+const indexOfClassIn = (className) => cfgChildren.findIndex((child) => String(child?.props?.className ?? '').split(/\s+/u).includes(className))
+const headerCssText = styles.map((style) => style.textContent).join('')
+check(
+  '副标题在页头第二行（纵向排列），且既有区块顺序未被破坏：列表 → 模型区块 → 图片尺寸',
+  headerChildren.length === 2
+    && headerChildren[0] === titleRow
+    && String(headerChildren[1]?.props?.className ?? '').includes('dib-page-sub')
+    && textOfElement(headerChildren[1]).trim() === zhDict['intro']
+    && cfgChildren[0] === headerNode
+    && indexOfClassIn('dib-list') > 0
+    && indexOfClassIn('dib-routes') > indexOfClassIn('dib-list')
+    && indexOfClassIn('dib-size-field') > indexOfClassIn('dib-routes')
+    && headerCssText.includes('.dib-page-head{display:flex;flex-direction:column;'),
+  JSON.stringify({ cfg: cfgChildren.map((child) => String(child?.props?.className ?? '').slice(0, 20)) }).slice(0, 260),
+)
+
 /* 编辑面板：字段 + 两个动作按钮 */
 const editorInitial = {
   id: 'zhipu',

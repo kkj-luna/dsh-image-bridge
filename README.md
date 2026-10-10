@@ -43,4 +43,43 @@ node .dib-verify/verify-cross.mjs
 
 - 历史副本（`dsh-image-bridge/`、`image-bridge/`、`plugins/dsh-image-bridge{,-live,-v3}/`）已停止跟踪并写进 `.gitignore`，但**仍留在本机磁盘上**：本机 Harness profile 里可能还有指向它们的 link 依赖，删除磁盘文件会弄坏正在跑的插件。确认不再需要后可以自行删。
 - profile 里可能仍留有早期改名产生的惰性依赖记录，功能无影响。
-- 设置页左侧导航的图标由 Harness 外壳按 section id 硬编码选择（见 `.dib-verify` 报告中的说明），第三方 section 目前一律显示通用齿轮；`icon.svg` 只作用于插件市场/插件清单等读取清单图标的位置。
+- 设置页左侧导航的图标由 Harness 外壳按 section id 硬编码选择，第三方 section 一律显示通用齿轮；`icon.svg` 只作用于插件市场/插件清单等读取清单图标的位置。想让导航里也显示专属字形，只能改外壳（见下一节）。
+
+## 本机外壳补丁：导航里给「生图桥」专属字形
+
+**为什么必须改外壳**：设置页左侧导航的字形不是来自插件清单，而是外壳里一张按 section id 硬编码的查表——`navIcon(id)` 只认 `account` / `models` / `agent-presets` / `plugins` / `archived-sessions`，其它 id 一律回退到通用齿轮。插件的 `package.json` `icon` 管不到导航栏，所以我们这个 section id（`dsh-image-bridge-config`）只加一条映射即可拿到与「插件市场」相同的字形。
+
+- **目标文件**（本机 DSH 安装目录，**不在本仓库里**，也不要提交进来）：
+  `%APPDATA%\npm\node_modules\@deepseek-ai\dsh\node_modules\@deepseek-ai\dsh-client-ui-settings-general\lib\client.js`
+- **改动位置**：`navIcon(id)`（约 243-269 行）里、`plugins` 分支（约 257-260 行）之后，新增一条分支。字形组件用**与 `plugins` 分支完全相同的那一个**：`_deepseek_ai_dsh_client_ui_primitives.IconPersonalizationOutlineMedium`（大小 `size: 16`、类名 `SettingsRoot_module_css_default.navIcon` 也照抄）。
+- **当前状态**：**尚未应用**——本仓库的自动化会话只有工作区写权限，对安装目录的写操作被沙箱拒绝（`Access to the path '…client.js.dib-backup' is denied`）。下面给出可照抄的改法与回滚方式，由具备写权限的一方执行。
+
+补丁内容（在 `plugins` 分支之后插入，缩进是 Tab，与文件里其它分支一致）：
+
+```diff
+ 			if (id === "plugins") return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPersonalizationOutlineMedium, {
+ 				className: SettingsRoot_module_css_default.navIcon,
+ 				size: 16
+ 			});
++			// 本机补丁（生图桥插件作者添加）：给 dsh-image-bridge-config 用与「插件市场」相同的字形。DSH 升级会覆盖本文件，需重新打。
++			if (id === "dsh-image-bridge-config") return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconPersonalizationOutlineMedium, {
++				className: SettingsRoot_module_css_default.navIcon,
++				size: 16
++			});
+ 			if (id === "archived-sessions") return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconArchiveOutlineMedium, {
+```
+
+改法（三步，先备份再改，最后语法自检；PowerShell）：
+
+```powershell
+$f = "$env:APPDATA\npm\node_modules\@deepseek-ai\dsh\node_modules\@deepseek-ai\dsh-client-ui-settings-general\lib\client.js"
+Copy-Item $f "$f.dib-backup" -Force            # 1) 先备份（回滚就靠它）
+# 2) 用编辑器在 plugins 分支后插入上面 diff 里的三行（含注释共 4 行），其余一律不动
+node --check $f                                # 3) 语法自检
+```
+
+- **升级会被覆盖**：`npm i -g @deepseek-ai/dsh` 会重写该文件，补丁丢失，需要按上面的 diff 重新打一次（建议升级后先检查 `navIcon` 里是否还有 `dsh-image-bridge-config` 这一条）。
+- **回滚**：`Copy-Item "$f.dib-backup" $f -Force`（`$f` 同上）；回滚后刷新页面即可。
+- **生效方式**：该文件是按文件从磁盘加载的客户端模块，改完**刷新页面**即可，不需要重启 Harness。
+- **验证边界**：自动化会话**无法在浏览器里确认**导航是否真的换了字形——刷新后的视觉效果必须由用户确认。
+
