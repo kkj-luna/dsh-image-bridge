@@ -79,6 +79,28 @@ check(
 )
 check('包名与目录名各就各位（目录仍是 dsh-image-bridge-v4，改名不动目录）', ROOT.endsWith('dsh-image-bridge-v4'), ROOT)
 
+/*
+ * 默认配置不能指向"某台机器上的服务"。
+ *
+ * 早先 patch 里写着本地验收用的 mock 地址，任何新装插件的人默认都会指向一个不存在的
+ * 服务、第一次生图必然失败。现在 config 段整个删掉，默认值交给 Host 的 schema——
+ * 所以这里断言"生效的 YAML 里既没有 config 段、也没有任何写死的地址"。
+ */
+const patchEffective = patch.split(/\r?\n/u).filter((line) => !/^\s*#/u.test(line)).join('\n')
+check(
+  '插件 patch 不写死任何地址：config 段已删除，默认值交给 Host schema',
+  !/^\s*config:/mu.test(patchEffective)
+    && !/https?:\/\//u.test(patchEffective)
+    && !/127\.0\.0\.1|localhost|192\.168\.|10\.0\./iu.test(patchEffective),
+  JSON.stringify(patchEffective).slice(0, 200),
+)
+check(
+  'Host schema 的默认地址是公开端点（新装用户不会指向本机 mock）',
+  /baseUrl[\s\S]{0,120}?\.default\('https:\/\/api\.openai\.com\/v1'\)/u.test(host)
+    && !/127\.0\.0\.1|localhost/iu.test(host),
+  (/baseUrl[\s\S]{0,120}?\.default\('[^']*'\)/u.exec(host) ?? ['(未找到)'])[0].slice(0, 160),
+)
+
 /* ---------------------------------------------- 跨文件一致性 */
 
 const settingsNs = /const SETTINGS_NS = '([^']+)'/u.exec(client)?.[1] ?? ''

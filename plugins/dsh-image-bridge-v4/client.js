@@ -405,7 +405,10 @@ window.__ModuleLoader__.load({
       '.dib-page-title-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}',
       '.dib-page-glyph{flex:0 0 auto;display:block;color:var(--dsw-alias-label-primary)}',
       '.dib-page-title{margin:0;font-size:20px;font-weight:500;line-height:28px;color:var(--dsw-alias-label-primary)}',
-      '.dib-page-badge{border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary);padding:0 6px;font-size:11px;line-height:18px;white-space:nowrap;font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}',
+      '.dib-page-badge{border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary);padding:0 6px;font-size:11px;line-height:18px;white-space:nowrap;font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Menlo,monospace);text-decoration:none}',
+      /* 可点击的视觉反馈：悬停变亮 + 下划线，键盘焦点给一圈主题焦点环 */
+      '.dib-page-badge:hover{color:var(--dsw-alias-label-primary);text-decoration:underline}',
+      '.dib-page-badge:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
       '.dib-page-sub{margin:0}',
       '.dib-field{display:flex;flex-direction:column;gap:6px;padding:12px 0}',
       '.dib-field+.dib-field{border-top:0.5px solid var(--dsw-alias-border-l2)}',
@@ -1031,13 +1034,20 @@ window.__ModuleLoader__.load({
     const DEFAULT_FALLBACK_MS = 15000
 
     /*
-     * 页头徽标上的包名与版本。
+     * 页头徽标：仓库名 + 版本，整段是一个指向仓库的链接。
      *
-     * 这两行必须与 package.json 的 `name` / `version` 逐字一致——客户端模块拿不到清单，
-     * 只能写成常量，所以验收里有一条断言专门盯"改版本忘了同步"。
+     * - `PACKAGE_NAME` 必须与 package.json 的 `name` 逐字一致（客户端模块拿不到清单，
+     *   只能写成常量，验收里有一条断言专门盯"改版本忘了同步"）；
+     * - 徽标上**不显示 `@local/` 前缀**——那是"从本地目录安装"的约定，对外没有意义
+     *   （插件市场的徽标同样只写 `dsh-market`），所以单独用仓库名常量；
+     * - 仓库地址也只留这一个常量，不在别处散落硬编码。
      */
     const PACKAGE_NAME = '@local/dsh-image-bridge'
     const PACKAGE_VERSION = '0.1.0'
+    /** 徽标上显示的仓库名（去掉 scope 前缀）。 */
+    const REPO_NAME = 'dsh-image-bridge'
+    /** 徽标点击后打开的仓库地址。 */
+    const REPO_URL = 'https://github.com/kkj520/dsh-image-bridge'
 
     /**
      * 页头图标的图形数据。
@@ -2469,7 +2479,12 @@ window.__ModuleLoader__.load({
         const fieldNodes = []
         if (!fallbackSlot) fieldNodes.push(h('label', { key: 'label', className: 'dib-label', htmlFor: selectId }, tr(`route.${id}`)))
         fieldNodes.push(h(Dropdown, {
-          key: 'select',
+          /*
+           * key 用**槽位名**：五个 Dropdown（四个模型槽位 + 尺寸）互不相同、稳定可预测。
+           * 以前三个都写 'select'，同级 key 重复会让 React 的协调行为不确定。
+           */
+          key: `dropdown:${id}`,
+          dropdownKey: `dropdown:${id}`,
           id: selectId,
           /*
            * 占位文案只出现在触发器上，**不进菜单**：这是 task-20 里用户明确要的——列表顶部
@@ -2619,7 +2634,19 @@ window.__ModuleLoader__.load({
           pageGlyph,
           h('h2', { key: 'title', className: 'dib-page-title' }, tr('nav')),
           // 包名与版本是技术标识，不翻译（zh/en 同一串）。
-          h('code', { key: 'badge', className: 'dib-page-badge', title: `${PACKAGE_NAME} v${PACKAGE_VERSION}` }, `${PACKAGE_NAME}  v${PACKAGE_VERSION}`),
+          /*
+           * 徽标：仓库名 + 版本，**整段是一个真实链接**（不是 div+onClick——那样键盘不可达）。
+           * 形态对齐插件市场那一行：等宽、弱化色；`@local/` 前缀不显示（对外无意义）。
+           */
+          h('a', {
+            key: 'badge',
+            className: 'dib-page-badge',
+            href: REPO_URL,
+            target: '_blank',
+            rel: 'noopener noreferrer',
+            title: `${REPO_NAME} v${PACKAGE_VERSION} · ${REPO_URL}`,
+            'aria-label': `${REPO_NAME} v${PACKAGE_VERSION}（在新标签页打开仓库 ${REPO_URL}）`,
+          }, `${REPO_NAME}  v${PACKAGE_VERSION}`),
         ]),
         h('p', { key: 'subtitle', className: 'dib-cfg-intro dib-page-sub' }, tr('intro')),
       ])
@@ -2670,7 +2697,9 @@ window.__ModuleLoader__.load({
              * 既不显示空白，也不改写它。比例只写在选项文案里，value 始终是尺寸本身。
              */
             h(Dropdown, {
-              key: 'select',
+              // 唯一 key：与四个模型槽位的 Dropdown 区分开（见 routeField 里的说明）。
+              key: 'dropdown:size',
+              dropdownKey: 'dropdown:size',
               id: 'dib-size',
               triggerText: sizeIsCustom ? tr('size.custom') : sizeTriggerLabel,
               entries: [
@@ -2792,27 +2821,6 @@ window.__ModuleLoader__.load({
           }))
         } catch (error) {
           report('warn', 'apply 期探测远程命名空间抛错', String(error?.message ?? error))
-        }
-
-        /* 临时诊断：把本插件那一行的设置快照打进日志，确认配置是否真的落到行上。 */
-        try {
-          const snapshotClient = remoteNamespace(ctx, 'settings')
-          if (snapshotClient !== undefined && typeof snapshotClient.describe === 'function') {
-            Promise.resolve(snapshotClient.describe())
-              .then((result) => {
-                const payload = result !== null && typeof result === 'object' && 'value' in result ? result.value : result
-                const list = Array.isArray(payload) ? payload : []
-                const mine = list.filter((row) => row !== null && typeof row === 'object' && row.ns === SETTINGS_NS)
-                report('info', '设置行快照', JSON.stringify({
-                  total: list.length,
-                  namespaces: list.slice(0, 12).map((row) => (row !== null && typeof row === 'object' ? row.ns : null)),
-                  mine: mine.slice(0, 2),
-                }).slice(0, 900))
-              })
-              .catch((error) => report('warn', '设置行快照失败', String(error?.message ?? error)))
-          }
-        } catch (error) {
-          report('warn', '设置行快照抛错', String(error?.message ?? error))
         }
 
         try {

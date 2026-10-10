@@ -44,16 +44,18 @@ plugin_manager  action: install_bundle
 
 ## 三、配置
 
-页面最上面是**页头**（形态对齐官方「插件市场」页）：第一行是 `[单色图标] 生图桥  @local/dsh-image-bridge  v0.1.0`——图标是**内联的单色 SVG**（只用 `currentColor`，随主题着色，形状与 `icon.svg` 同源），标题取语言包的 `nav`，后面的包名与版本是等宽字体徽标；第二行是一句话副标题（只说这页是干什么的；操作步骤交给界面自解释与本文档）：
+页面最上面是**页头**（形态对齐官方「插件市场」页）：第一行是 `[单色图标] 生图桥  dsh-image-bridge  v0.1.0`——图标是**内联的单色 SVG**（只用 `currentColor`，随主题着色，形状与 `icon.svg` 同源），标题取语言包的 `nav`，后面是**等宽、弱化色的仓库徽标**；第二行是一句话副标题（只说这页是干什么的；操作步骤交给界面自解释与本文档）：
 
 ```
-[图标] 生图桥  @local/dsh-image-bridge  v0.1.0
+[图标] 生图桥  dsh-image-bridge  v0.1.0     ← 徽标可点击，整段跳转 GitHub 仓库
 为你的 DeepSeek Harness 接上外部生图模型
 ```
 
 （副标题刻意保持一句话、汉字数不超过 24，并且中英文各一句——验收里有一条长度断言盯着，免得以后又被写成教程；产品名按正确大小写写 `DeepSeek Harness`，英文是 `Connect external image models to your DeepSeek Harness`。）
 
-（包名与版本以常量写在 `client.js` 里，验收脚本会断言它们与 `package.json` 的 `name`/`version` 逐字一致——改版本时两处要一起改；徽标是技术标识，中英文界面显示同一串。）
+**徽标是一个真实链接**：`<a href="https://github.com/kkj520/dsh-image-bridge" target="_blank" rel="noopener noreferrer">`，点击在新标签页打开仓库；悬停时变亮并出现下划线（只用主题令牌），键盘 Tab 可达并有焦点环，`title` / `aria-label` 会说明它打开的是仓库。地址与显示名各是一个常量（`REPO_URL` / `REPO_NAME`），不散落硬编码。
+
+**徽标上不显示 `@local/` 前缀**：那是"从本地目录安装"的约定，对外没有意义（插件市场的徽标同样只写 `dsh-market`），所以只显示仓库名 `dsh-image-bridge`。包名本身仍是 `@local/dsh-image-bridge`，`client.js` 里的 `PACKAGE_NAME` 与 `package.json` 的 `name` 仍要逐字一致（验收有断言盯着"改版本/改名忘了同步"）；版本取 `package.json` 的 `version`，徽标显示 `仓库名  v版本`，中英文界面显示同一串。
 
 **同一个图标也会出现在设置页左侧导航里。** 外壳的导航字形是按 section id 从一张**封闭清单**里挑的（`settings.section` 只投影 `id` / `order` / `label`，注册方没有 icon 可传），所以第三方 section 默认一律是通用齿轮——插件市场也不例外。社区通行的做法是**挂载后认领自己那一行**（参考 `<profile>/node_modules/dshmarket/client/client.js` 的 settings-nav-icon 段，`dsh-better-sidebar`、`dsh-skill-mcp-panel` 同法），本插件用的是同一套办法，因此**随插件分发、所有用户可见**：
 

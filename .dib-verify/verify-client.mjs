@@ -200,6 +200,19 @@ const packageName = JSON.parse(await readFile(`${ROOT}/package.json`, 'utf8')).n
 check('模块以正确的 id 注册（必须等于包名）', loaded?.id === packageName, `id=${loaded?.id} 包名=${packageName}`)
 check('导出 factory 函数', typeof loaded?.factory === 'function', typeof loaded?.factory)
 
+/*
+ * 一次性排查脚手架不许回到源码里。
+ *
+ * 「设置行快照」那条临时诊断用朴素解包，在真实信封下恒打印 total:0，会把排查者带向
+ * "配置丢了"的错误结论（live 日志里就是这个现象）。已删除，这里留一道闸。
+ */
+const clientSource = await readFile(`${ROOT}/client.js`, 'utf8')
+check(
+  '临时诊断「设置行快照」已从源码里清除（不留恒打印 total:0 的误导日志）',
+  !clientSource.includes('设置行快照'),
+  clientSource.includes('设置行快照') ? '源码里仍有 设置行快照' : '',
+)
+
 const plugin = loaded.factory((specifier) => {
   if (specifier === 'react') return React
   throw new Error(`client.js 不应 require 其他模块，实际请求了 ${specifier}`)
@@ -718,7 +731,14 @@ function createSession(component, props) {
     /** 进入一个组件实例：定位/创建它的状态槽，重置 hook 游标。 */
     enter(node, path, fn) {
       const name = typeof node.type.name === 'string' && node.type.name !== '' ? node.type.name : 'anonymous'
-      const key = `${name}#${node.props?.key ?? path}`
+      /*
+       * 状态槽**按树内路径**定位，不再掺 `props.key`。
+       *
+       * 之前用 `${name}#${key ?? path}`：五个 Dropdown 的 key 都叫 'select' 时它们会**共享
+       * 同一份 hook 状态**，断言看起来在验证五个控件、其实只验证了一个。key 修好之后这里
+       * 也一并改成纯路径定位，让断言强度与它看起来的一致。
+       */
+      const key = `${name}#${path}`
       let store = stores.get(key)
       if (store === undefined) {
         store = { hooks: [], index: 0, effects: new Map(), refs: {} }
@@ -1171,22 +1191,56 @@ check(
   JSON.stringify({ bottom: bottomChildOf(okStatusTree)?.props?.className ?? null, bottomRole: bottomChildOf(okStatusTree)?.props?.role ?? null }).slice(0, 200),
 )
 
-/* 页头：与官方「插件市场」页同形态 —— 第一行 [单色图标] 标题 [包名 版本]，第二行副标题 */
+/* 页头：与官方「插件市场」页同形态 —— 第一行 [单色图标] 标题 [仓库 版本]，第二行副标题 */
 const headerTree = pageWith(cardBundle, { providers: [providerRecord], activeProviderId: 'zhipu' })
 const headerNode = headerTree.nodes.find((node) => node.props?.className === 'dib-page-head')
 const headerChildren = (Array.isArray(headerNode?.props?.children) ? headerNode.props.children : []).filter(Boolean)
 const titleRow = headerChildren[0]
 const titleRowChildren = (Array.isArray(titleRow?.props?.children) ? titleRow.props.children : []).filter(Boolean)
 const inlineGlyph = titleRowChildren.find((child) => child?.type === 'svg')
+const badgeNode = titleRowChildren[2]
+const badgeText = badgeNode === undefined ? '' : textOfElement(badgeNode).trim()
 const manifestJson = JSON.parse(await readFile(`${ROOT}/package.json`, 'utf8'))
+/* 徽标显示的仓库名（与 client.js 的 REPO_NAME 一致）：包名去掉 scope 前缀。 */
+const repoName = String(manifestJson.name).replace(/^@[^/]+\//u, '')
+/* 仓库地址常量：与 client.js 的 REPO_URL 一致。 */
+const repoUrl = 'https://github.com/kkj520/dsh-image-bridge'
 check(
-  '页头第一行：[单色图标] + 「生图桥」标题 + 包名版本徽标，且徽标与 package.json 逐字一致',
+  '页头第一行：[单色图标] + 「生图桥」标题 + 仓库徽标（版本与 package.json 逐字一致、不显示 scope 前缀）',
   headerNode !== undefined
-    && titleRowChildren.map((child) => child?.type).join(',') === 'svg,h2,code'
+    && titleRowChildren.map((child) => child?.type).join(',') === 'svg,h2,a'
     && textOfElement(titleRowChildren[1]).trim() === '生图桥'
     && zhDict['nav'] === '生图桥'
-    && textOfElement(titleRowChildren[2]).trim() === `${manifestJson.name}  v${manifestJson.version}`,
-  JSON.stringify({ row: titleRowChildren.map((child) => child?.type), badge: titleRowChildren[2] === undefined ? null : textOfElement(titleRowChildren[2]).trim() }).slice(0, 220),
+    // 版本仍与清单逐字一致；显示名换成仓库名（去掉 @local/），不再逐字等于包名。
+    && badgeNode?.props?.children === `${repoName}  v${manifestJson.version}`
+    && manifestJson.name === '@local/dsh-image-bridge',
+  JSON.stringify({ row: titleRowChildren.map((child) => child?.type), badge: badgeText, version: manifestJson.version }).slice(0, 220),
+)
+check(
+  '① 徽标是真实链接（<a>，键盘可达），href 精确指向仓库',
+  badgeNode?.type === 'a'
+    && badgeNode?.props?.href === repoUrl
+    && badgeNode?.props?.onClick === undefined,
+  JSON.stringify({ type: badgeNode?.type ?? null, href: badgeNode?.props?.href ?? null }).slice(0, 200),
+)
+check(
+  '② 链接在新标签打开且 rel 含 noopener（noreferrer 一并带上）',
+  badgeNode?.props?.target === '_blank'
+    && String(badgeNode?.props?.rel ?? '').split(/\s+/u).includes('noopener')
+    && String(badgeNode?.props?.rel ?? '').split(/\s+/u).includes('noreferrer'),
+  JSON.stringify({ target: badgeNode?.props?.target ?? null, rel: badgeNode?.props?.rel ?? null }).slice(0, 200),
+)
+check(
+  '③ 徽标文案 = 仓库名 + 版本，且**不含** scope 前缀（@local/ 对外无意义）',
+  badgeText === `${repoName}  v${manifestJson.version}`
+    && badgeText.startsWith('dsh-image-bridge')
+    && !badgeText.includes('@local/')
+    && !badgeText.includes(manifestJson.name)
+    && typeof badgeNode?.props?.title === 'string' && badgeNode.props.title.includes(repoUrl)
+    && typeof badgeNode?.props?.['aria-label'] === 'string' && badgeNode.props['aria-label'].includes(repoUrl)
+    // 悬停要有可点击的视觉反馈，且只用主题令牌
+    && /\.dib-page-badge:hover\{[^}]*var\(--dsw-/u.test(styles.map((style) => style.textContent).join('')),
+  JSON.stringify({ badge: badgeText, title: badgeNode?.props?.title ?? null }).slice(0, 220),
 )
 const iconSvgText = await readFile(`${ROOT}/icon.svg`, 'utf8')
 /* 只比对几何数据（stub React 会把 key 留在 props 里，真实 React 不会）。 */
@@ -2664,6 +2718,50 @@ check(
       && triggerTextOf(tree, ROUTE_SELECTS['generate.fallback']) !== firstModel
   })(),
   JSON.stringify({ trigger: triggerTextOf(routesPageWith(routesBundle, {}), ROUTE_SELECTS['generate.fallback']) }).slice(0, 160),
+)
+
+/*
+ * 五个 Dropdown（四个模型槽位 + 尺寸）的 key 必须稳定且互不重复。
+ *
+ * 以前它们都传 key='select'：React 要求同级 key 唯一，重复 key 会让协调行为不确定；
+ * 我的桩渲染器当时也因此把它们当成同一个组件实例、共享一份 hook 状态。
+ */
+const dropdownNodesOf = (tree) => tree.nodes.filter((node) => Array.isArray(node.props?.entries) && typeof node.props?.id === 'string')
+const duplicateSiblingKeysOf = (tree) => {
+  const bad = []
+  for (const node of tree.nodes) {
+    const children = (Array.isArray(node.props?.children) ? node.props.children : []).filter((child) => child !== null && typeof child === 'object')
+    const seen = new Set()
+    for (const child of children) {
+      const key = child.props?.key
+      if (key === undefined) continue
+      if (seen.has(key)) bad.push(`${String(node.props?.className ?? node.type)}>${String(key)}`)
+      seen.add(key)
+    }
+  }
+  return bad
+}
+const keyFiveTree = routesPageWith(routesBundle, { size: '1024x1024' })
+check(
+  '五个 Dropdown 的 key 稳定且互不重复（生图主/备用、修图主/备用、尺寸），同级也不再有重复 key',
+  (() => {
+    const dropdowns = dropdownNodesOf(keyFiveTree)
+    const expected = 'dropdown:generate.primary,dropdown:generate.fallback,dropdown:edit.primary,dropdown:edit.fallback,dropdown:size'
+    // 真正传给 React 的 key（桩渲染器保留了它）——这才是 T-1 要修的东西，必须逐字对上。
+    const reactKeys = dropdowns.map((node) => String(node.props.key ?? ''))
+    // 同名 prop：真实 React 会把 key 从 props 里剥掉，留一份可读的标识给断言与调试用。
+    const labels = dropdowns.map((node) => String(node.props.dropdownKey ?? ''))
+    return dropdowns.length === 5
+      && reactKeys.join(',') === expected
+      && new Set(reactKeys).size === 5
+      && labels.join(',') === expected
+      && duplicateSiblingKeysOf(keyFiveTree).length === 0
+  })(),
+  JSON.stringify({
+    reactKeys: dropdownNodesOf(keyFiveTree).map((node) => node.props.key ?? null),
+    labels: dropdownNodesOf(keyFiveTree).map((node) => node.props.dropdownKey ?? null),
+    duplicates: duplicateSiblingKeysOf(keyFiveTree),
+  }).slice(0, 300),
 )
 
 /* 硬约束：主题令牌与双语文案 */

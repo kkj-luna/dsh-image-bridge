@@ -1,10 +1,12 @@
 # 生图桥 bundle patch：把插件挂进 profile 层栈。
-# 用户可在此行同 id 覆盖 config（Web 设置页写入的也是同一处）。
+# 用户可在 profile 里同 id 覆盖 config（Web 设置页写入的也是同一行）。
 #
 # 行 id 同时就是设置命名空间：客户端的 SETTINGS_NS 必须与它一致。
+#
+# 这里**故意不写 config**：让 Host 侧 Config 的 schema 默认值生效
+# （baseUrl 默认 https://api.openai.com/v1、model 默认 gpt-image-1、size 默认 1024x1024）。
+# 早先这里塞过本地验收用的 mock 地址（本机回环上的 8799 端口），那会让新装的人默认指向
+# 一个不存在的服务、第一次生图必然失败——所以默认值一律交给 schema，包内不写死任何地址。
 - insert:
     - id: image-bridge-v4
       name: '@local/dsh-image-bridge'
-      config:
-        baseUrl: 'http://127.0.0.1:8799/v1'
-        model: 'gpt-image-1'
