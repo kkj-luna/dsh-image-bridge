@@ -578,7 +578,13 @@ function sectionWithRecording(settingsValue, options) {
   const describedRefs = []
   const settings = {
     describe: async () => ({ ok: true, value: { writable: true, namespaces: [{ ns: 'image-bridge-v4', value: settingsValue, revision: 1 }] } }),
-    update: async (ns, patch, revision) => { updates.push({ ns, patch, revision }); return { ok: true, value: {} } },
+    update: async (ns, patch, revision) => {
+      updates.push({ ns, patch, revision })
+      // `updateFails` 用来验证"失败提示仍然显示"（成功提示已经不渲染了）。
+      return opts.updateFails === true
+        ? { ok: false, error: { code: 'write-rejected', message: opts.updateError ?? '保存失败：配置不可写' } }
+        : { ok: true, value: {} }
+    },
   }
   const credentials = {
     describe: async (refs) => {
@@ -726,6 +732,100 @@ check(
   dotClassOf(persistedTree) === 'dib-dot dib-dot-ok'
     && persistedTree.nodes.some((node) => node.props?.['aria-label'] === '已获取到可用模型列表'),
   JSON.stringify({ persisted: dotClassOf(persistedTree) }),
+)
+
+/* 名称下方的状态小字：与状态灯同源（同一个 providerSignalOf） */
+const cardStatusTextOf = (tree) => {
+  const node = tree.nodes.find((entry) => entry.props?.className === 'dib-card-status')
+  return node === undefined ? '' : textOfElement(node).trim()
+}
+const cardStatusClassOf = (tree) => tree.nodes.find((entry) => entry.props?.className === 'dib-card-status')?.props?.className ?? ''
+check(
+  '卡片名称下方是状态小字：已连接 / 连接失败 / 未测试（灰点也有解释）',
+  cardStatusTextOf(cardTree) === '已连接'
+    && cardStatusTextOf(failTree) === '连接失败'
+    && cardStatusTextOf(idleTree) === '未测试'
+    && cardStatusTextOf(persistedTree) === '已连接',
+  JSON.stringify({ ok: cardStatusTextOf(cardTree), fail: cardStatusTextOf(failTree), idle: cardStatusTextOf(idleTree) }).slice(0, 200),
+)
+check(
+  '状态小字是独立的弱化类（与名称不同类），且 zh/en 词典都有这三条文案',
+  cardStatusClassOf(cardTree) === 'dib-card-status'
+    && cardStatusClassOf(cardTree) !== 'dib-card-name'
+    && zhDict['provider.status.ok'] === '已连接'
+    && zhDict['provider.status.fail'] === '连接失败'
+    && zhDict['provider.status.untested'] === '未测试'
+    && enDict['provider.status.ok'] === 'Connected'
+    && enDict['provider.status.fail'] === 'Connection failed'
+    && enDict['provider.status.untested'] === 'Not tested',
+  JSON.stringify({ cls: cardStatusClassOf(cardTree), zh: zhDict['provider.status.ok'], en: enDict['provider.status.ok'] }).slice(0, 200),
+)
+check(
+  '状态小字与状态灯同源：四种情形下点色与文案一一对应，不会出现「绿点写着连接失败」',
+  (() => {
+    const pairs = [
+      [cardTree, 'dib-dot dib-dot-ok', '已连接'],
+      [failTree, 'dib-dot dib-dot-fail', '连接失败'],
+      [idleTree, 'dib-dot', '未测试'],
+      [persistedTree, 'dib-dot dib-dot-ok', '已连接'],
+    ]
+    return pairs.every(([tree, dot, text]) => dotClassOf(tree) === dot && cardStatusTextOf(tree) === text)
+      // 反向也钉一下：红灯不能写"已连接"、绿灯不能写"连接失败"。
+      && cardStatusTextOf(failTree) !== '已连接'
+      && cardStatusTextOf(cardTree) !== '连接失败'
+  })(),
+  JSON.stringify({ ok: `${dotClassOf(cardTree)}/${cardStatusTextOf(cardTree)}`, fail: `${dotClassOf(failTree)}/${cardStatusTextOf(failTree)}`, idle: `${dotClassOf(idleTree)}/${cardStatusTextOf(idleTree)}` }).slice(0, 220),
+)
+check(
+  '状态小字就在名称下方（同一个 identity 列里、紧随名称之后）',
+  (() => {
+    const identity = cardTree.nodes.find((node) => node.props?.className === 'dib-card-identity')
+    const children = Array.isArray(identity?.props?.children) ? identity.props.children : []
+    return children.length === 2
+      && children[0]?.props?.className === 'dib-card-name'
+      && children[1]?.props?.className === 'dib-card-status'
+  })(),
+  JSON.stringify(cardTextOf(cardTree)).slice(0, 160),
+)
+
+/* 底部状态行：成功不渲染，失败仍然显示 */
+const saveSizeButtonOf = (tree) => tree.nodes.find((node) => node.type === 'button' && textOfElement(node).trim() === '保存尺寸')
+const statusRowOf = (tree) => tree.nodes.find((node) => node.type === 'p' && node.props?.role === 'status')
+
+const okStatusBundle = sectionWithRecording({ size: '1024x1024' })
+const okStatusSession = createSession(okStatusBundle.component, {
+  t: undefined,
+  close: () => {},
+  __initial: { phase: 'idle', providers: [providerRecord], activeProviderId: 'zhipu', size: '1024x1024' },
+})
+let okStatusTree = okStatusSession.tree()
+okStatusSession.click(saveSizeButtonOf(okStatusTree))
+await sleep(30)
+okStatusTree = okStatusSession.tree()
+check(
+  '保存成功后底部不再渲染那句绿色成功文案（状态行整行不出现）',
+  okStatusSession.tree().text.includes('已保存') === false
+    && statusRowOf(okStatusTree) === undefined
+    && okStatusBundle.updates.length === 1,
+  JSON.stringify({ row: statusRowOf(okStatusTree) === undefined ? null : textOfElement(statusRowOf(okStatusTree)), updates: okStatusBundle.updates.length }),
+)
+
+const failStatusBundle = sectionWithRecording({ size: '1024x1024' }, { updateFails: true, updateError: '保存失败：配置不可写' })
+const failStatusSession = createSession(failStatusBundle.component, {
+  t: undefined,
+  close: () => {},
+  __initial: { phase: 'idle', providers: [providerRecord], activeProviderId: 'zhipu', size: '1024x1024' },
+})
+let failStatusTree = failStatusSession.tree()
+failStatusSession.click(saveSizeButtonOf(failStatusTree))
+await sleep(30)
+failStatusTree = failStatusSession.tree()
+check(
+  '失败时底部仍然显示错误文案（保留"为什么失败"，只是不再报喜）',
+  statusRowOf(failStatusTree) !== undefined
+    && textOfElement(statusRowOf(failStatusTree)).trim() === '保存失败：配置不可写'
+    && String(statusRowOf(failStatusTree)?.props?.className ?? '').includes('dib-status-error'),
+  JSON.stringify({ row: statusRowOf(failStatusTree) === undefined ? null : textOfElement(statusRowOf(failStatusTree)), cls: statusRowOf(failStatusTree)?.props?.className ?? null }).slice(0, 200),
 )
 
 /* 编辑面板：字段 + 两个动作按钮 */

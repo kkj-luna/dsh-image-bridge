@@ -198,6 +198,9 @@ window.__ModuleLoader__.load({
         'dot.fail': '最近一次测试连接失败',
         'dot.untested': '尚未测试连接',
         'dot.connected': '已获取到可用模型列表',
+        'provider.status.ok': '已连接',
+        'provider.status.fail': '连接失败',
+        'provider.status.untested': '未测试',
         'editorAdd': '添加模型提供商',
         'editorEdit': '编辑模型提供商',
         'keyNote': 'API Key 保存在凭据服务里，不会写进配置文件，也不会回传浏览器',
@@ -302,6 +305,9 @@ window.__ModuleLoader__.load({
         'dot.fail': 'The last connection test failed',
         'dot.untested': 'Not tested yet',
         'dot.connected': 'Model list already fetched',
+        'provider.status.ok': 'Connected',
+        'provider.status.fail': 'Connection failed',
+        'provider.status.untested': 'Not tested',
         'editorAdd': 'Add model provider',
         'editorEdit': 'Edit model provider',
         'keyNote': 'The API key lives in the credential service: it is never written to the config file and never sent back to the browser.',
@@ -419,7 +425,10 @@ window.__ModuleLoader__.load({
       '.dib-list{display:flex;flex-direction:column;gap:8px;margin:12px 0 0;padding:0;list-style:none}',
       '.dib-card{border:0.5px solid var(--dsw-alias-settings-card-stroke,var(--dsw-alias-border-l2));background:var(--dsw-alias-settings-card-fill,var(--dsw-alias-bg-layer-2));border-radius:var(--dsw-radius-xl);display:flex;flex-direction:column;gap:10px;padding:12px 14px}',
       '.dib-card-head{display:flex;align-items:center;gap:8px;min-width:0}',
+      '.dib-card-identity{display:flex;flex-direction:column;min-width:0}',
       '.dib-card-name{font-size:14px;font-weight:500;line-height:22px;color:var(--dsw-alias-label-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      /* 状态小字：比名称浅（tertiary）、比名称小，只作解释，不抢名称的位置 */
+      '.dib-card-status{font-size:12px;line-height:16px;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dib-card-tag{flex:none;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-xs);color:var(--dsw-alias-label-secondary);padding:1px 6px;font-size:11px;line-height:16px;white-space:nowrap}',
       '.dib-card-tag-on{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary)}',
       '.dib-card-actions{display:inline-flex;align-items:center;gap:4px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}',
@@ -956,6 +965,14 @@ window.__ModuleLoader__.load({
       if (tested === 'ok') return 'ok'
       return Array.isArray(provider?.models) && provider.models.length > 0 ? 'ok' : 'idle'
     }
+
+    /**
+     * 状态灯对应的文案键。
+     *
+     * 与 `providerSignalOf` 一一对应：点是什么颜色、小字就说什么——两者同源，不会出现
+     * "绿点却写着连接失败"。
+     */
+    const PROVIDER_STATUS_KEYS = { ok: 'provider.status.ok', fail: 'provider.status.fail', idle: 'provider.status.untested' }
 
     /**
      * 分组标题（optgroup label）。
@@ -1877,7 +1894,11 @@ window.__ModuleLoader__.load({
         return h('li', { key: provider.id, className: 'dib-card' }, [
           h('div', { key: 'head', className: 'dib-card-head' }, [
             h('span', { key: 'dot', className: dotClass, title: dotTitle, 'aria-label': dotTitle, role: 'img' }),
-            h('span', { key: 'name', className: 'dib-card-name', title: provider.id }, name),
+            // 名称 + 下方那行状态小字（弱化样式，与点同源）；整体仍是一行卡片。
+            h('div', { key: 'identity', className: 'dib-card-identity' }, [
+              h('span', { key: 'name', className: 'dib-card-name', title: provider.id }, name),
+              h('span', { key: 'status', className: 'dib-card-status' }, tr(PROVIDER_STATUS_KEYS[signal])),
+            ]),
             provider.legacy === true ? h('span', { key: 'legacy', className: 'dib-card-tag' }, tr('legacyTag')) : null,
             h('div', { key: 'actions', className: 'dib-card-actions' }, [
               h('button', {
@@ -2187,7 +2208,15 @@ window.__ModuleLoader__.load({
           ]),
           h('p', { key: 'hint', className: 'dib-field-hint' }, tr('size.hint')),
         ]),
-        state.status === '' ? null : h('p', { key: 'status', className: statusClassOf(state.statusKind), role: 'status' }, state.status),
+        /*
+         * 底部状态行：只报失败。
+         *
+         * 成功的反馈改成"不渲染这一行"（保存/测试成功的绿色文案用户不需要），但**失败必须
+         * 留着**——不然用户不知道哪里出错了。错误文案仍带 statusKind='error' 上色。
+         */
+        state.status === '' || state.statusKind === 'ok'
+          ? null
+          : h('p', { key: 'status', className: statusClassOf(state.statusKind), role: 'status' }, state.status),
       ])
     }
 
