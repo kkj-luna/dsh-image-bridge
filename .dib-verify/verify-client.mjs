@@ -1122,6 +1122,30 @@ check(
   JSON.stringify({ cfg: cfgChildren.map((child) => String(child?.props?.className ?? '').slice(0, 20)) }).slice(0, 260),
 )
 
+/* 副标题是一句话，不是教程：字数封顶，防以后又被写长 */
+const subtitleText = textOfElement(headerChildren[1] ?? {}).trim()
+check(
+  '副标题是一句话：zh 逐字等于约定文案，且不超过 24 个汉字（含标点也 ≤ 26 字）',
+  subtitleText === '接入外部生图模型，为生图与修图各指定一个模型'
+    && zhDict['intro'] === subtitleText
+    && (subtitleText.match(/[\u4e00-\u9fff]/gu) ?? []).length <= 24
+    && subtitleText.length <= 26
+    // 不带句尾句号（与设置页其它说明文案一致），也不再塞括号步骤。
+    && !/[。.]$/u.test(subtitleText)
+    && !/[（(]/u.test(subtitleText),
+  JSON.stringify({ text: subtitleText, cjk: (subtitleText.match(/[\u4e00-\u9fff]/gu) ?? []).length, length: subtitleText.length }).slice(0, 200),
+)
+check(
+  '副标题的英文同样是一句短句（zh/en 两套都有，且不是直译的长句）',
+  typeof enDict['intro'] === 'string'
+    && enDict['intro'] === 'Connect external image models for generation and editing'
+    && enDict['intro'] !== zhDict['intro']
+    && enDict['intro'].length <= 64
+    && !/[。.]$/u.test(enDict['intro'])
+    && !enDict['intro'].includes('('),
+  JSON.stringify({ en: enDict['intro'], length: String(enDict['intro']).length }).slice(0, 200),
+)
+
 /* 编辑面板：字段 + 两个动作按钮 */
 const editorInitial = {
   id: 'zhipu',
