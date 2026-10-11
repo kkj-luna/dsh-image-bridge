@@ -8,6 +8,7 @@
  *     必须等于客户端注册的卡片键。这类不一致不会报错，只会静默失效。
  */
 import { readFile, stat } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { PLUGIN_DIR } from './dsh-paths.mjs'
 
@@ -105,8 +106,11 @@ check(
 /*
  * 版本号的**单一事实来源**是 package.json；CHANGELOG 的首条必须是它。
  * 升版本时少改一处不会有任何报错，只会让人对着两份不同的版本号猜哪个是真的。
+ *
+ * v0.3.0 起 `ROOT`（= 插件包根）就是仓库根，CHANGELOG 也在 `ROOT` 下——
+ * 以前这里写的是 `ROOT/../../CHANGELOG.md`（那时插件在 `plugins/<name>/` 子目录里）。
  */
-const changelog = await readFile(join(ROOT, '..', '..', 'CHANGELOG.md'), 'utf8').catch(() => '')
+const changelog = await readFile(join(ROOT, 'CHANGELOG.md'), 'utf8').catch(() => '')
 const changelogTop = /^##\s+v?([0-9]+\.[0-9]+\.[0-9]+)/mu.exec(changelog)?.[1] ?? ''
 check(
   'CHANGELOG 首条版本 = package.json 的 version',
@@ -133,7 +137,26 @@ check(
   hostExportName !== '' && hostExportName === manifest.name && rowName === manifest.name,
   JSON.stringify({ packageJson: manifest.name, hostExport: hostExportName, patchRow: rowName }),
 )
-check('包名与目录名各就各位（目录仍是 dsh-image-bridge-v4，改名不动目录）', ROOT.endsWith('dsh-image-bridge-v4'), ROOT)
+/*
+ * v0.3.0 起**仓库根就是插件包**——这是"一条命令安装"（`dsh plugin add github:owner/repo`）
+ * 的前提：pnpm 取 git 依赖时只会打**仓库根**那个包，没法指定子目录。
+ *
+ * 所以这条断言从"目录名必须是 dsh-image-bridge-v4"改成钉住**新结构**：
+ * ① 包根（`ROOT`）里必须有 package.json 与挂载声明；
+ * ② 旧的子目录 `plugins/dsh-image-bridge-v4` 不能再存在（留着就会有"两份插件"的歧义：
+ *    一个是包、一个只是目录，改错地方不报错）。
+ */
+check(
+  '插件包根 = 仓库根（v0.3.0 起的一键安装结构），且旧的子目录已移除',
+  existsSync(join(ROOT, 'package.json'))
+    && existsSync(join(ROOT, 'cordis.patch.yml'))
+    && !existsSync(join(ROOT, 'plugins', 'dsh-image-bridge-v4', 'package.json')),
+  JSON.stringify({
+    root: ROOT,
+    hasPackage: existsSync(join(ROOT, 'package.json')),
+    oldDirGone: !existsSync(join(ROOT, 'plugins', 'dsh-image-bridge-v4', 'package.json')),
+  }),
+)
 
 /*
  * 默认配置不能指向"某台机器上的服务"。

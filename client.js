@@ -1158,7 +1158,7 @@ window.__ModuleLoader__.load({
      * - 仓库地址也只留这一个常量，不在别处散落硬编码。
      */
     const PACKAGE_NAME = '@local/dsh-image-bridge'
-    const PACKAGE_VERSION = '0.2.2'
+    const PACKAGE_VERSION = '0.3.0'
     /** 徽标上显示的仓库名（去掉 scope 前缀）。 */
     const REPO_NAME = 'dsh-image-bridge'
     /** 徽标点击后打开的仓库地址。 */

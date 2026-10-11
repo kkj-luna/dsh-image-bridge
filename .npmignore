@@ -1,0 +1,21 @@
+# 打包时的排除项（`files` 白名单已经限定了包含什么，这里是第二道闸）
+#
+# 为什么需要：v0.3.0 起**仓库根就是插件包**（这样 `dsh plugin add github:owner/repo`
+# 一条命令能装），于是 pnpm 打包 git 依赖时会看到整个仓库。这些是仓库资产、不是包内容，
+# 不该跟着进 node_modules：
+#
+# - `.dib-verify/`  验收套件（几十个脚本，只在开发时装）
+# - `docs/`         截图与 logo（手册本身由 `files` 白名单显式包含）
+# - `.ref-*.tmp*`   参考 README 的本地缓存
+# - `.gitignore` 等仓库配置
+.dib-verify/
+docs/settings-zh.png
+docs/settings-en.png
+docs/logo.png
+.gitignore
+.gitattributes
+.ref-*.tmp*
+.refcache-test.tmp
+*.log
+node_modules/
+generated-images/

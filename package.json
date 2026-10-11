@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-image-bridge",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "license": "MIT",
   "description": "生图桥：给没有生图/修图能力的模型接入外部生图模型。在 Web 界面配置 API 与 Key，模型即可直接调用生图/改图能力。",
@@ -20,7 +20,9 @@
     "locale",
     "icon.svg",
     "README.md",
-    "README.en.md",
+    "docs/manual.md",
+    "docs/manual.en.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "dsh": {

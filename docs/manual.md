@@ -1,8 +1,6 @@
-<p align="center"><img src="icon.svg" width="96" alt="生图桥"></p>
-
 # 生图桥 dsh-image-bridge
 
-[English](README.en.md) | 中文
+[仓库门面](../README.md) · [English manual](manual.en.md)
 
 给**没有作图能力的模型**接上外部生图模型。在「设置 → 生图桥」配好至少一家提供商，模型就多出 `image_generate`（生图）与 `image_edit`（改图）两个工具，生成的图片直接显示在对话里。
 
@@ -21,7 +19,7 @@ plugin_manager  action: install_bundle
 
 安装会写成 `link:` 依赖，并把插件行插入 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。**装完重启 `dsh web`**，再打开「设置 → 生图桥」。
 
-包名 `@local/dsh-image-bridge`（`@local/` 是 DSH 对本地自作插件的惯例，不发布到 npm），版本 `0.2.2`。
+包名 `@local/dsh-image-bridge`（`@local/` 是 DSH 对本地自作插件的惯例，不发布到 npm），版本 `0.3.0`。
 
 ### 安装的三种情形
 
@@ -87,7 +85,7 @@ plugin_manager  action: install_bundle
 
 ### 页头
 
-`[图标] 生图桥  dsh-image-bridge  v0.2.2`，下面一句副标题。徽标是 GitHub 仓库链接（新标签页打开），只显示仓库名、不带 `@local/` 前缀；图标随主题着色。
+`[图标] 生图桥  dsh-image-bridge  v0.3.0`，下面一句副标题。徽标是 GitHub 仓库链接（新标签页打开），只显示仓库名、不带 `@local/` 前缀；图标随主题着色。
 
 ### 图标有两个出处（别改错地方）
 
@@ -197,20 +195,25 @@ DSH_IMAGE_BRIDGE_KEY_<ID>     ID = provider.id 转大写、非字母数字一律
 
 ### 目录结构
 
+**v0.3.0 起，仓库根目录就是插件包**——这是"一条命令安装"（`dsh plugin add github:kkj520/dsh-image-bridge`）的前提：pnpm 取 git 依赖时只会打仓库根那个包，没法指定子目录。
+
 ```text
-dsh-image-bridge-v4/
+dsh-image-bridge/           ← 仓库根 = 插件包根
 ├── package.json        清单：bundle patch、dsh.client、图标、显示元数据、files 白名单
 ├── cordis.patch.yml    挂载声明：行 id（= 设置页写入的命名空间）与包名；刻意不写 config
 ├── index.js            Host 半：两个工具、多提供商解析、附件与落盘、test/models/log 通道、启动自述与降级诊断
 ├── client.js           客户端半：自定义工具卡片 + 设置页（页头、卡片、浮层、模型区块、尺寸）
 ├── locale/{zh,en}.json 插件卡片上的显示名与简介
-├── icon.svg            插件图标（蓝底白字，随包分发；几何数据与内联图形同源）
-├── README.md           本文件（中文）
-├── README.en.md        English version（与本文逐节对应）
-└── LICENSE             MIT
+├── icon.svg            插件图标（蓝底白图，随包分发；几何数据与内联图标同源）
+├── README.md           仓库门面（GitHub 首页 / npm 页）
+├── docs/manual.md      本文件（完整手册）；README.en.md 与 manual.en.md 是对应英文版
+├── CHANGELOG.md        变更记录
+├── LICENSE             MIT
+├── .npmignore          打包排除项（见下）
+└── .dib-verify/        测试与验收套件（随仓库走，**不进包**）
 ```
 
-不在这份清单里的文件（验收脚本 `.dib-verify/`、变更记录等）属于仓库而不是包本身。
+不在这份清单里的文件属于仓库而不是包本身：`.dib-verify/`（验收套件）、`docs/*.png`（截图与 logo）、`.ref-*.tmp*`（参考 README 的本地缓存）都由 `.npmignore` 挡在包外。装到用户机器上的只有跑起来需要的东西。
 
 ## 使用流程
 
@@ -390,8 +393,8 @@ node .dib-verify/verify-cross.mjs
 
 | 文档 | 内容 |
 | --- | --- |
-| [仓库根 README](../../README.md) | 项目简介、快速开始、测试命令 |
-| [verify-report.md](../../.dib-verify/verify-report.md) | 多提供商改造的独立验证报告 |
-| [verify-report-2.md](../../.dib-verify/verify-report-2.md) | 改名安全性、下拉重构、空状态、导航认领的独立验证报告 |
+| [仓库根 README](../README.md) | 项目简介、快速开始、测试命令 |
+| [verify-report.md](../.dib-verify/verify-report.md) | 多提供商改造的独立验证报告 |
+| [verify-report-2.md](../.dib-verify/verify-report-2.md) | 改名安全性、下拉重构、空状态、导航认领的独立验证报告 |
 
-许可：[MIT](LICENSE)。
+许可：[MIT](../LICENSE)。

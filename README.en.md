@@ -15,18 +15,7 @@ Give a [DeepSeek Harness](https://github.com/deepseek-ai) model that **cannot dr
 
 ## Install
 
-### Recommended: let your agent do it
-
-Open DSH (the web UI), start a new conversation, and send it this:
-
-```text
-Install the plugin in this repository: https://github.com/kkj520/dsh-image-bridge
-Then restart dsh web and confirm that Settings → Image Bridge opens and both tools are registered.
-```
-
-The agent clones the repo, adds the plugin to your profile, restarts, and checks the result — **you never touch a command**. This plugin is not published to npm, so installing it always starts with getting the repo onto your machine; letting the agent handle that step is the least work.
-
-### Doing it yourself
+### One command (recommended)
 
 Requires a local `@deepseek-ai/dsh` (a working `dsh web`). If you do not have one:
 
@@ -34,16 +23,37 @@ Requires a local `@deepseek-ai/dsh` (a working `dsh web`). If you do not have on
 npm i -g @deepseek-ai/dsh
 ```
 
-Clone this repo, then install using **the directory you cloned into** (`add` only accepts a local path, which is exactly why the agent instruction above clones first):
+Then:
 
 ```sh
-dsh plugin --profile web add <absolute path to the cloned repo>/plugins/dsh-image-bridge-v4
+dsh plugin --profile web add github:kkj520/dsh-image-bridge
 ```
+
+Restart `dsh web` and open **Settings → Image Bridge**. No cloning, no local path to remember — since v0.3.0 the plugin package root *is* the repository root, which is what makes the `github:` form work.
+
+**Rather not restart by hand?** Let your agent do it — start a new conversation and send this:
+
+```text
+Install this plugin: github:kkj520/dsh-image-bridge
+Then restart dsh web and confirm that Settings → Image Bridge opens and both tools are registered.
+```
+
+The agent installs, restarts, and checks the result for you.
+
+### From a local directory (when developing this plugin)
+
+Clone the repo, then install using **the repository root**:
+
+```sh
+dsh plugin --profile web add <absolute path to the cloned repo>
+```
+
+That installs your local copy, so after editing `index.js` / `client.js` a restart of `dsh web` is enough to see the change (plugin code is not hot-reloaded).
 
 ### About the names, and the restart
 
-- Package name `@local/dsh-image-bridge`, version **0.2.2**. The `@local/` prefix is DSH's official convention for locally authored plugins — it exists so a local plugin never collides with a real npm package — and the plugin is **not published to npm**. The settings-page badge shows only `dsh-image-bridge`, without that prefix.
-- Installation adds the plugin row to the profile config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). The `-v4` in that directory name and row id is an **internal rewrite counter**, there only to avoid colliding with older copies on the same machine; it means nothing for day-to-day use.
+- Package name `@local/dsh-image-bridge`, version **0.3.0**. The `@local/` prefix is DSH's official convention for locally authored plugins — it exists so a local plugin never collides with a real npm package — and the plugin is **not published to npm**. The settings-page badge shows only `dsh-image-bridge`, without that prefix.
+- Installation adds the plugin row to the profile config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). The `-v4` in that row id is an **internal rewrite counter**, there only to avoid colliding with older copies on the same machine; it means nothing for day-to-day use.
 - **Restart `dsh web` afterwards** — plugin code is not hot-reloaded, and the settings page will not appear before the restart.
 
 ### Confirm it loaded — any one of the three
@@ -145,13 +155,20 @@ Every path is derived at runtime — no machine paths are hardcoded — and a mi
 
 ## Layout
 
+**The repository root is the plugin package** (since v0.3.0 — that is what makes the one-command install work):
+
 ```
-plugins/dsh-image-bridge-v4/   the plugin (host half index.js + client half client.js)
-.dib-verify/                   test and acceptance suites
-generated-images/              generated output (ignored, not committed)
+package.json  cordis.patch.yml      package manifest and mount declaration
+index.js      client.js             host half and client half
+locale/       icon.svg              plugin-card strings and the icon
+README.md     docs/manual.md        this file (repo front page / npm page) and the full manual
+.dib-verify/                        test and acceptance suites (travel with the repo, not the package)
+generated-images/                   generated output (ignored, not committed)
 ```
 
-`dsh-image-bridge/`, `image-bridge/` and `plugins/dsh-image-bridge{,-live,-v3}/` are historical copies superseded by v4 and not tracked — do not edit them.
+`.npmignore` keeps `.dib-verify/`, the screenshots and local caches out of the package, so what lands on a user's machine is only what has to run.
+
+`dsh-image-bridge/`, `image-bridge/` and `plugins/dsh-image-bridge{,-live,-v3}/` are historical copies superseded by this package and not tracked — do not edit them.
 
 ## Known limitations
 
@@ -163,8 +180,8 @@ generated-images/              generated output (ignored, not committed)
 
 | Document | Contents |
 | --- | --- |
-| [Full plugin guide](plugins/dsh-image-bridge-v4/README.md) (Chinese) | configuration, behaviour details, troubleshooting, implementation notes |
-| [Changelog](CHANGELOG.md) | what changed in each version (currently **v0.2.2**) |
+| [Full plugin manual](docs/manual.en.md) | configuration, behaviour details, troubleshooting, implementation notes |
+| [Changelog](CHANGELOG.md) | what changed in each version (currently **v0.3.0**) |
 | [Verification report](.dib-verify/verify-report.md) · [second round](.dib-verify/verify-report-2.md) | independent verification results, including what was not covered |
 
 ## Feedback

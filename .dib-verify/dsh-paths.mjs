@@ -5,8 +5,11 @@
  * profile 目录从环境变量 / 常见安装前缀里找。找不到时抛出带操作指引的错误——宁可
  * 明确失败，也不要静默跳过验收，更不要回退到别人的路径。
  *
+ * `PLUGIN_DIR` 默认就是**仓库根**：v0.3.0 起插件包根目录 = 仓库根（这样
+ * `dsh plugin add github:owner/repo` 一条命令就能装），`.dib-verify/` 仍留在仓库里。
+ *
  * 可用环境变量：
- *   DIB_PLUGIN_DIR   覆盖被测插件目录（默认：<仓库>/plugins/dsh-image-bridge-v4）
+ *   DIB_PLUGIN_DIR   覆盖被测插件目录（默认：仓库根）
  *   DSH_BIN          dsh CLI 入口，指向 <前缀>/node_modules/@deepseek-ai/dsh/lib/bin.js
  *   DSH_PROFILE_DIR  要用的 profile 目录
  *   DSH_HOME         dsh 家目录（默认 ~/.dsh），用于在 <DSH_HOME>/profiles 下找 profile
@@ -19,12 +22,12 @@ import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
-/** 被测插件目录（仓库内的默认位置，可用 DIB_PLUGIN_DIR 覆盖到别处的副本）。 */
+/** 被测插件目录（v0.3.0 起 = 仓库根，可用 DIB_PLUGIN_DIR 覆盖到别处的副本）。 */
 export const PLUGIN_DIR = (() => {
   const override = process.env.DIB_PLUGIN_DIR
   return override !== undefined && override !== ''
     ? resolve(override)
-    : resolve(HERE, '..', 'plugins', 'dsh-image-bridge-v4')
+    : resolve(HERE, '..')
 })()
 
 /** dsh 家目录：DSH_HOME 优先，否则 ~/.dsh。 */

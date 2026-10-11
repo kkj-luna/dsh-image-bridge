@@ -1,6 +1,37 @@
 # 变更记录
 
-版本号在 `plugins/dsh-image-bridge-v4/package.json`，同时会显示在设置页页头徽标上（`client.js` 的 `PACKAGE_VERSION` 必须与它逐字一致，验收有断言盯着）。
+版本号在仓库根的 `package.json`，同时会显示在设置页页头徽标上（`client.js` 的 `PACKAGE_VERSION` 必须与它逐字一致，验收有断言盯着）。
+
+## v0.3.0 — 2026-10-11
+
+**一条命令安装**：插件包根目录从 `plugins/dsh-image-bridge-v4/` 上移到**仓库根**。
+
+```sh
+dsh plugin --profile web add github:kkj520/dsh-image-bridge
+```
+
+为什么必须动结构：`dsh plugin add` 对 git 形式（`github:owner/repo`）是把整仓交给 pnpm 取包，**没法指定子目录**——它只会打仓库根那个 `package.json`。插件在子目录里时这条命令根本走不通，只能"先克隆、再填本地绝对路径"。dsh-market / superpowers-dsh / whale-widget 这些插件的仓库根都直接是插件包，原因就在这里。
+
+**改了哪些文件**
+
+- `package.json`、`cordis.patch.yml`、`index.js`、`client.js`、`locale/`、`icon.svg` → 仓库根
+- 插件完整手册 `README.md` / `README.en.md` → `docs/manual.md` / `docs/manual.en.md`（避免与仓库门面 README 撞名；仓库门面才是 npm 页面该显示的那份）
+- 插件目录内那份 `LICENSE` 删掉——与仓库根的那份**逐字节相同**（同一 SHA256），留两份迟早会漂移
+
+**保持不变（这是"更新不丢配置"的关键）**
+
+- 包名 `@local/dsh-image-bridge`、补丁行 id `image-bridge-v4`、设置命名空间 `image-bridge-v4` **一个字都没动**。行 id 是 profile 配置的锚点，也是设置页写入的命名空间，改它等于让所有老用户的服务商配置失效。
+- 升级只需改 profile 里那一行 `link:` 依赖的路径（`.../plugins/dsh-image-bridge-v4` → 仓库根）。`verify-upgrade` 按真实层序合成后确认**配置零漂移**。
+
+**打包卫生**
+
+新增 `.npmignore`：`.dib-verify/`（验收套件）、`docs/*.png`（截图与 logo）、`.ref-*.tmp*`（本地缓存）都不进包。`files` 白名单同步更新（`README.en.md` 已不存在，改为 `docs/manual*.md` 与 `CHANGELOG.md`）。装到用户机器上的只有跑起来需要的东西。
+
+**验收**
+
+- 断言 **425** 条全绿：迁移前基线 425 → 迁移后仍 425，全部套件在新结构下通过。
+- 两条断言随结构更新：`CHANGELOG` 路径从 `ROOT/../../` 改为 `ROOT/`；"目录名必须是 dsh-image-bridge-v4"改成钉住**新结构**（包根有 `package.json` 与挂载声明、旧子目录已移除）。
+- 真实环境验证：profile 里失效的 junction 重建后，通过它读到 `@local/dsh-image-bridge @ 0.3.0`；`verify-upgrade` 24/24；跨进程端到端真实出图（512×512 PNG，252,622 字节，已落盘）。
 
 ## v0.2.2 — 2026-10-11
 

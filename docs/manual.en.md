@@ -1,8 +1,6 @@
-<p align="center"><img src="icon.svg" width="96" alt="Image Bridge" style="color:#4f8cff"></p>
-
 # Image Bridge (dsh-image-bridge)
 
-English | [中文](README.md)
+[Repository front page](../README.en.md) · [中文手册](manual.md)
 
 Give **models that cannot draw** a connection to an external image model. Configure at least one provider under **Settings → Image Bridge** and the model gains two tools — `image_generate` and `image_edit` — with the resulting images shown right in the conversation.
 
@@ -21,7 +19,7 @@ plugin_manager  action: install_bundle
 
 Installation writes a `link:` dependency into the profile and inserts the plugin row into the profile's config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). **Restart `dsh web` afterwards**, then open **Settings → Image Bridge**.
 
-Package name `@local/dsh-image-bridge` (the `@local/` prefix is DSH convention for a locally authored plugin that is not published to npm), version `0.2.2`.
+Package name `@local/dsh-image-bridge` (the `@local/` prefix is DSH convention for a locally authored plugin that is not published to npm), version `0.3.0`.
 
 ### The three installation situations
 
@@ -87,7 +85,7 @@ The entry point is **Settings → Image Bridge**. Top to bottom the page is: pag
 
 ### Page header
 
-`[icon] Image Bridge  dsh-image-bridge  v0.2.2`, with one subtitle line below. The badge links to the GitHub repository (opens in a new tab) and shows only the repository name — no `@local/` prefix. The icon follows the theme colour.
+`[icon] Image Bridge  dsh-image-bridge  v0.3.0`, with one subtitle line below. The badge links to the GitHub repository (opens in a new tab) and shows only the repository name — no `@local/` prefix. The icon follows the theme colour.
 
 ### The icon has two sources (do not edit the wrong one)
 
@@ -197,20 +195,25 @@ Upgrade compatibility: when `providers` is empty but the legacy `baseUrl`/`model
 
 ### Directory layout
 
+**Since v0.3.0 the repository root *is* the plugin package** — that is what makes the one-command install (`dsh plugin add github:kkj520/dsh-image-bridge`) work: when pnpm fetches a git dependency it packs the repository root, and there is no way to point it at a subdirectory.
+
 ```text
-dsh-image-bridge-v4/
-├── package.json        Manifest: bundle patch, dsh.client, icon, display metadata, files allowlist
-├── cordis.patch.yml    Mount declaration: row id (= the namespace the settings page writes to) and package name; deliberately carries no config
-├── index.js            Host half: the two tools, multi-provider resolution, attachments and workspace writes, test/models/log channels, the startup report and degraded diagnostics
-├── client.js           Client half: the custom tool card + the settings page (header, cards, dialog, Models, size)
+dsh-image-bridge/          ← repository root = package root
+├── package.json       Manifest: bundle patch, dsh.client, icon, display metadata, files allowlist
+├── cordis.patch.yml   Mount declaration: row id (= the namespace the settings page writes to) and package name; deliberately carries no config
+├── index.js           Host half: the two tools, multi-provider resolution, attachments and workspace writes, test/models/log channels, the startup report and degraded diagnostics
+├── client.js          Client half: the custom tool card + the settings page (header, cards, dialog, Models, size)
 ├── locale/{zh,en}.json Display name and summary on the plugin card
-├── icon.svg            Plugin icon (white mark on brand blue, shipped with the package; same geometry as the inline shapes)
-├── README.md           Chinese version (section-for-section the same as this file)
-├── README.en.md        This file
-└── LICENSE             MIT
+├── icon.svg           Plugin icon (white mark on brand blue, shipped with the package; same geometry as the inline shapes)
+├── README.md          Repository front page (GitHub home / npm page)
+├── docs/manual.en.md  This file; manual.md and README.en.md are the Chinese and English counterparts
+├── CHANGELOG.md       Changelog
+├── LICENSE            MIT
+├── .npmignore         Packaging exclusions (see below)
+└── .dib-verify/       Test and acceptance suites (travel with the repo, **not the package**)
 ```
 
-Anything not on this list (the `.dib-verify/` suites, the changelog) belongs to the repository rather than to the package.
+Anything not on this list belongs to the repository rather than to the package: `.dib-verify/` (acceptance suites), `docs/*.png` (screenshots and logo) and `.ref-*.tmp*` (local caches of reference READMEs) are all kept out of the package by `.npmignore`. What lands on a user's machine is only what has to run.
 
 ## Usage flow
 
@@ -390,8 +393,8 @@ Related documents:
 
 | Document | Contents |
 | --- | --- |
-| [Repository README](../../README.md) | Project overview, quick start, test commands |
-| [verify-report.md](../../.dib-verify/verify-report.md) | Independent verification report for the multi-provider rework |
-| [verify-report-2.md](../../.dib-verify/verify-report-2.md) | Independent verification report on rename safety, the dropdown rework, the empty state, and navigation-icon claiming |
+| [Repository README](../README.md) | Project overview, quick start, test commands |
+| [verify-report.md](../.dib-verify/verify-report.md) | Independent verification report for the multi-provider rework |
+| [verify-report-2.md](../.dib-verify/verify-report-2.md) | Independent verification report on rename safety, the dropdown rework, the empty state, and navigation-icon claiming |
 
-License: [MIT](LICENSE).
+License: [MIT](../LICENSE).

@@ -15,18 +15,7 @@
 
 ## 安装
 
-### 最推荐：让 Agent 帮你装
-
-打开 DSH（Web 界面），新建对话，把下面这句话发给它：
-
-```text
-帮我安装这个仓库里的插件：https://github.com/kkj520/dsh-image-bridge
-装完重启 dsh web，并确认「设置 → 生图桥」能打开、两个工具已注册。
-```
-
-Agent 会自己克隆仓库、把插件加进 profile、重启并核对结果，**你不用敲任何命令**——本插件不发布到 npm，装它本来就要先把仓库弄到本地，这一步交给 Agent 最省事。
-
-### 自己敲命令
+### 一条命令（推荐）
 
 前提：本机装着 `@deepseek-ai/dsh`（`dsh web` 跑得起来）。没有就先装：
 
@@ -34,16 +23,35 @@ Agent 会自己克隆仓库、把插件加进 profile、重启并核对结果，
 npm i -g @deepseek-ai/dsh
 ```
 
-把仓库克隆到本机，然后**用克隆下来的那个目录**装（`add` 只接受本地路径，这也是为什么上面那条 Agent 指令要先克隆）：
+然后：
 
 ```sh
-dsh plugin --profile web add <克隆下来的仓库绝对路径>/plugins/dsh-image-bridge-v4
+dsh plugin --profile web add github:kkj520/dsh-image-bridge
 ```
+
+重启 `dsh web`，打开 **设置 → 生图桥**。装完就能用，不用先克隆仓库、也不用记任何本地路径——从 v0.3.0 起插件包根目录就是仓库根，`github:` 那条路才走得通。
+
+**不想重启？** 也可以让 Agent 装：新建对话，把下面这句话发过去，它会自己装、重启并核对结果。
+
+```text
+帮我安装这个插件：github:kkj520/dsh-image-bridge
+装完重启 dsh web，并确认「设置 → 生图桥」能打开、两个工具已注册。
+```
+
+### 从本地目录装（开发本插件时用）
+
+把仓库克隆到本机，然后用**仓库根目录**装：
+
+```sh
+dsh plugin --profile web add <克隆下来的仓库绝对路径>
+```
+
+装的是本机那份代码，所以改完 `index.js` / `client.js` 重启 `dsh web` 就能看到效果（插件代码不会被热重载）。
 
 ### 关于名字与重启
 
-- 包名 `@local/dsh-image-bridge`，版本 **0.2.2**。`@local/` 是 DSH 给本地自作插件的官方命名约定（作用是不与 npm 上的真包撞名），**不发布到 npm**；设置页徽标只显示 `dsh-image-bridge`，不显示这个前缀。
-- 安装会把插件行加进 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。目录名与行 id 里那个 `-v4` 是**内部重写版本号**，只用于避免与本机旧副本冲突，对使用没有影响。
+- 包名 `@local/dsh-image-bridge`，版本 **0.3.0**。`@local/` 是 DSH 给本地自作插件的官方命名约定（作用是不与 npm 上的真包撞名），**不发布到 npm**；设置页徽标只显示 `dsh-image-bridge`，不显示这个前缀。
+- 安装会把插件行加进 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。行 id 里那个 `-v4` 是**内部重写版本号**，只用于避免与本机旧副本冲突，对使用没有影响。
 - **装完必须重启 `dsh web`**：插件代码不会被热重载，重启前设置页不会出现。
 
 ### 确认装好了，三条任选
@@ -145,13 +153,20 @@ node .dib-verify/verify-cross.mjs
 
 ## 目录
 
+**仓库根目录就是插件包本身**（v0.3.0 起，这是一键安装的前提）：
+
 ```
-plugins/dsh-image-bridge-v4/   插件本体（Host 半 index.js + 客户端半 client.js）
-.dib-verify/                   测试与验收套件
-generated-images/              生图输出（已忽略，不入库）
+package.json  cordis.patch.yml      插件清单与挂载声明
+index.js      client.js             Host 半与客户端半
+locale/       icon.svg              插件卡片文案与图标
+README.md     docs/manual.md        本文件（仓库门面 / npm 页）与完整手册
+.dib-verify/                        测试与验收套件（随仓库走，不进包）
+generated-images/                   生图输出（已忽略，不入库）
 ```
 
-`dsh-image-bridge/`、`image-bridge/`、`plugins/dsh-image-bridge{,-live,-v3}/` 是历史副本，已被 v4 取代且不入库，请勿在此改动。
+`.npmignore` 把 `.dib-verify/`、截图与本地缓存挡在包外——插件装到用户机器上时只有跑起来需要的东西。
+
+`dsh-image-bridge/`、`image-bridge/`、`plugins/dsh-image-bridge{,-live,-v3}/` 是历史副本，已被本包取代且不入库，请勿在此改动。
 
 ## 已知限制
 
@@ -163,8 +178,8 @@ generated-images/              生图输出（已忽略，不入库）
 
 | 文档 | 内容 |
 | --- | --- |
-| [插件完整说明](plugins/dsh-image-bridge-v4/README.md) | 配置项、行为细节、排查、实现要点 |
-| [变更记录](CHANGELOG.md) | 每个版本改了什么（当前 **v0.2.2**） |
+| [插件完整手册](docs/manual.md) | 配置项、行为细节、排查、实现要点 |
+| [变更记录](CHANGELOG.md) | 每个版本改了什么（当前 **v0.3.0**） |
 | [验证报告](.dib-verify/verify-report.md) · [第二轮](.dib-verify/verify-report-2.md) | 独立验证结论（含未覆盖范围） |
 
 ## 反馈
