@@ -9,6 +9,7 @@
  */
 import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { PLUGIN_DIR } from './dsh-paths.mjs'
 
 const ROOT = PLUGIN_DIR
@@ -24,6 +25,13 @@ const host = await readFile(join(ROOT, 'index.js'), 'utf8')
 const client = await readFile(join(ROOT, 'client.js'), 'utf8')
 const localeZh = JSON.parse(await readFile(join(ROOT, 'locale/zh.json'), 'utf8'))
 const localeEn = JSON.parse(await readFile(join(ROOT, 'locale/en.json'), 'utf8'))
+/*
+ * **真的把 Host 半载进来执行**，而不是 grep 源码。
+ *
+ * 这正是"看起来在验、其实没人验"的解药：`OUTPUT` 被导出就是为了这个（见 index.js 里那段
+ * 注释）；断言直接调 `OUTPUT.render(...)`，块的内容与顺序都是真跑出来的。
+ */
+const { OUTPUT } = await import(pathToFileURL(join(ROOT, 'index.js')).href)
 
 /* ---------------------------------------------- client-modules 的发现条件 */
 
@@ -57,6 +65,32 @@ check(
   String(manifest.icon),
 )
 check('files 列出了运行所需文件', ['index.js', 'client.js', 'cordis.patch.yml', 'locale', 'icon.svg'].every((entry) => manifest.files?.includes(entry)), JSON.stringify(manifest.files))
+
+/*
+ * SVG 必须是**良构 XML**：注释里不许出现连续两个连字符，也不许以连字符结尾。
+ *
+ * 为什么值得单独一条：浏览器对 SVG 很宽容，所以本机、插件列表里都能正常显示——**只有**严格
+ * 解析器（librsvg、GitHub 的 sanitizer）会拒绝，表现为「README 里内嵌这个 SVG 变成破图」这种
+ * 远端现象。这条坑真实发生过一次：注释里写了两个 CSS 变量名，仓库 README 的 logo 就一直是破图，
+ * 而本机怎么看都正常。纯文本规则，不依赖任何图像库。
+ */
+{
+  const svgText = iconStat === undefined ? '' : await readFile(join(ROOT, manifest.icon ?? 'icon.svg'), 'utf8').catch(() => '')
+  const comments = [...svgText.matchAll(/<!--([\s\S]*?)-->/gu)].map((match) => match[1])
+  const offenders = comments.filter((body) => body.includes('--') || body.endsWith('-'))
+  check(
+    'icon.svg 是良构 XML：注释里没有连续连字符（严格解析器会因此拒绝整个文件）',
+    svgText !== '' && comments.length > 0 && offenders.length === 0,
+    offenders.length === 0
+      ? `注释 ${comments.length} 块，全部合规`
+      : `有 ${offenders.length} 块注释违规，例如：${(offenders[0].split('\n').find((line) => line.includes('--')) ?? '').trim().slice(0, 80)}`,
+  )
+  check(
+    'icon.svg 有根元素与 viewBox（可缩放、且能被当作图标渲染）',
+    /<svg[\s>]/u.test(svgText) && /viewBox="[^"]+"/u.test(svgText),
+    svgText.slice(0, 80),
+  )
+}
 
 /*
  * 许可：声明、协议全文、README 三处必须一致。这三处不同步的后果不是报错，
@@ -153,55 +187,177 @@ check(
   `default=${topLevelBaseUrlDefault || '(未找到)'}`,
 )
 
+/* ---------------------------------------------- 工具结果的 content 结构（真执行 render） */
+
+/*
+ * 为什么这行字必须写在 `content` 里（写给以后来问"为什么不放界面"的人）：
+ *   对话稳定后平台手上只剩 `content`（= `OUTPUT.render` 的返回值）与 `meta`（只有本插件注册的
+ *   keyed toolview 会读）。而 keyed toolview 稳定后被包进一个高度为 0 的滚动容器、屏幕上看不见；
+ *   稳定可见的是**平台按 content 渲染的原生卡片**（用户看到的图片与文件行就是它）。
+ *   证据：`dsh-tools/lib/types/index.js` 的 `createSuccessResult()`（`content =
+ *   snapshotProjection(name, 'render', rendered)`）、`dsh-tool-fs/lib/index.js` 的
+ *   "The canonical value never crosses the wire — only the model-facing render text and this
+ *   JSON `meta`"、客户端派发点 `dsh-client-ui-tool` 的 `renderCall`/`renderSlot("tool.call.toolview")`。
+ *
+ * 代价：这是**模型可见**输出，模型会多读到一行。所以文案刻意语言中立（`model: <名字>`），
+ * 值必须是 `value.model`（真正产出这张图的模型），绝不能用 `args.model`（用户请求的模型）。
+ */
+const renderValue = {
+  model: 'gpt-image-2.5',
+  prompt: '一只猫',
+  images: [{ attachmentId: 'sha256:x', mediaType: 'image/png', bytes: 10, width: 1, height: 1, name: 'a.png' }],
+  savedPaths: ['E:\\w\\generated-images\\a.png'],
+  imageCapable: true,
+}
+const renderBlocks = OUTPUT.render({ prompt: '一只猫', model: 'requested-model-ignored' }, renderValue)
+const modelBlocks = renderBlocks.filter((block) => block.type === 'text' && typeof block.text === 'string' && block.text.startsWith('model: '))
+check(
+  '① render 末尾追加 `model: <真实值>`，且取 value.model 而不是 args.model',
+  modelBlocks.length === 1
+    && modelBlocks[0].text === 'model: gpt-image-2.5'
+    && !renderBlocks.some((block) => typeof block.text === 'string' && block.text.includes('requested-model-ignored')),
+  JSON.stringify(renderBlocks.map((block) => (block.type === 'text' ? block.text.slice(0, 40) : block.type))).slice(0, 200),
+)
+check(
+  '② 该文本块在**所有** image 块之后（原生卡片按序渲染 → 落在图片下方）',
+  renderBlocks[renderBlocks.length - 1] === modelBlocks[0]
+    && renderBlocks.filter((block) => block.type === 'image').length === 1
+    && renderBlocks.findIndex((block) => block === modelBlocks[0]) > renderBlocks.findIndex((block) => block.type === 'image'),
+  renderBlocks.map((block) => block.type).join(','),
+)
+check(
+  '③ value.model 为空 / 非字符串 / 只有空白时**一个块都不追加**（不会出现空的 `model: `）',
+  ['', '   ', undefined, null, 42].every((model) => {
+    const blocks = OUTPUT.render({}, { ...renderValue, model })
+    return blocks.length === 2 && blocks.every((block) => block.type !== 'text' || !block.text.startsWith('model: '))
+  }),
+  JSON.stringify(['', '   ', undefined, null, 42].map((model) => OUTPUT.render({}, { ...renderValue, model }).length)),
+)
+
+/* ---------------------------------------------- 面向模型的说明（工具描述） */
+
+/*
+ * 用户最终选的方案是"由模型在对话里说明这张图是谁生成的"。机制有两半，缺一不可：
+ *   ① Host 在结果 content 末尾带一行 `model: <实际使用的模型名>`（上面①②③已钉住）；
+ *   ② **工具描述告诉模型去用它**——没被告知的模型不会主动转述，用户就永远看不到。
+ * 这里钉住 ②：两句要求（"结果里有这一行" + "向用户说明所用模型，备用接管时说明"）必须
+ * 同时出现在**共用常量**里，并且**两个工具各引用一次**（同一事实只说一次的写法）。
+ */
+const attributionHint = /const MODEL_ATTRIBUTION_HINT = '([^']*)'/u.exec(host)?.[1] ?? ''
+check(
+  '① 工具描述里的说明同时含两层要求：结果里有 `model:` 行 + 请向用户说明所用模型（含备用口径）',
+  attributionHint.includes('model: <实际使用的模型名>')
+    && attributionHint.includes('请在回复中说明')
+    && attributionHint.includes('备用'),
+  attributionHint === '' ? '(未找到 MODEL_ATTRIBUTION_HINT)' : attributionHint,
+)
+const hintUsages = (host.match(/\$\{MODEL_ATTRIBUTION_HINT\}/gu) ?? []).length
+check(
+  '② 两个工具（image_generate / image_edit）都引用了它：引用恰好 2 处，且写在 description 里',
+  hintUsages === 2
+    && /name: 'image_generate',\s*\n\s*description: `[^`]*\$\{MODEL_ATTRIBUTION_HINT\}/u.test(host)
+    && /name: 'image_edit',\s*\n\s*description: `[^`]*\$\{MODEL_ATTRIBUTION_HINT\}/u.test(host),
+  `引用 ${hintUsages} 处`,
+)
+/*
+ * ③ 工具契约没被顺手改坏：名字与**参数名集合**都要原样。
+ * 这条是给"重构 defineTool 兜底行为"那类改动兜底的——工具名或参数一旦漂移，模型侧
+ * 的调用契约就变了，而这种回归不会报错，只会静默失效。
+ */
+const parameterKeysOf = (toolName) => {
+  const anchor = host.indexOf(`name: '${toolName}',`)
+  if (anchor < 0) return []
+  const start = host.indexOf('parameters: {', anchor)
+  const end = host.indexOf('output: OUTPUT', start)
+  if (start < 0 || end < 0) return []
+  return [...host.slice(start, end).matchAll(/^\s{8}(\w+): \{ type:/gmu)].map((match) => match[1])
+}
+check(
+  '③ 工具名与参数契约未变：两个工具名都在，参数名集合与既定契约一致',
+  parameterKeysOf('image_generate').join(',') === 'prompt,size,model'
+    && parameterKeysOf('image_edit').join(',') === 'prompt,image_path,size,model',
+  JSON.stringify({ generate: parameterKeysOf('image_generate'), edit: parameterKeysOf('image_edit') }),
+)
+
 /* ---------------------------------------------- 跨文件一致性 */
 
 /*
- * 「主模型超时」默认值必须三处一致：client.js 的常量、Host 的常量、Host schema 的 default。
+ * 连接超时**以秒声明**：Host 常量与 schema 默认值都必须是 15。
  *
- * 为什么需要这条：界面里输入框留空时，客户端会**把默认值显式写进用户配置**（而不是不写这个
- * 字段），所以两半的默认值一旦不同，"留空 = 用 Host 默认值"就不再成立——用户会拿到一个
- * 与 schema 文档不同的超时。15000 → 90000 那次改动就是这样：Host 先改、客户端的断言还写死
- * 15000，于是套件报了 2 条红（实现是对的，是断言过时）。
+ * 为什么钉数值："15 秒连不上就换备用"是产品决策（用户按秒填，代码内部自动换算毫秒），
+ * 改它就得过来一起改并说明理由。
  *
- * 现在客户端的期望值改成从 client.js 源码读——修掉了漂移，但也让那条断言变成了**同义反复**
- * （拿 client.js 的值去验 client.js 写出的值，改成 1 也能过）。真正的不变量是"两侧相等"，
- * 由这条断言钉住；数值本身也一并钉住，改默认值时必须过来一起改并说明理由。
+ * 为什么还要钉"旧字段真的没了"：`fallbackAfterMs`（按响应时间换备用那套）已按用户要求整体
+ * 删除，改成"只看连接"。它若残留（schema 里还有定义、代码里还有人读），界面上就会出现一个
+ * 填了没用的旋钮——这正是这次重构要消灭的东西。
  */
-const clientFallbackMs = Number(/const DEFAULT_FALLBACK_MS = (\d+)/u.exec(client)?.[1] ?? Number.NaN)
-const hostFallbackMs = Number(/const DEFAULT_FALLBACK_AFTER_MS = (\d+)/u.exec(host)?.[1] ?? Number.NaN)
-const schemaFallbackMs = Number(/fallbackAfterMs: z\.number\(\)\.default\((\d+)\)/u.exec(host)?.[1] ?? Number.NaN)
+const defaultConnectSeconds = Number(/const DEFAULT_CONNECT_TIMEOUT_S = (\d+)/u.exec(host)?.[1] ?? Number.NaN)
+const schemaConnectSeconds = Number(/connectTimeoutSeconds: z[\s\S]{0,160}?\.default\((\d+)\)/u.exec(host)?.[1] ?? Number.NaN)
 check(
-  '主模型超时默认值三处一致（client.js / Host 常量 / Host schema），且是约定的 90000',
-  clientFallbackMs === hostFallbackMs
-    && hostFallbackMs === schemaFallbackMs
-    && clientFallbackMs === 90000,
-  JSON.stringify({ client: clientFallbackMs, host: hostFallbackMs, schema: schemaFallbackMs }),
+  '连接超时以秒声明：Host 常量与 schema 默认值都是 15，且 fallbackAfterMs 已彻底移除',
+  defaultConnectSeconds === 15
+    && schemaConnectSeconds === defaultConnectSeconds
+    && !/fallbackAfterMs/u.test(host)
+    && !/DEFAULT_FALLBACK_AFTER_MS/u.test(host),
+  JSON.stringify({ constant: defaultConnectSeconds, schema: schemaConnectSeconds }),
 )
+
+/*
+ * 三处默认值必须一致：client.js 的 `DEFAULT_CONNECT_TIMEOUT_S`、Host 的常量、Host schema 的 default。
+ *
+ * 为什么需要：设置页留空时客户端会**把默认值显式写进用户配置**（而不是不写这个字段），两半一旦
+ * 不同，"留空 = 用 Host 默认值"就不再成立——用户会拿到一个与 schema 文档不同的连接超时。
+ * 15000 → 90000 那次改动就是这样：Host 先改、客户端的期望值还写死旧值，套件报红的是断言过时。
+ */
+const clientConnectSeconds = Number(/const DEFAULT_CONNECT_TIMEOUT_S = (\d+)/u.exec(client)?.[1] ?? Number.NaN)
+check(
+  '连接超时默认值三处一致（client.js / Host 常量 / Host schema），且是约定的 15 秒',
+  clientConnectSeconds === defaultConnectSeconds
+    && defaultConnectSeconds === schemaConnectSeconds
+    && clientConnectSeconds === 15,
+  JSON.stringify({ client: clientConnectSeconds, host: defaultConnectSeconds, schema: schemaConnectSeconds }),
+)
+
+/*
+ * 备用模型的连接上限固定 30 秒，而且**不能**出现在 schema 里——它是定好的，不是设置项。
+ * 判据写成 `xxx: z.` 而不是裸名字：调用点上有 `fallbackConnectMs:`，那是参数不是配置字段。
+ */
+const fallbackConnectSeconds = Number(/const FALLBACK_CONNECT_TIMEOUT_S = (\d+)/u.exec(host)?.[1] ?? Number.NaN)
+check(
+  '备用模型的连接上限固定 30 秒，且不是设置项（schema 里没有这个字段）',
+  fallbackConnectSeconds === 30 && !/fallbackConnect\w*: z\./u.test(host),
+  `FALLBACK_CONNECT_TIMEOUT_S=${Number.isNaN(fallbackConnectSeconds) ? '(未找到)' : fallbackConnectSeconds}`,
+)
+
+/*
+ * 秒→毫秒的换算**只准发生一次**（`msFromSeconds`），两个工具都必须把用户填的秒交给它。
+ *
+ * 这条是补历史坑：早先常量与函数默认参数各写一份字面量，改一处另一处照旧；现在唯一的
+ * 毫秒换算点就是 msFromSeconds，别处再写一个 `* 1000` 会在这里报红。
+ */
+const multiplyBy1000 = (host.match(/\* 1000/gu) ?? []).length
+check(
+  '秒→毫秒只在 msFromSeconds 里换算一次，两个工具都把用户填的秒交给它',
+  /function msFromSeconds\(/u.test(host)
+    && multiplyBy1000 === 1
+    && /primaryConnectMs: msFromSeconds\(live\.connectTimeoutSeconds\)/u.test(host)
+    && (host.match(/fallbackConnectMs: msFromSeconds\(FALLBACK_CONNECT_TIMEOUT_S/gu) ?? []).length === 2,
+  `乘 1000 次数=${multiplyBy1000}`,
+)
+
+/*
+ * 「模型连接失败」是用户能看到的失败口径：两家都连不上时必须**以它开头**，后面还要给出
+ * 可操作的下一步（去哪儿检查、点哪个按钮）。文案散成"某某失败"就等于把原因留给用户猜。
+ */
+check(
+  '两家都连不上时的错误以「模型连接失败」开头，并指向设置页的「测试连接」',
+  /模型连接失败：\$\{primaryReason\}/u.test(host) && /测试连接/u.test(host),
+  '未找到 modelConnectFailureNote 的固定前缀',
+)
+
 
 const settingsNs = /const SETTINGS_NS = '([^']+)'/u.exec(client)?.[1] ?? ''
 check('补丁行 id 等于客户端写入的设置命名空间', rowId === settingsNs, `patch id=${rowId} client SETTINGS_NS=${settingsNs}`)
-
-/*
- * 连接宽限（连不上超过它就切备用）必须是**单一来源**的 15 秒。
- *
- * 数值是产品决策：填错地址/对端下线时最多等 15 秒就该换人，而不是干等满「主模型超时」。
- * 改它就得过来一起改并说明理由——和上面那条默认值断言同一个道理。
- *
- * 单一来源这一条是补历史坑：`attemptWithHeaderBudget` 的默认参数曾经另写一份 10000，
- * 于是"调用方没传 connectGraceMs"的路径与常量各走各的，改一处不会报红。
- */
-const connectGraceMs = Number(/const CONNECT_GRACE_MS = (\d+)/u.exec(host)?.[1] ?? Number.NaN)
-check(
-  '连接宽限是约定的 15 秒（连不上超过它就改用备用模型）',
-  connectGraceMs === 15000,
-  `CONNECT_GRACE_MS=${Number.isNaN(connectGraceMs) ? '(未找到)' : connectGraceMs}`,
-)
-const connectGraceDefault = /connectGraceMs = ([A-Za-z_0-9]+)/u.exec(host)?.[1] ?? ''
-check(
-  '连接宽限只有一个来源：函数默认参数引用常量，不再另写一份字面量',
-  connectGraceDefault === 'CONNECT_GRACE_MS',
-  `默认参数=${connectGraceDefault === '' ? '(未找到)' : connectGraceDefault}`,
-)
 
 const hostToolNames = [...host.matchAll(/name:\s*'(image_[a-z]+)'/gu)].map((match) => match[1]).sort()
 const clientViewKeys = (/const TOOL_KEYS = \[([^\]]+)\]/u.exec(client)?.[1] ?? '')

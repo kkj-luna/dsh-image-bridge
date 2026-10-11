@@ -101,7 +101,7 @@ const rowValue = {
     generate: { primary: { providerId: '', model: '' }, fallback: { providerId: '', model: '' } },
     edit: { primary: { providerId: '', model: '' }, fallback: { providerId: '', model: '' } },
   },
-  fallbackAfterMs: 9000,
+  connectTimeoutSeconds: 1,
 }
 
 const services = {

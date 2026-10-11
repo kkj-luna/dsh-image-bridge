@@ -67,13 +67,13 @@ let lastSlowGenerateBody
 let slowAuth = ''
 let flakyAttempts = 0
 let lastFlakyGenerateBody
-/** 连接阶段用例：以及"请求发出→响应头"这段服务商实际耗时。 */
+/** 慢响应用例：服务商从收到请求到回图的这段实际耗时（用来证明"慢"不再等于"换备用"）。 */
 let slowHeaderStartAt = 0
 let slowHeaderEndAt = 0
 
 const server = createServer((request, response) => {
   const chunks = []
-  // 客户端中途放弃（响应头超时/取消）时 socket 会被掐断，别让这类事件把进程带崩。
+  // 客户端中途放弃（调用超时/取消）时 socket 会被掐断，别让这类事件把进程带崩。
   response.on('error', () => {})
   request.on('data', (chunk) => chunks.push(chunk))
   request.on('end', () => {
@@ -102,7 +102,12 @@ const server = createServer((request, response) => {
       image()
       return
     }
-    /* 慢响应：故意拖过 fallbackAfterMs 才回响应头，用来验证"响应头预算"。 */
+    /*
+     * 慢响应：拖 600ms 才回图。
+     *
+     * 它是"响应慢"的代表：新语义下响应快慢**完全不影响**是否换备用（③、⑦c 都靠它证明），
+     * 所以这里只延迟、不做任何超时判定。
+     */
     if (request.method === 'POST' && request.url.startsWith('/slow-vendor/images/generations')) {
       setTimeout(() => {
         if (response.writableEnded || response.destroyed) return
@@ -112,7 +117,8 @@ const server = createServer((request, response) => {
       }, 600)
       return
     }
-    /* 第一次直接掐断连接（模拟网络层失败），第二次正常：验证"去掉信号重试一次"的兜底。 */
+    /* 收到 POST 后立刻掐断 socket：模拟"请求已经上线、传输却断了"，用来验证"发出过的请求绝不重发"。
+       若哪天又重发，flakyAttempts 会变成 2 并被 ⑥ 的断言抓住。 */
     if (request.method === 'POST' && request.url.startsWith('/flaky/images/generations')) {
       flakyAttempts += 1
       if (flakyAttempts === 1) {
@@ -184,9 +190,9 @@ await new Promise((ready) => server.listen(0, '127.0.0.1', ready))
 /*
  * 连接慢：新连接一律先压住 1.5s，请求因此迟迟发不出去。
  *
- * 只用来造出"连接耗时"这一段——它是 ⑦a 能区分新旧行为的关键：旧实现从调用 fetch 起算预算，
- * 这段 1.5s 会被算进服务商的账上；新实现只从请求真正发出后起算，连接慢不该吃掉预算。
- * 注意 keep-alive：第一次请求之后连接会被复用，所以后续用例的连接是快的（这正是 ⑦b 需要的）。
+ * 只用来造出"连接耗时"这一段——它现在是**唯一**参与判定的时间：连接预算衡量的是"请求有没有
+ * 发出去"，所以连接慢会真的吃掉预算（⑦a 的预算必须给够），而请求一旦发出就再也不计时。
+ * 注意 keep-alive：第一次请求之后连接会被复用，所以后续用例的连接是快的。
  */
 server.on('connection', (socket) => {
   socket.pause()
@@ -198,22 +204,20 @@ const baseUrl = `http://127.0.0.1:${port}/v1`
 const origin = `http://127.0.0.1:${port}`
 
 /*
- * 两个专用源，把"发出晚"与"服务商慢"彻底分开——只有分开了，才能证明预算的起算点在哪。
+ * 两个专用源，把"连接慢"与"响应慢"彻底分开——只有分开了，才能证明这两件事不再被混为一谈。
  *   - slowOrigin：请求体分两块、第二块延迟 1.5s 才给，于是"请求真正发出"被确定性地推后；
  *     服务商收到后立刻回答（实测接受≈1560ms，回答≈100ms）。
- *   - headerOrigin：请求发出是快的，只有一个前缀把响应头拖 5s（服务商慢）。
+ *   - headerOrigin：请求发出是快的，只有一个前缀把响应拖 5s（服务商慢，但不该换备用）。
  */
 const SLOW_HEADER_DELAY_MS = 5000
 /** 响应慢但服务在听的路径：用来把"请求发出去了、只是没回头"与"连不上"分开。 */
 const VERY_SLOW_DELAY_MS = 20000
-/** 探活专用：一个确定不可达的地址（不可路由，connect 后无 RST），用来覆盖"探活也失败"分支。 */
-const PROBE_DEAD_BASE = 'http://192.0.2.1'
 const SLOW_BODY_DELAY_MS = 1500
 let lastStalledVendorBody
 let slowBodyAcceptedAt = 0
 let slowBodyHeaderAt = 0
 
-/** 只负责"响应头慢"的源：请求发出快，慢的只有服务商。 */
+/** 只负责"答得慢"的源：请求发出快，慢的只有服务商的响应。 */
 const headerServer = createServer((request, response) => {
   const chunks = []
   response.on('error', () => {})
@@ -269,25 +273,6 @@ const slowServer = createServer((request, response) => {
 })
 await new Promise((ready) => slowServer.listen(0, '127.0.0.1', ready))
 const slowOrigin = `http://127.0.0.1:${slowServer.address().port}`
-
-/**
- * 只负责"收下请求就断"的源：请求能发出去（因此会走到超时后的探活），但拿不到任何响应头。
- * `hangAll` 置 true 后**所有请求都不再回应**——用来确定性地模拟"服务商在超时后失去响应"。
- */
-let resetHangAll = false
-const resetServer = createServer((request, response) => {
-  request.on('data', () => {})
-  request.on('end', () => {
-    if (request.url.startsWith('/hang-vendor/images/generations') || resetHangAll) {
-      // 收下请求、什么都不回：前者让客户端走到"响应头超时"（触发探活），后者让探活也超时。
-      return
-    }
-    response.writeHead(404, { 'content-type': 'application/json' })
-    response.end(JSON.stringify({ error: 'not found' }))
-  })
-})
-await new Promise((ready) => resetServer.listen(0, '127.0.0.1', ready))
-const resetOrigin = `http://127.0.0.1:${resetServer.address().port}`
 
 /* ---------------------------------------------------------------- 假 ctx */
 
@@ -349,7 +334,7 @@ if (mod.Config !== undefined) {
   const serialized = JSON.stringify(json)
   const refs = json?.refs ?? {}
   const volatileNodes = Object.values(refs).filter((node) => node?.meta?.volatile === true)
-  const fieldNames = ['baseUrl', 'model', 'editModel', 'size', 'saveToWorkspace', 'outputDir', 'timeoutMs', 'providers', 'activeProviderId', 'modelRoutes', 'fallbackAfterMs']
+  const fieldNames = ['baseUrl', 'model', 'editModel', 'size', 'saveToWorkspace', 'outputDir', 'timeoutMs', 'providers', 'activeProviderId', 'modelRoutes', 'connectTimeoutSeconds']
   check('Config 字段齐全', fieldNames.every((key) => serialized.includes(`"${key}"`)), `缺少: ${fieldNames.filter((key) => !serialized.includes(`"${key}"`)).join(',')}`)
   check('每个字段都标了 volatile', volatileNodes.length === fieldNames.length, `volatile=${volatileNodes.length}/${fieldNames.length}`)
   check('每个 volatile 字段都有默认值', volatileNodes.every((node) => node.meta.default !== undefined), '')
@@ -396,22 +381,22 @@ if (mod.Config !== undefined) {
       generate: { primary: { providerId: 'p1', model: 'm1' }, fallback: { providerId: 'p2', model: 'm2' } },
       edit: { primary: { providerId: 'p3', model: 'm3' } },
     },
-    fallbackAfterMs: 2500,
+    connectTimeoutSeconds: 4,
   })
   const routes = plain(roundTripRoutes.modelRoutes)
   check(
-    'modelRoutes / fallbackAfterMs 能通过 Schema 校验且原样保留',
+    'modelRoutes / connectTimeoutSeconds 能通过 Schema 校验且原样保留',
     routes?.generate?.primary?.providerId === 'p1'
       && routes?.generate?.fallback?.model === 'm2'
       && routes?.edit?.primary?.model === 'm3'
-      && plain(roundTripRoutes.fallbackAfterMs) === 2500,
-    JSON.stringify({ routes, fallbackAfterMs: plain(roundTripRoutes.fallbackAfterMs) }),
+      && plain(roundTripRoutes.connectTimeoutSeconds) === 4,
+    JSON.stringify({ routes, connectTimeoutSeconds: plain(roundTripRoutes.connectTimeoutSeconds) }),
   )
   const routeDefaults = plain(mod.Config({}).modelRoutes)
   check(
-    'modelRoutes 默认 {}、fallbackAfterMs 默认为 90000（同步生图几十秒是常态）',
-    routeDefaults !== null && typeof routeDefaults === 'object' && plain(mod.Config({}).fallbackAfterMs) === 90000,
-    JSON.stringify({ routeDefaults, fallbackAfterMs: plain(mod.Config({}).fallbackAfterMs) }),
+    'modelRoutes 默认 {}、connectTimeoutSeconds 默认为 15 秒（连接只算"请求有没有发出去"）',
+    routeDefaults !== null && typeof routeDefaults === 'object' && plain(mod.Config({}).connectTimeoutSeconds) === 15,
+    JSON.stringify({ routeDefaults, connectTimeoutSeconds: plain(mod.Config({}).connectTimeoutSeconds) }),
   )
 
   /*
@@ -501,7 +486,21 @@ if (Array.isArray(value.savedPaths) && value.savedPaths.length === 1) {
 }
 
 const blocks = generate.output.render({ prompt: 'x' }, value)
-check('render 产出 text + image 两块', blocks.length === 2 && blocks[0].type === 'text' && blocks[1].type === 'image', blocks.map((b) => b.type).join(','))
+/*
+ * 稳定后的可见性全靠 content：平台手上只剩 `content`（本函数的返回值）与 `meta`，
+ * 而工具行的 keyed toolview 在对话稳定后被包进高度为 0 的容器里、屏幕上看不见。
+ * 所以信封 + 图片之后还有**第三块**——末尾那行 `model: <真正产出这张图的模型>`。
+ * （这就是"为什么这行字要写在 content 里"的答案，别把它当多余块删掉。）
+ */
+check(
+  'render 产出「信封文本 + image + 末尾 model 行」三块（顺序固定）',
+  blocks.length === 3
+    && blocks[0].type === 'text'
+    && blocks[1].type === 'image'
+    && blocks[2].type === 'text'
+    && blocks[2].text === `model: ${value.model}`,
+  blocks.map((b) => (b.type === 'text' ? b.text.slice(0, 32) : b.type)).join(','),
+)
 check('image 块携带 attachmentId', typeof blocks[1]?.attachment?.attachmentId === 'string', JSON.stringify(blocks[1]?.attachment))
 check('文本信封含文件路径', blocks[0].text.includes('generated-images'), '')
 
@@ -513,7 +512,16 @@ check('presentationMeta 带 imageCapable', meta.imageCapable === true, String(me
 
 const textValue = { ...value, imageCapable: false }
 const textBlocks = generate.output.render({}, textValue)
-check('纯文本路由下只下发文本块（避免 UNSUPPORTED_CONTENT）', textBlocks.length === 1 && textBlocks[0].type === 'text', textBlocks.map((b) => b.type).join(','))
+/*
+ * 这里断言的是"**一个 image 块都没有**"，而不是"块数恰好等于 1"：数量会随文本块增减而变
+ * （末尾的 model 行就让 1 变成了 2），但"绝不下发 image 块"这条约束（否则 DSH 适配器会对
+ * 不支持图片输入的路由抛 UNSUPPORTED_CONTENT）永远不该变。用 every 才盯得住这条不变量。
+ */
+check(
+  '纯文本路由下**每个块都是文本**（绝不下发 image 块，避免 UNSUPPORTED_CONTENT）',
+  textBlocks.length >= 1 && textBlocks.every((block) => block.type === 'text'),
+  textBlocks.map((b) => b.type).join(','),
+)
 check('纯文本信封提示改用文件路径', textBlocks[0].text.includes('不支持图片输入'), '')
 
 /* ---------------------------------------------------------------- 改图管线 */
@@ -971,7 +979,7 @@ async function idsFromApply(providers, tag) {
     providers,
     activeProviderId: providers[0]?.id ?? '',
     modelRoutes: { generate: { primary: { providerId: '', model: '' }, fallback: { providerId: '', model: '' } }, edit: { primary: { providerId: '', model: '' }, fallback: { providerId: '', model: '' } } },
-    fallbackAfterMs: 9000,
+    connectTimeoutSeconds: 9,
   }
   const idServices = {
     tools: { register: () => () => {} },
@@ -1103,10 +1111,10 @@ check(
 )
 
 /* ------------------------------------------------------------------ *
- * 跨服务商模型路由 + 主/备用模型与"响应头预算"
+ * 跨服务商模型路由 + 主/备用模型与「连接预算」
  *
  * 四家服务商各司其职：vendor-one 正常、alt-vendor 正常（用来证明路由用的是它的地址与
- * 凭据）、dead-vendor 一律 404、slow-vendor 拖 600ms 才回响应头。路由就是
+ * 凭据）、dead-vendor 一律 404、slow-vendor 拖 600ms 才回图。路由就是
  * modelRoutes.<role>.{primary,fallback} = { providerId, model }。
  * ------------------------------------------------------------------ */
 
@@ -1120,26 +1128,31 @@ const routeProviders = [
   { id: 'flaky-vendor', label: 'Flaky Vendor', baseUrl: `${origin}/flaky`, keyRef: '', models: [], imageModel: 'flaky-image', editModel: '' },
   { id: 'slow-vendor', label: 'Slow Vendor', baseUrl: `${origin}/slow-vendor`, keyRef: '', models: [], imageModel: 'slow-image', editModel: '' },
   /* TEST-NET-1（RFC 5737）是保留给文档的地址，不可路由：TCP 连不上，请求永远发不出去。
-     用它验证"发出前超时"这条分支不会误报成"服务商没响应"。 */
+     用它验证"连接阶段超时"这条分支不会误报成"服务商没响应"。 */
   { id: 'blackhole-vendor', label: 'Blackhole Vendor', baseUrl: 'http://192.0.2.1', keyRef: '', models: [], imageModel: 'blackhole-image', editModel: '' },
+  /* 域名解析不了的地址（`.invalid` 是保留 TLD，必不解析）：一次"连不上"只花几十毫秒，
+     用来覆盖"主备都连不上"而不必等备用那固定的 30 秒连接预算。 */
+  { id: 'dns-dead-vendor', label: 'DNS Dead Vendor', baseUrl: 'http://dib-nonexistent-host.invalid', keyRef: '', models: [], imageModel: 'dns-dead-image', editModel: '' },
   { id: 'stalled-vendor', label: 'Stalled Vendor', baseUrl: `${slowOrigin}/stalled-vendor`, keyRef: '', models: [], imageModel: 'stalled-image', editModel: '' },
+  /* 请求发出很快、响应拖 5s：它必须**成功**——响应时间不再参与是否换备用的判定。 */
   { id: 'slow-header-vendor', label: 'Slow Header Vendor', baseUrl: `${headerOrigin}/slow-header-vendor`, keyRef: '', models: [], imageModel: 'slow-header-image', editModel: '' },
-  /* 响应极慢但服务在听：让"请求发出后才超时"成为确定事实（请求 1ms 发出，响应 20s 才回）。
-     它的 /models 探活会落在 headerServer 的 404 上 → 覆盖"探活说是活的"分支。 */
+  /* 响应极慢但服务在听：20s 都不回，用来让「调用超时」成为唯一能掐断它的东西。 */
   { id: 'very-slow-vendor', label: 'Very Slow Vendor', baseUrl: `${headerOrigin}/very-slow-vendor`, keyRef: '', models: [], imageModel: 'very-slow-image', editModel: '' },
-  /* 探活专用：收下请求后一直不回（走到响应头超时），配合下面的"拉黑新连接"覆盖"探活也失败"分支。 */
-  { id: 'probe-dead-vendor', label: 'Probe Dead Vendor', baseUrl: `${resetOrigin}/hang-vendor`, keyRef: '', models: [], imageModel: 'probe-dead-image', editModel: '' },
   { id: 'empty-vendor', label: 'Empty Vendor', baseUrl: `${origin}/empty-vendor`, keyRef: '', models: [], imageModel: 'empty-image', editModel: '' },
   { id: 'task-vendor', label: 'Task Vendor', baseUrl: `${origin}/task-vendor`, keyRef: '', models: [], imageModel: 'task-image', editModel: '' },
   { id: 'urlish-vendor', label: 'Urlish Vendor', baseUrl: `${origin}/urlish-vendor`, keyRef: '', models: [], imageModel: 'urlish-image', editModel: '' },
 ]
-const setRoutes = (generate, edit = emptyRole(), fallbackAfterMs = 15000) => {
+/*
+ * 第三个参数是**秒**（与设置页、插件 Config 同一个单位）：它只约束"请求有没有发出去"。
+ * 默认 15 秒；要造"连不上"，最小可用值是 1 秒。
+ */
+const setRoutes = (generate, edit = emptyRole(), connectTimeoutSeconds = 15) => {
   providerConfigValue = {
     ...providerConfigValue,
     providers: routeProviders,
     activeProviderId: 'vendor-one',
     modelRoutes: { generate, edit },
-    fallbackAfterMs,
+    connectTimeoutSeconds,
   }
 }
 
@@ -1287,29 +1300,27 @@ check(
   JSON.stringify(fallbackValue.warnings),
 )
 
-/* ③ 主模型拿到响应头超过预算 → 中止并改用备用（慢服务商 600ms，预算 300ms）。 */
-setRoutes(
-  { primary: { providerId: 'slow-vendor', model: 'slow-image' }, fallback: { providerId: 'vendor-one', model: 'vendor-image-v2' } },
-  emptyRole(),
-  300,
-)
+/* ③ 主模型答得慢（600ms）→ **不再**中止、更不换备用：响应时间已经完全不参与判定。
+      连接预算用默认的 15 秒（本地连接毫秒级完成），所以这条只钉"慢响应不被误杀"。 */
+setRoutes({ primary: { providerId: 'slow-vendor', model: 'slow-image' }, fallback: { providerId: 'vendor-one', model: 'vendor-image-v2' } })
 lastVendorGenerateBody = undefined
-const requestsBeforeTimeout = requests.length
-const slowValue = await providerGenerate.execute({ prompt: 'header budget case' }, exec)
+const requestsBeforeSlow = requests.length
+const slowValue = await providerGenerate.execute({ prompt: 'slow responder case' }, exec)
 check(
-  '③ 响应头超预算时中止主模型并改用备用',
-  slowValue.model === 'vendor-image-v2' && String(lastVendorGenerateBody).includes('vendor-image-v2'),
-  String(slowValue.model),
+  '③ 服务商答得慢也照旧出图（响应时间不再触发中止或换备用）',
+  slowValue.model === 'slow-image' && lastVendorGenerateBody === undefined,
+  `model=${slowValue.model} 备用收到请求=${typeof lastVendorGenerateBody === 'string'}`,
 )
 check(
-  '③ 用的是配置里的预算（300ms），不是等慢响应回来',
-  Array.isArray(slowValue.warnings) && slowValue.warnings.some((warning) => warning.includes('300ms')),
-  JSON.stringify(slowValue.warnings),
+  '③ 且只打了主模型那一次请求（慢 ≠ 换人，避免白花备用的钱）',
+  requests.slice(requestsBeforeSlow).join(' | ') === 'POST /slow-vendor/images/generations'
+    && slowValue.warnings === undefined,
+  `${JSON.stringify(requests.slice(requestsBeforeSlow))} warnings=${JSON.stringify(slowValue.warnings)}`,
 )
 check(
-  '③ 主模型的请求确实发出去过（是"超时中止"，不是压根没发）',
-  requests.slice(requestsBeforeTimeout).some((entry) => entry.includes('/slow-vendor/')),
-  JSON.stringify(requests.slice(requestsBeforeTimeout)),
+  '③ 主模型的请求确实发出去过（不是压根没发就成功）',
+  requests.slice(requestsBeforeSlow).some((entry) => entry.includes('/slow-vendor/')),
+  JSON.stringify(requests.slice(requestsBeforeSlow)),
 )
 
 /* ④ 备用没配 → 直接把主模型的错误报出来。 */
@@ -1341,20 +1352,34 @@ check(
   `${cancelError} | ${JSON.stringify(cancelRequests)}`,
 )
 
-/* ⑥ 顺带守住既有能力：网络层失败仍"去掉信号重试一次"，不是直接判死。 */
+/* ⑥ 请求**已经发出**之后传输才断：绝不重发。
+     重发一次非幂等的 POST，服务商可能已经生成并计费两次，所以这里钉"服务器只见到一次请求"。 */
 setRoutes(emptyRole())
 providerConfigValue = { ...providerConfigValue, activeProviderId: 'flaky-vendor' }
 flakyAttempts = 0
 lastFlakyGenerateBody = undefined
-const flakyValue = await providerGenerate.execute({ prompt: 'flaky case' }, exec)
+const requestsBeforeFlaky = requests.length
+let flakyError = ''
+try {
+  await providerGenerate.execute({ prompt: 'flaky case' }, exec)
+} catch (error) {
+  flakyError = error instanceof Error ? error.message : String(error)
+}
 check(
-  '⑥ 网络层失败仍保留"去掉信号重试一次"的兜底',
-  flakyAttempts === 2 && flakyValue.model === 'flaky-image' && typeof lastFlakyGenerateBody === 'string',
-  `attempts=${flakyAttempts} model=${flakyValue.model}`,
+  '⑥ 请求已经发出后断了：不重发（服务器只收到一次 POST，避免重复计费）',
+  flakyAttempts === 1
+    && requests.slice(requestsBeforeFlaky).filter((entry) => entry.includes('/flaky/')).length === 1
+    && lastFlakyGenerateBody === undefined,
+  `attempts=${flakyAttempts} 请求=${JSON.stringify(requests.slice(requestsBeforeFlaky))}`,
+)
+check(
+  '⑥ 且如实说清"请求已经发出、不重发"（不是含糊的失败）',
+  flakyError.includes('请求已经发出') && flakyError.includes('不重发'),
+  flakyError,
 )
 
 /* ⑥b 备用也失败时，错误里要能同时看到两次尝试的模型与原因。 */
-setRoutes({ primary: { providerId: 'dead-vendor', model: 'dead-image' }, fallback: { providerId: 'slow-vendor', model: 'slow-image' } }, emptyRole(), 200)
+setRoutes({ primary: { providerId: 'dead-vendor', model: 'dead-image' }, fallback: { providerId: 'task-vendor', model: 'task-image' } })
 let bothFailError = ''
 try {
   await providerGenerate.execute({ prompt: 'both fail' }, exec)
@@ -1365,9 +1390,8 @@ check(
   '⑥b 备用也失败时错误里同时有两次尝试的模型与原因',
   bothFailError.includes('dead-image')
     && bothFailError.includes('404')
-    && bothFailError.includes('slow-image')
-    && bothFailError.includes('200ms')
-    && bothFailError.includes('超时后探活'),
+    && bothFailError.includes('task-image')
+    && (bothFailError.includes('没有 data 数组') || bothFailError.includes('没有返回任何可用的图片数据')),
   bothFailError,
 )
 
@@ -1459,19 +1483,20 @@ check(
 )
 
 /* ------------------------------------------------------------------ *
- * ⑦ 响应头预算只算"请求发出之后"，发出前（DNS / TCP / TLS）的耗时不算
+ * ⑦ 时间只用来判"连接"：请求发出去之后，服务商想多久都不再换备用
  *
- * 判据来自 undici 的 `undici:request:bodySent`（诊断通道）。三条用例覆盖两个分支：
- *   ⑦a 发出前慢但发得出去 + 预算充裕 → 必须成功（旧实现会把发出前的耗时算进去而误判）；
- *   ⑦b 根本连不上（TEST-NET-1 黑洞）→ 必须报"连接阶段"，不甩锅给服务商；
- *   ⑦c 发出很快、服务商拖 5s → 必须报"请求发出后"，并说明连接不计入。
- * 只测"慢响应仍会超时"是测不出起算点的——那一条旧实现也过。
+ * 判据来自 undici 的 `undici:request:bodySent`（诊断通道）：它一旦触发，本次尝试就脱离连接
+ * 预算，响应快慢只剩整次调用的上限 `timeoutMs` 兜底。用例覆盖三个分支：
+ *   ⑦a 发出前慢但最终发得出去 + 连接预算给够 → 必须成功（连接耗时确实算在预算里）；
+ *   ⑦b 根本连不上（TEST-NET-1 黑洞）→ 必须报"连接阶段"、说清用户设的秒数、且不发请求；
+ *   ⑦b-3 主备都连不上 → 最终错误以「模型连接失败」开头并点名两次尝试；
+ *   ⑦c 发出很快、服务商拖 5s → 必须**成功**（响应时间不再参与判定，这就是这次改动的全部意义）。
+ * 只测"慢响应仍会超时"是测不出新语义的——那正是被删掉的旧行为。
  * ------------------------------------------------------------------ */
 
-/* ⑦a 发出前慢 1.5s，但服务商答得很快，预算 2s → 必须成功出图。
-      注：这是**健壮性哨兵**，不能单独证明新语义（旧实现在 2s 预算下也过得去）；
-      证明新语义的是 ⑦b/⑦c 对两个分支的精确断言。 */
-setRoutes({ primary: { providerId: 'stalled-vendor', model: 'stalled-image' }, fallback: { providerId: 'vendor-one', model: 'vendor-image-v2' } }, emptyRole(), 2000)
+/* ⑦a 发出前慢 1.5s，但服务商答得很快，连接预算 2 秒 → 必须成功出图。
+      注：这是**健壮性哨兵**，证明的是"连接耗时算在预算里但没超"；证明"发出后不再计时"的是 ⑦c。 */
+setRoutes({ primary: { providerId: 'stalled-vendor', model: 'stalled-image' }, fallback: { providerId: 'vendor-one', model: 'vendor-image-v2' } }, emptyRole(), 2)
 lastStalledVendorBody = undefined
 lastVendorGenerateBody = undefined
 const stalledStartedAt = Date.now()
@@ -1483,13 +1508,16 @@ check(
   `lastRequestSentMoment=${mod.lastRequestSentMoment()}`,
 )
 check(
-  '⑦a 发出前慢但发得出去：预算 2s 时主模型仍成功出图（没被误判成超时）',
+  '⑦a 发出前慢但发得出去：连接预算 2 秒时主模型仍成功出图（没被误判成超时）',
   stalledValue.model === 'stalled-image' && lastVendorGenerateBody === undefined,
   `model=${stalledValue.model} 总耗时=${stalledElapsed}ms`,
 )
 
-/* ⑦b 连不上（不可路由地址）：请求发不出去 → 必须报"连接阶段"，不能甩锅给服务商。 */
-setRoutes({ primary: { providerId: 'blackhole-vendor', model: 'blackhole-image' }, fallback: emptyRole() }, emptyRole(), 600)
+/* ⑦b 连不上（不可路由地址）：请求发不出去 → 必须报"连接阶段"，不能甩锅给服务商。
+      连接预算取最小可用值 **1 秒**：黑地址上 TCP 永远建不起来，1 秒足够确定"没发出去"，
+      这条也就不会真的等默认的 15 秒。 */
+setRoutes({ primary: { providerId: 'blackhole-vendor', model: 'blackhole-image' }, fallback: emptyRole() }, emptyRole(), 1)
+const requestsBeforeBlackhole = requests.length
 let connectPhaseError = ''
 try {
   await providerGenerate.execute({ prompt: 'unreachable host' }, exec)
@@ -1497,16 +1525,31 @@ try {
   connectPhaseError = error instanceof Error ? error.message : String(error)
 }
 check(
-  '⑦b 发不出去时：报"连接阶段…没把请求发出去"，不甩锅给服务商',
-  connectPhaseError.includes('连接阶段') && connectPhaseError.includes('600ms'),
+  '⑦b 发不出去时：报"连接阶段…没把请求发出去"，并把用户设的秒数说给他听',
+  connectPhaseError.includes('连接阶段')
+    && connectPhaseError.includes('你设的连接超时是 1 秒')
+    && connectPhaseError.includes('blackhole-image'),
   `实际=${connectPhaseError === '' ? '(没有抛错)' : connectPhaseError}`,
+)
+const blackholeVerdict = mod.lastBudgetVerdict()
+check(
+  '⑦b 判定依据是"请求从没发出去"：一个包都没发，且诊断值读得到（seenSentAt=0）',
+  requests.length === requestsBeforeBlackhole
+    && blackholeVerdict?.seenSentAt === 0
+    && blackholeVerdict?.connectTimeoutMs === 1000,
+  `新增请求=${requests.length - requestsBeforeBlackhole} verdict=${JSON.stringify(blackholeVerdict)}`,
+)
+check(
+  '⑦b 最终错误以「模型连接失败：」开头，并告诉用户去哪儿自查',
+  connectPhaseError.startsWith('模型连接失败：') && connectPhaseError.includes('设置 → 生图桥'),
+  connectPhaseError,
 )
 
 /* ⑦b-2 连不上**必须真的切备用**：⑦b 只钉住了错误文案，这里钉行为本身。
        主用是不可路由地址（请求压根发不出去），备用是活的模拟服务商 → 结果必须来自备用，
        且备用确实收到了请求；结果里的警告要同时说清"为什么没成"与"已改用谁"。
-       预算取 600ms（连接宽限与预算取小，见 headerBudgetOf），所以这条不会真的等 15 秒。 */
-setRoutes({ primary: { providerId: 'blackhole-vendor', model: 'blackhole-image' }, fallback: { providerId: 'vendor-one', model: 'vendor-image-v2' } }, emptyRole(), 600)
+       连接预算取 1 秒，所以这条不会真的等 15 秒（备用的 30 秒固定预算只算连接，本地连接够快）。 */
+setRoutes({ primary: { providerId: 'blackhole-vendor', model: 'blackhole-image' }, fallback: { providerId: 'vendor-one', model: 'vendor-image-v2' } }, emptyRole(), 1)
 lastVendorGenerateBody = undefined
 const connectSwapValue = await providerGenerate.execute({ prompt: 'unreachable primary must swap' }, exec)
 check(
@@ -1521,78 +1564,69 @@ check(
   connectSwapWarning === '' ? '(没有警告)' : connectSwapWarning,
 )
 
-/* ⑦c 发出很快、服务商拖 5s → 必须报"请求发出后"，并说明连接不计入该预算。 */
-setRoutes({ primary: { providerId: 'slow-header-vendor', model: 'slow-header-image' }, fallback: emptyRole() }, emptyRole(), 1000)
+/* ⑦b-3 主备都连不上 → 用户看到的必须是那句固定的「模型连接失败」，并且两次尝试都点名。
+       备用刻意用**解析不了**的域名（`.invalid` 是保留 TLD，必不解析）：一次失败只花几十毫秒，
+       不会让这条用例真去烧备用那固定的 30 秒连接预算。 */
+setRoutes({ primary: { providerId: 'blackhole-vendor', model: 'blackhole-image' }, fallback: { providerId: 'dns-dead-vendor', model: 'dns-dead-image' } }, emptyRole(), 1)
+const bothDeadStartedAt = Date.now()
+let bothDeadError = ''
+try {
+  await providerGenerate.execute({ prompt: 'both providers unreachable' }, exec)
+} catch (error) {
+  bothDeadError = error instanceof Error ? error.message : String(error)
+}
+const bothDeadElapsed = Date.now() - bothDeadStartedAt
+check(
+  '⑦b-3 主备都连不上：错误以「模型连接失败：」开头，并点名两次尝试',
+  bothDeadError.startsWith('模型连接失败：')
+    && bothDeadError.includes('blackhole-image')
+    && bothDeadError.includes('dns-dead-image'),
+  bothDeadError === '' ? '(没有抛错)' : bothDeadError,
+)
+check(
+  '⑦b-3 并分别说清主用（连接阶段）与备用（DNS 解析失败）的原因，以及去哪儿自查',
+  bothDeadError.includes('连接阶段')
+    && bothDeadError.includes('ENOTFOUND')
+    && bothDeadError.includes('设置 → 生图桥'),
+  bothDeadError,
+)
+check(
+  '⑦b-3 备用走的是快速失败（没有把固定的 30 秒连接预算烧掉）',
+  bothDeadElapsed < 5000,
+  `耗时=${bothDeadElapsed}ms`,
+)
+
+/* ⑦c 反过来钉住新语义：请求发出很快、服务商拖 5s，连接预算只给 1 秒 → 仍然必须成功出图。
+      慢的是**响应**不是连接，所以成功本身就证明响应时间不参与任何判定；备用一次都不该被碰。 */
+setRoutes({ primary: { providerId: 'slow-header-vendor', model: 'slow-header-image' }, fallback: { providerId: 'alt-vendor', model: 'alt-image' } }, emptyRole(), 1)
 slowHeaderStartAt = 0
 slowHeaderEndAt = 0
-let headerPhaseError = ''
-try {
-  await providerGenerate.execute({ prompt: 'slow header' }, exec)
-} catch (error) {
-  headerPhaseError = error instanceof Error ? error.message : String(error)
-}
+lastAltGenerateBody = undefined
+const slowHeaderStartedAt = Date.now()
+const slowHeaderValue = await providerGenerate.execute({ prompt: 'slow responder must still win' }, exec)
+const slowHeaderElapsed = Date.now() - slowHeaderStartedAt
 check(
-  '⑦c 服务商慢：报"请求发出后超过预算仍未拿到响应头"',
-  headerPhaseError.includes('请求发出后') && headerPhaseError.includes('1000ms') && headerPhaseError.includes('slow-header-image'),
-  headerPhaseError,
+  '⑦c 服务商拖 5s 也必须成功出图（响应时间不再触发中止）',
+  slowHeaderValue.model === 'slow-header-image' && slowHeaderElapsed >= SLOW_HEADER_DELAY_MS - 100,
+  `model=${slowHeaderValue.model} 总耗时=${slowHeaderElapsed}ms`,
 )
 check(
-  '⑦c 文案点明连接耗时不计入该预算（用户能分清"连不上"与"服务商不回"）',
-  headerPhaseError.includes('不计入'),
-  headerPhaseError,
-)
-
-/* ------------------------------------------------------------------ *
- * ⑦d 超时后探活：把"服务商挂了"与"服务商在慢慢画"分成两句可操作的话
- *
- * 客户端本来就看不到"对方有没有收到"（HTTP 无确认、1xx 在 fetch 里拿不到），所以超时错误
- * 必须自己去问一次。探活**只加提示、不改判定**：换备用照旧。
- * ------------------------------------------------------------------ */
-
-/* ⑦d-1 服务商还在（它的浅路径照样应答，比如 404 也说明服务器在）→ 说明是"生成慢"。 */
-setRoutes({ primary: { providerId: 'very-slow-vendor', model: 'very-slow-image' }, fallback: emptyRole() }, emptyRole(), 500)
-let probeAliveError = ''
-try {
-  await providerGenerate.execute({ prompt: 'probe alive' }, exec)
-} catch (error) {
-  probeAliveError = error instanceof Error ? error.message : String(error)
-}
-check(
-  '⑦d-1 超时后探活说"服务商是活的、只是生成慢"（并提示调大超时）',
-  probeAliveError.includes('超时后探活')
-    && probeAliveError.includes('应答 HTTP')
-    && probeAliveError.includes('生成慢'),
-  `${probeAliveError} | verdict=${JSON.stringify(mod.lastBudgetVerdict())}`,
-)
-
-/* ⑦d-2 探活本身失败 → 必须说清"不是这次慢，是这家连不上"。
-      确定性造法：服务商先收下生成请求但一直不回（600ms 预算耗尽 → 走到探活）；
-      探活开始前让这个源**对一切请求都不再回应**，于是探活的 4 秒窗口耗尽 → 报不可达。 */
-setRoutes({ primary: { providerId: 'probe-dead-vendor', model: 'probe-dead-image' }, fallback: emptyRole() }, emptyRole(), 600)
-setTimeout(() => { resetHangAll = true }, 400)
-let probeDeadError = ''
-try {
-  await providerGenerate.execute({ prompt: 'probe dead' }, exec)
-} catch (error) {
-  probeDeadError = error instanceof Error ? error.message : String(error)
-}
-resetHangAll = false
-check(
-  '⑦d-2 探活也失败时：说"当前不可达，不只是这次慢"',
-  probeDeadError.includes('超时后探活') && probeDeadError.includes('不可达'),
-  probeDeadError,
+  '⑦c 且一次都没换备用（"慢"不再等于"这家不行"）',
+  lastAltGenerateBody === undefined && slowHeaderValue.warnings === undefined,
+  `备用收到请求=${typeof lastAltGenerateBody === 'string'} warnings=${JSON.stringify(slowHeaderValue.warnings)}`,
 )
 
 /*
- * ⑦d-6 「调用超时」必须**按调用时重读的配置**生效。
+ * ⑦d 「调用超时」必须**按调用时重读的配置**生效，并兜住"服务商就是不回"的那一头。
  *
  * 旧实现把它当工具注册期的快照（`timeoutMs: resolved.timeoutMs`），而 README 承诺这些字段
  * 可以在线改写——于是用户在设置页把超时从 180 秒改成 1 秒，实际毫无变化。这条用一个
  * 20 秒都不回的服务商 + 1 秒预算来钉住：小预算必须真的把整次调用掐断，并说清超了多久。
+ * 连接预算取 9 秒（远大于 1 秒的调用超时）：掐断必须来自「调用超时」，而不是连接阶段。
  */
 const timeoutBefore = providerConfigValue.timeoutMs
 providerConfigValue = { ...providerConfigValue, timeoutMs: 1000 }
-setRoutes({ primary: { providerId: 'very-slow-vendor', model: 'very-slow-image' }, fallback: emptyRole() }, emptyRole(), 9000)
+setRoutes({ primary: { providerId: 'very-slow-vendor', model: 'very-slow-image' }, fallback: emptyRole() }, emptyRole(), 9)
 let callTimeoutError = ''
 try {
   await providerGenerate.execute({ prompt: 'call budget should fire' }, exec)
@@ -1601,33 +1635,9 @@ try {
 }
 providerConfigValue = { ...providerConfigValue, timeoutMs: timeoutBefore }
 check(
-  '⑦d-6 「调用超时」按调用时重读的配置生效（改成 1 秒就真的 1 秒掐断）',
+  '⑦d 「调用超时」按调用时重读的配置生效（改成 1 秒就真的 1 秒掐断）',
   callTimeoutError.includes('整次调用超过 1000ms'),
   callTimeoutError || '(没有报错)',
-)
-
-/* ⑦d-4 探活只加提示、不改变"换备用"这个决定。 */
-setRoutes({ primary: { providerId: 'slow-header-vendor', model: 'slow-header-image' }, fallback: { providerId: 'alt-vendor', model: 'alt-image' } }, emptyRole(), 500)
-lastAltGenerateBody = undefined
-const probeThenFallback = await providerGenerate.execute({ prompt: 'probe then fallback' }, exec)
-check(
-  '⑦d-4 探活不改变换备用的判定：主模型超时后仍然成功改用备用',
-  probeThenFallback.model === 'alt-image' && typeof lastAltGenerateBody === 'string',
-  `model=${probeThenFallback.model}`,
-)
-
-/* ⑦d-5 连接阶段就超时（请求都没发出去）→ 不该再做探活，那句话本身已经说明问题。 */
-setRoutes({ primary: { providerId: 'blackhole-vendor', model: 'blackhole-image' }, fallback: emptyRole() }, emptyRole(), 600)
-let preSendError = ''
-try {
-  await providerGenerate.execute({ prompt: 'no probe when never sent' }, exec)
-} catch (error) {
-  preSendError = error instanceof Error ? error.message : String(error)
-}
-check(
-  '⑦d-5 请求压根没发出去时不探活（避免把诊断说乱）',
-  preSendError.includes('连接阶段') && !preSendError.includes('超时后探活'),
-  preSendError,
 )
 
 /* ---------------------------------------------------------------- 收尾 */
@@ -1636,8 +1646,6 @@ server.closeAllConnections?.()
 await new Promise((closed) => server.close(closed))
 slowServer.closeAllConnections?.()
 await new Promise((closed) => slowServer.close(closed))
-resetServer.closeAllConnections?.()
-await new Promise((closed) => resetServer.close(closed))
 headerServer.closeAllConnections?.()
 await new Promise((closed) => headerServer.close(closed))
 await new Promise((done) => setTimeout(done, 300))

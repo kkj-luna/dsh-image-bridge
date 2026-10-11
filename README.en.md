@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="plugins/dsh-image-bridge-v4/icon.svg" width="96" alt="Image Bridge">
+  <img src="docs/logo.png" width="96" alt="Image Bridge">
 </p>
 
 # Image Bridge (dsh-image-bridge)
@@ -43,12 +43,12 @@ Your agent can also install it through the plugin manager: `install_bundle` with
 
 ## Timeouts and fallback
 
-Image generation is synchronous, so tens of seconds is normal (42–61 s measured). Keep both timeouts generous:
+Image generation is synchronous, so tens of seconds is normal (42–61 s measured) — which is exactly why **only "cannot connect" switches to the fallback, never "draws slowly"**:
 
-- **"Primary model timeout (ms)" = `fallbackAfterMs`, default 90000**: how long after the request was actually sent the host waits for response headers before switching to the fallback. DNS / TCP / TLS connection time does not count.
-- **`timeoutMs`, default 180000**: the ceiling for one whole call.
-- **Cannot connect within 15 seconds? Switch.** If DNS / TCP / TLS / proxy has not put the request on the wire within 15 seconds, that counts as a connection failure and the fallback model takes over (`CONNECT_GRACE_MS`, deliberately **not** a setting). It does not consume the header budget above and never exceeds "Primary model timeout" — the smaller of the two wins.
-- After a timeout the host probes the provider (`GET {baseUrl}/models`) and turns the result into one readable sentence that separates "the provider is down" from "the provider is just drawing slowly".
+- **"Connect timeout (seconds)" = `connectTimeoutSeconds`, default 15** (you type seconds in Settings; the code converts to milliseconds): if DNS / TCP / TLS / proxy has not put the request on the wire within 15 seconds, that provider counts as unreachable and the **fallback model takes over**.
+- **The fallback's connect limit is a fixed 30 seconds**, not a setting.
+- **Once the request is sent it is no longer timed**: however long the provider takes is fine, bounded by `timeoutMs` (default 180000).
+- **When neither can be reached**, the error starts with **"模型连接失败" (model connection failed)** and lists both attempts' reasons; to check whether a provider is reachable at all, use the "Test connection" button in Settings.
 
 ## Supported providers
 
@@ -75,15 +75,15 @@ Three self-diagnostics land in `$DSH_HOME/`:
 ## Tests
 
 ```sh
-node .dib-verify/verify-manifest.mjs   # 43   manifest and cross-file consistency
-node .dib-verify/verify-client.mjs     # 168  client registration and component rendering
-node .dib-verify/verify-host.mjs       # 145  host end to end
+node .dib-verify/verify-manifest.mjs   # 53   manifest and cross-file consistency
+node .dib-verify/verify-client.mjs     # 169  client registration and component rendering
+node .dib-verify/verify-host.mjs       # 147  host end to end
 node .dib-verify/verify-security.mjs   # 12   security boundaries (SSRF refusal, response cap)
 node .dib-verify/verify-resolve.mjs    # 8    dependency resolution robustness
 node .dib-verify/verify-upgrade.mjs    # 24   user config survives an upgrade
 ```
 
-**400 assertions**, no network and no real API key needed. The cross-process end-to-end run additionally needs the local mock service:
+**413 assertions**, no network and no real API key needed. The cross-process end-to-end run additionally needs the local mock service:
 
 ```sh
 node .dib-verify/mock-image-api.mjs 8799   # in a second terminal

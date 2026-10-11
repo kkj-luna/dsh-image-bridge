@@ -44,13 +44,13 @@ export const SAMPLE_ROUTES = {
   edit: { primary: { providerId: 'default', model: 'qwen-image-3.0' }, fallback: { providerId: '', model: '' } },
 }
 
-/** 设置页写入的用户配置（providers + 路由 + 超时）。 */
+/** 设置页写入的用户配置（providers + 路由 + 连接超时）。 */
 export function sampleConfig(overrides = {}) {
   return {
     providers: structuredClone(SAMPLE_PROVIDERS),
     activeProviderId: 'default',
     modelRoutes: structuredClone(SAMPLE_ROUTES),
-    fallbackAfterMs: 15000,
+    connectTimeoutSeconds: 15,
     ...overrides,
   }
 }
@@ -138,7 +138,7 @@ export function effectiveConfigOf(row) {
       imageModel: provider.imageModel === '' || provider.imageModel === undefined ? config.model : provider.imageModel,
       editModel: provider.editModel === '' || provider.editModel === undefined ? (provider.imageModel ?? config.model) : provider.editModel,
       modelRoutes: config.modelRoutes,
-      fallbackAfterMs: config.fallbackAfterMs,
+      connectTimeoutSeconds: config.connectTimeoutSeconds,
     }
   }
   return {
@@ -149,7 +149,7 @@ export function effectiveConfigOf(row) {
     imageModel: config.model,
     editModel: config.editModel ?? config.model,
     modelRoutes: config.modelRoutes,
-    fallbackAfterMs: config.fallbackAfterMs,
+    connectTimeoutSeconds: config.connectTimeoutSeconds,
   }
 }
 

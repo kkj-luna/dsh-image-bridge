@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Image Bridge",
-    "description": "Gives text-only models image generation and editing. Add model providers and pick a primary plus a fallback model for generation and editing on the bridge page — candidates are the union of every connected provider, and the fallback takes over when the primary times out or fails."
+    "description": "Gives text-only models image generation and editing. Add model providers and pick a primary plus a fallback model for generation and editing on the bridge page — candidates are the union of every connected provider, and the fallback takes over when the primary cannot be reached (the connect timeout is set in seconds, 15 by default)."
   }
 }

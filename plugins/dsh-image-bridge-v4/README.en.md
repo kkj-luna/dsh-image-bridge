@@ -28,7 +28,7 @@ Package name `@local/dsh-image-bridge` (the `@local/` prefix is DSH convention f
 - **Generate** — the model calls `image_generate(prompt)` and the image lands in the conversation.
 - **Edit** — `image_edit` changes an existing image.
 - **Multiple providers** — generate with provider A and edit with provider B, or use just one.
-- **Fallback** — when the primary times out or fails, the fallback takes over, and the reason is reported honestly.
+- **Fallback** — when the primary cannot be reached, the fallback takes over, and the reason is reported honestly.
 - **A file on disk** — besides the image card in the conversation, every result is saved to the workspace.
 - **Debuggable** — one startup report plus one browser log, so failures do not have to be guessed at.
 
@@ -91,7 +91,7 @@ Four dropdowns, split into two pairs by generation/editing, each pair a **primar
 ```
 Image generation
 [Primary model ▾]    Used first for tool calls.
-[Fallback model ▾]   Used automatically when the primary times out or fails to connect.
+[Fallback model ▾]   Used automatically when the primary cannot be reached (the fallback gets 30 s).
 ```
 
 - **The two fallback rows have no visible label** (the dropdown already reads "Fallback model"), but each carries an equivalent `aria-label`, so screen readers can still tell the four controls apart.
@@ -99,7 +99,7 @@ Image generation
 - **Options are the union of every provider that has ever fetched a model list**, grouped by provider (group headings look like `— OTHER —`), and **model names are never rewritten**. Every option carries `{ providerId, model }`, so generation can use A while the fallback uses B.
 - Each dropdown ends with a fixed **"Manual input…"** entry (reserved value `__dib_manual__`, **not written to config**); the text box only appears once it is explicitly selected, and a **manually typed model goes to the provider currently in effect**.
 - **Empty state** (no provider has ever fetched a model list): all four dropdowns are disabled and show their placeholders. The UI does **not** open four text boxes at once — just one hint line, "Add and test a model provider first".
-- The block also holds the **"Primary model timeout (ms)"** input (default 90000); see Behavior below for what it means.
+- The block also holds the **"Connect timeout (seconds)"** input (default 15; you type seconds, the code converts to milliseconds); see Behavior below for what it means.
 - Click **"Save model settings"** to persist changes.
 
 ### Global image size
@@ -169,29 +169,32 @@ The UI no longer offers a switch, but the field is still saved and still drives 
 
 Model resolution order: an explicit `model` argument on the tool call → the **primary model** from the Models section (with its own providerId's base URL and credential) → the effective provider's `imageModel`/`editModel` → the legacy `baseUrl`/`model`. The fallback **only** comes from the Models section; unset, or pointing at an unusable provider, means there is no fallback.
 
-**Four cases switch to the fallback** (and then retry exactly once):
+**Three cases switch to the fallback** (and then the fallback is tried once):
 
-1. **Connection failure** (a network-layer error);
+1. **Cannot connect**: DNS / TCP / TLS / proxy did not put the request on the wire within the connect timeout, or the network layer failed outright;
 2. **Non-2xx**, including a body that is not valid JSON;
-3. **No response headers within the primary-model timeout**;
-4. **HTTP 200 that yields no usable image** — from the user's point of view, nothing was drawn.
+3. **HTTP 200 that yields no usable image** — from the user's point of view, nothing was drawn.
 
 **Two cases do not**:
 
 - **The user cancelled** (`exec.signal` already aborted) — a cancellation is not a failure;
 - **The image was produced but the download failed** — you were already billed, and generating again bills you twice.
 
-The fallback reports honestly: on success the message names the primary that failed, the reason, and the fallback model actually used; when both fail, the error names **both attempts with their own model and reason**.
+**Response time no longer switches anything.** The old "how long after the request was sent before headers arrive" budget (`fallbackAfterMs`) has been removed entirely: synchronous image APIs routinely take tens of seconds (measured: 42–61 seconds), so judging a provider by speed was both imprecise and prone to killing perfectly normal slow generations. Once the request is on the wire it is no longer timed, and the wait is bounded by the whole-call ceiling `timeoutMs` (default 180000) instead.
 
-### Primary model timeout (fallbackAfterMs)
+The fallback reports honestly: on success the message names the primary that failed, the reason, and the fallback model actually used; when both fail, the error names **both attempts with their own model and reason**. **When neither can be reached the error starts with "模型连接失败" (model connection failed)** and points at Settings → Image Bridge, plus the "Test connection" button for a reachability check.
 
-The setting is **"Primary model timeout (ms)"**, default **90000**. It measures how long after **the request was actually sent** the response headers may take, and **connection time (DNS/TCP/TLS) does not count**. It is **not** the total budget for the call — that ceiling is `timeoutMs` (default 180000).
+### Connect timeout (seconds)
 
-**Synchronous image APIs routinely take tens of seconds (measured: 42–61 seconds before headers arrive), so do not set this low.** Failing to send at all (a connection that never comes up) is a different failure: the error says "connection phase…" rather than pretending the provider did not respond.
+The setting is **"Connect timeout (seconds)"**, default **15**. You type **seconds**; the code converts to milliseconds. It measures exactly one thing: **whether the request got out** — DNS, TCP, TLS, proxy. If it has not been sent within that time, the provider counts as unreachable and the **fallback model takes over**.
 
-**A second hard line covers "cannot connect": 15 seconds** (`CONNECT_GRACE_MS`). When DNS fails, TCP refuses, TLS will not handshake or the proxy is dead, and the request is still not on the wire after 15 seconds, that counts as a connection failure and the **fallback model takes over** — no waiting out the full "Primary model timeout". The two lines do not overlap: the 15 seconds only govern "the request never left", and everything after it belongs to the header budget, so a mistyped address costs at most 15 seconds. It is capped by "Primary model timeout" (`min(connectGraceMs, budgetMs)`) and never exceeds the ceiling you set yourself. It is deliberately **not** a setting: 15 seconds comfortably covers a cross-border cold connect (measured 381 ms) and ordinary proxy handshakes, and one more knob would only be one more thing to get wrong.
+- **The fallback's connect limit is a fixed 30 seconds**, not a setting: it is the last resort, and its budget should not be another knob to get wrong.
+- **Once the request is sent, nothing is timed any more**: however long the provider takes is fine, bounded by `timeoutMs`. A mistyped address or an offline provider therefore costs at most 15 seconds before the fallback steps in, while normal slow generation is never mistaken for a failure.
+- Each attempt has its own connect budget: the primary uses the seconds you typed, the fallback uses its fixed 30.
+- When neither can be reached the error says **"模型连接失败"** plus both attempts' own reasons, instead of a vague failure.
+- A request that has already been sent is **never resent**: resending a non-idempotent POST can bill you twice for one generation.
 
-After a timeout the host automatically **probes** the provider (`GET {baseUrl}/models`, within 4 seconds): if it answers, the error explains that the provider is alive and the key is valid and that this run was merely slow, suggesting a larger timeout; if not, it says the provider is currently unreachable rather than just slow. The probe **only adds a hint and never changes whether the fallback is used**.
+There is no longer any "probe after a timeout": with response time removed from the decision, the only timeout left is the connect timeout, and a failed connect already says plainly that the request never left.
 
 ### Two safety constraints (deliberate)
 
@@ -232,7 +235,7 @@ Start with the three self-diagnostics; almost every failure can be read off them
 | All four dropdowns are empty (disabled) | No model list has been saved yet: test connection / fetch models → **Save**. You can also use "Manual input…" right away |
 | There are candidates but not the model I want | Only image models are shown by default — tick "Show all models" or use "Manual input…"; a model just fetched must be saved in the dialog first; it may also belong to another provider, so expand that group |
 | No "Image Bridge" page in Settings | Check that the plugin is enabled; look for `fatal` on `client apply` in the client log; **restart DSH after changing code** (Node caches loaded modules and hot reload ignores `node_modules`); check for a degraded file |
-| A normal slow generation is treated as a failure | The old `fallbackAfterMs` (say 15000) is too small — raise "Primary model timeout" (90000 recommended) |
+| Primary cannot be reached and neither can the fallback | The error says "模型连接失败" and lists both attempts' reasons. Use "Test connection" on both providers first; the connect timeout is counted in seconds (15 by default, 30 fixed for the fallback), and a cross-border cold connect usually takes a few hundred milliseconds — a timeout means the address or the network is wrong |
 | "Model route points at provider X, which is not in the provider list" | The provider you once selected was **renamed or deleted** (the route still holds its old id). **No request was sent.** Re-pick that slot in the Models section. This is deliberately a hard error: an earlier version silently fell back to the *active* provider's model name against the wrong endpoint, which came back as `404 Model not exist` and hid the real cause |
 | A model is selected but generation errors | See whether the error names the primary or the fallback: one model only → the fallback did not engage (unset, or its provider lacks a base URL or key); two models → both were tried, so investigate both reasons; "used fallback" → the fallback drew this one, and the primary is the thing to fix |
 
@@ -272,12 +275,12 @@ dsh-image-bridge-v4/
 └── icon.svg            Plugin icon
 ```
 
-The regression suites live in `.dib-verify/` at the repository root. They need **no network and no real key**, and total 400 assertions:
+The regression suites live in `.dib-verify/` at the repository root. They need **no network and no real key**, and total 413 assertions:
 
 ```bash
-node .dib-verify/verify-manifest.mjs   # 43
-node .dib-verify/verify-client.mjs     # 168
-node .dib-verify/verify-host.mjs       # 145
+node .dib-verify/verify-manifest.mjs   # 53
+node .dib-verify/verify-client.mjs     # 169
+node .dib-verify/verify-host.mjs       # 147
 node .dib-verify/verify-security.mjs   # 12
 node .dib-verify/verify-resolve.mjs    # 8
 node .dib-verify/verify-upgrade.mjs    # 24

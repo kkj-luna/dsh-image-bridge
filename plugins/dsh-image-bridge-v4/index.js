@@ -71,12 +71,14 @@ let LAST_RESOLUTION_FAILURE
  * `loadOptional` 走 `createRequire` 兜底时返回的是 `{ default: 模块 }` 包装，走运行时
  * import 时是模块命名空间——两种形状都要能取到 `defineTool`。
  *
- * 这一点很要紧：恒等兜底不会把参数从「作者格式」编译成 JSON Schema，`ctx.tools.register`
- * 的 schema 校验随即抛错，结果是**一个工具都注册不上**（而 Config 因为单独做了
- * `.default` 解包仍然正常，于是表现为「配置表在、工具不见」）。
+ * **解析不到时不注册工具**（而不是退化成恒等函数照常注册）。这条是实测定的：恒等兜底传进去的
+ * parameters 不是合法 JSON Schema，而 `ctx.tools.register` **照样接受、不抛错**，于是表现为
+ * 「插件装好了、工具也在，但模型看不到参数说明、传错参数也不会被拦」——一个**静默失效**的工具
+ * 远比一个明确的报错糟糕。所以宁可少给两个工具，也要把原因写进启动自述让用户看得到。
  */
 const toolsModule = await loadOptional('@deepseek-ai/dsh-tools')
-const defineTool = toolsModule?.defineTool ?? toolsModule?.default?.defineTool ?? ((options) => options)
+const defineTool = toolsModule?.defineTool ?? toolsModule?.default?.defineTool
+const toolsCompileAvailable = typeof defineTool === 'function'
 
 /** Config Schema 构造器；缺失时不再导出 Config，只保留 profile patch 配置。 */
 const schemastery = await loadOptional('@deepseek-ai/schemastery')
@@ -145,7 +147,11 @@ export const Config = z === undefined ? undefined : z.object({
     .default({})
     .volatile()
     .description('生图/修图的模型路由：每项 { providerId, model }，可跨服务商选择；fallback 是主用失败或超时后的备用模型。'),
-  fallbackAfterMs: z.number().default(90000).volatile().description('主模型「请求发出后」多久没拿到响应头就改用备用模型（毫秒）。连接耗时不计入这个预算；整次调用的上限仍是 timeoutMs。同步生图接口常常要几十秒，这个值别设太小。'),
+  connectTimeoutSeconds: z
+    .number()
+    .default(15)
+    .volatile()
+    .description('连接模型提供商的最长时间（秒）：DNS / TCP / TLS / 代理在这段时间内没把请求发出去，就改用备用模型。请求一旦发出就不再计时（整次调用的上限仍是 timeoutMs）。'),
 })
 
 /** API Key 在 credentials 服务里的引用名（同时作为环境变量回退名）。 */
@@ -161,33 +167,31 @@ const CREDENTIAL_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
 const MODELS_TIMEOUT_MS = 15000
 
 /**
- * 主模型"请求发出后多久还没拿到响应头就换备用"的默认预算。
+ * 连接模型提供商的默认上限：**15 秒**。
  *
- * 为什么是 90000 而不是更小：同步生图接口憋几十秒是常态（实测跨境到阿里云 MaaS 的
- * qwen-image-3.0 用了 42–61 秒才回响应头），15 秒级的预算会让正常的慢生成被误判成失败、
- * 白白切到备用。这里的语义是"值不值得再等"，不是"服务商坏了"——真正的总上限由 timeoutMs 管。
- * 设置页可改写（留空或不合法即用这个默认值）。
+ * 只衡量一件事——"请求有没有发出去"（DNS 解析、TCP 连接、TLS 握手、代理）。超过它就
+ * 算这家连不上，改用备用模型。用户可以在设置页按**秒**改（`connectTimeoutSeconds`）；
+ * 请求一旦发出就不再计时，同步生图憋几十秒（实测 42–61 秒）不会被误判成连接失败。
  */
-const DEFAULT_FALLBACK_AFTER_MS = 90000
-
-/** 超时后那次探活的超时：健康检查必须快，慢的探活本身没有诊断价值。 */
-const PROVIDER_PROBE_TIMEOUT_MS = 4000
+const DEFAULT_CONNECT_TIMEOUT_S = 15
 
 /**
- * 连接阶段的宽限：**连不上就改用备用模型**的那条线，15 秒。
+ * 备用模型的连接上限：**固定 30 秒**，不对外开放。
  *
- * 与「主模型超时」（fallbackAfterMs）分工明确，互不吃掉对方的额度：
- *   · 这条线管"请求压根没发出去"（DNS 解析不了、TCP 连不上、TLS 握不上手、代理不通）；
- *   · 请求真的发出去之后，剩下的等待交给响应头预算。
- * 所以填错地址、对端下线这类问题最多让人等 15 秒，而不是干等满整个「主模型超时」。
- *
- * 仍然受「主模型超时」的约束：headerBudgetOf 取 `min(connectGraceMs, budgetMs)`，
- * 用户把「主模型超时」调到比 15 秒更小时按更小的那个走，绝不越过用户自己设的整段上限。
- *
- * 刻意**不**做成设置项：15 秒既够跨境冷连接（实测 381ms）与常见代理握手，又短到
- * "地址不通"能被立刻发现；把它交给用户只会多一个会填错的旋钮。
+ * 为什么固定：备用是"最后一条路"，它的预算不该再由用户调参——调小了会误杀跨境冷连接，
+ * 调大了用户在"两家都连不上"时要多等。30 秒给足余量，超了就如实报「模型连接失败」。
  */
-const CONNECT_GRACE_MS = 15000
+const FALLBACK_CONNECT_TIMEOUT_S = 30
+
+/**
+ * 用户填的是**秒**，计时器要**毫秒**：换算只在这个函数里发生，别处不许再做同样的乘法。
+ * 值不合法（缺失、非正数、NaN）时退回默认秒数——绝不把 NaN 交给计时器。
+ */
+function msFromSeconds(seconds, fallbackSeconds = DEFAULT_CONNECT_TIMEOUT_S) {
+  const value = typeof seconds === 'number' ? seconds : Number(seconds)
+  const effective = Number.isFinite(value) && value > 0 ? value : fallbackSeconds
+  return Math.max(1, Math.round(effective * 1000))
+}
 
 /** 设置页「测试连接」用的环回 RPC 通道。 */
 const RPC_CHANNEL = '/dsh-image-bridge'
@@ -480,13 +484,12 @@ function normalizedConfig(config) {
     activeProviderId: nonEmptyString(value.activeProviderId),
     modelRoutes: normalizedRoutes(value.modelRoutes),
     /*
-     * 只接受**正整数**毫秒——与客户端 `parseFallbackMs` 同一口径。
-     * 早先这里是 `Number.isFinite(...) && > 0`，于是 Host 认 1.5，而客户端要整数：
-     * 手改配置写个浮点，工具会照它执行，界面却把它洗成默认值，两边看到的不是同一个数。
+     * 只接受**正整数秒**——与客户端同一个口径（用户填的是秒，代码内部自动换算毫秒）。
+     * 浮点、0、负数、缺字段一律退回默认秒数：绝不把 NaN 或 0 交给计时器。
      */
-    fallbackAfterMs: Number.isInteger(plainValueOf(value.fallbackAfterMs)) && plainValueOf(value.fallbackAfterMs) > 0
-      ? plainValueOf(value.fallbackAfterMs)
-      : DEFAULT_FALLBACK_AFTER_MS,
+    connectTimeoutSeconds: Number.isInteger(plainValueOf(value.connectTimeoutSeconds)) && plainValueOf(value.connectTimeoutSeconds) > 0
+      ? plainValueOf(value.connectTimeoutSeconds)
+      : DEFAULT_CONNECT_TIMEOUT_S,
   }
 }
 
@@ -1098,7 +1101,7 @@ try {
 /**
  * 只读诊断：最近一次"请求真正发出"的时刻（`0` = 没拿到，此时预算退回从调用开始算）。
  *
- * 导出它是为了**可验证**：响应头预算是否有正确跳过"发出前"的时间，断言必须能读到这个值，
+ * 导出它是为了**可验证**：连接预算是否真的把"请求发出之后"的时间排除在外，断言必须能读到这个值，
  * 否则测试只能间接猜（"连接慢"这类用例很容易造不出效果却看起来通过）。
  * 也供维护者手工核对通道在当前 Node 上是否可用。
  */
@@ -1113,8 +1116,8 @@ export function lastBudgetVerdict() {
 
 let lastBudgetVerdictValue = null
 
-/** 响应头预算的判定依据：以"请求发出时刻"为基准的**固定**截止时刻，连接阶段另有宽限上限。 */
-function headerBudgetOf({ budgetMs, startedAt, connectGraceMs }) {
+/** 连接预算的判定依据：**只在请求还没发出去时**计时，发出之后不再看表。 */
+function connectBudgetOf({ startedAt }) {
   /** 本次尝试开始时的发出事件序号：只有它变大，才说明"这一次的请求确实发出去了"。 */
   const startSeq = requestSentSeq
   return {
@@ -1129,96 +1132,57 @@ function headerBudgetOf({ budgetMs, startedAt, connectGraceMs }) {
      * 任何基于时间差的推断都受计时器分辨率摆布，序号不会。
      * 极小残留：并发多请求时序号跟着最后一个事件走，那种情况下预算只会更宽松，不会误杀。
      */
-    requestSentAt() {
+    sentAt() {
       if (requestSentSeq > startSeq) {
-        // 事件时刻可能早于 startedAt 同毫秒，夹到 startedAt，保证"发出后"从不为负。
+        // 事件时刻可能早于 startedAt 同毫秒，夹到 startedAt，保证"连接耗时"从不为负。
         return lastRequestSentAt > 0 ? Math.max(lastRequestSentAt, startedAt) : startedAt
       }
       // 序号没动：订阅不可用（序号恒为 0）时退回"时间戳不早于开始"的宽松判定。
       return requestSentSeq === 0 && lastRequestSentAt >= startedAt ? lastRequestSentAt : 0
     },
-    /** 请求已发出后还剩多少毫秒（未发出时视为无限，交给连接宽限管）。 */
-    remaining() {
-      const sentAt = this.requestSentAt()
-      return sentAt === 0 ? Number.POSITIVE_INFINITY : Math.max(0, budgetMs - (Date.now() - sentAt))
-    },
-    /** 发出前的等待用了多少毫秒（未发出时返回已等待时长）。 */
+    /** 从本次尝试开始到"请求发出"（未发出时返回已经等了多久）的毫秒数。 */
     connectMs() {
-      const sentAt = this.requestSentAt()
+      const sentAt = this.sentAt()
       return Math.round((sentAt === 0 ? Date.now() : sentAt) - startedAt)
-    },
-    /**
-     * 计时器该定多久。
-     *
-     * 关键是"截止时刻固定、不随事件刷新"：
-     *   已发出 → 发出时刻 + 预算；
-     *   未发出 → 开始 + min(连接宽限, 预算)。
-     * 若按"每次重算剩余量"来重置计时器，连接宽限会把服务商的慢响应也当成连接时间，
-     * 等于把预算悄悄放宽到宽限值——那也是被测试抓到过的一版错误。
-     */
-    nextDelayMs() {
-      const sentAt = this.requestSentAt()
-      const deadline = sentAt === 0
-        ? startedAt + Math.min(connectGraceMs, budgetMs)
-        : sentAt + budgetMs
-      return Math.max(1, deadline - Date.now())
     },
   }
 }
 
 /**
- * 一次"到响应头为止"的请求尝试。
+ * 一次"连接阶段"的尝试：DNS / TCP / TLS / 代理必须在 `connectTimeoutMs` 内把请求发出去。
  *
- * 两个中止来源：`exec.signal`（调用方取消）与 `fallbackAfterMs` 预算（响应头超时）。
- * 请求发出去之后两者没有区别，差别只在失败时怎么解释——**取消不是失败**，绝不能因此
- * 改用备用模型；超时才轮到备用上场。预算只算到拿到响应头为止：头一到就撤销计时器，
- * 之后读 body 不受它限制（整次调用的上限仍由工具的 timeoutMs 管）。
+ * **请求一旦发出就不再计时。** 响应快慢不参与换备用的判定——早先那套"等响应头超预算就换人"
+ * 的实现已按用户要求删除：同步生图本来就要几十秒（实测 42–61 秒），用时间判断"服务商是不是
+ * 不行"既做不准，也容易把正常的慢生成误杀。连接成功之后的等待由整次调用的上限 `timeoutMs` 兜底。
  *
- * **预算从"请求真正发出"起算**（见 headerBudgetOf）：DNS / TCP / TLS 不占额度，且截止时刻
- * 固定不随事件刷新。连接阶段另有 `CONNECT_GRACE_MS`（15 秒，且不超过预算本身）——**超过它
- * 还没把请求发出去就是连接失败，交给上层切备用**，而不是让人干等满「主模型超时」；
- * 正常的跨境连接（实测 381ms）远低于它。
+ * 两个中止来源：`exec.signal`（调用方取消）与连接预算。**取消不是失败**，绝不因此改备用。
  *
- * 网络层失败保留既有的"去掉 exec.signal 重试一次"兜底（fetchResilient 的行为），
- * 但重试时换成只带预算的信号——否则"多久没响应头就换人"会在重试路径上失效。
+ * 重试只发生在"确实还没发出去"时：已经上线过的请求绝不重发——非幂等的 POST 重发一次，
+ * 服务商可能已经生成并计费两次。
  *
- * @returns {{kind:'response', response}|{kind:'timeout'|'cancelled'|'failed', error}}
+ * @returns {{kind:'response', response}|{kind:'unreachable'|'cancelled', error}}
  */
-async function attemptWithHeaderBudget({ url, init, signal, budgetMs, connectGraceMs = CONNECT_GRACE_MS }) {
+async function attemptWithConnectBudget({ url, init, signal, connectTimeoutMs }) {
   const budget = new AbortController()
   const startedAt = Date.now()
   let expired = false
-  let timer
-  const headerBudget = headerBudgetOf({ budgetMs, startedAt, connectGraceMs })
-  const arm = () => {
-    clearTimeout(timer)
-    timer = setTimeout(fire, Math.max(1, headerBudget.nextDelayMs()))
-  }
-  function fire() {
+  const connectBudget = connectBudgetOf({ startedAt })
+  const fire = () => {
     lastBudgetVerdictValue = {
       startedAt,
       moduleSentAt: lastRequestSentAt,
-      seenSentAt: headerBudget.requestSentAt(),
+      seenSentAt: connectBudget.sentAt(),
       now: Date.now(),
-      budgetMs,
-      connectMs: headerBudget.connectMs(),
+      connectTimeoutMs,
+      connectMs: connectBudget.connectMs(),
     }
-    // 还没发出去 = 连接阶段超了宽限：如实说是连接没建立，别说成"服务商没响应"。
-    if (headerBudget.requestSentAt() === 0) {
-      expired = true
-      budget.abort(new Error('connect-timeout'))
-      return
-    }
-    const left = headerBudget.remaining()
-    if (left > 0) {
-      // 计时器在"请求发出"的同一瞬间先响了：按剩余额度重新计时，不误判超时。
-      timer = setTimeout(fire, left)
-      return
-    }
+    // 已经发出去了 → 连接阶段成功：之后不再用时间判断，交给 timeoutMs 兜底。
+    if (connectBudget.sentAt() !== 0) return
+    // 还没发出去 = 连接阶段超了上限：如实说是连接没建立，别说成"服务商没响应"。
     expired = true
-    budget.abort(new Error('header-timeout'))
+    budget.abort(new Error('connect-timeout'))
   }
-  arm()
+  const timer = setTimeout(fire, Math.max(1, connectTimeoutMs))
   const forwardAbort = () => budget.abort(signal?.reason)
   const callerAborted = () => signal !== undefined && signal !== null && signal.aborted === true
   if (callerAborted()) budget.abort(signal.reason)
@@ -1231,13 +1195,17 @@ async function attemptWithHeaderBudget({ url, init, signal, budgetMs, connectGra
       const first = describeFetchFailure(error, url)
       // 先看取消：调用方要求停止时，任何"重试/换人"都是错的。
       if (callerAborted()) return { kind: 'cancelled', error: new Error(`${first}（exec.signal ${describeSignal(signal)}）`) }
-      if (expired) return { kind: 'timeout', error: new Error(timeoutNote(first, headerBudget, budgetMs)) }
+      if (expired) return { kind: 'unreachable', error: new Error(connectTimeoutNote(first, connectBudget, connectTimeoutMs)) }
+      if (connectBudget.sentAt() !== 0) {
+        // 请求已经上线，只是传输断了：对端可能已经开始生成，重发等于重复计费。
+        return { kind: 'unreachable', error: new Error(`${first}（请求已经发出，不重发；exec.signal ${describeSignal(signal)}）`) }
+      }
       try {
         response = await fetch(url, { ...init, signal: budget.signal })
       } catch (retryError) {
         if (callerAborted()) return { kind: 'cancelled', error: new Error(`${first}（exec.signal ${describeSignal(signal)}）`) }
-        if (expired) return { kind: 'timeout', error: new Error(timeoutNote(first, headerBudget, budgetMs)) }
-        return { kind: 'failed', error: new Error(`${first}（exec.signal ${describeSignal(signal)}）；去掉信号重试仍失败：${describeFetchFailure(retryError, url)}`) }
+        if (expired) return { kind: 'unreachable', error: new Error(connectTimeoutNote(first, connectBudget, connectTimeoutMs)) }
+        return { kind: 'unreachable', error: new Error(`${first}；重试一次仍连不上：${describeFetchFailure(retryError, url)}`) }
       }
     }
     return { kind: 'response', response }
@@ -1247,12 +1215,11 @@ async function attemptWithHeaderBudget({ url, init, signal, budgetMs, connectGra
   }
 }
 
-/** 超时文案：请求发出后超时算服务商问题，连接阶段超时算连接问题，两者不能混为一谈。 */
-function timeoutNote(first, headerBudget, budgetMs) {
-  if (headerBudget.requestSentAt() === 0) {
-    return `${first}（连接阶段超过 ${Math.round(headerBudget.connectMs())}ms 仍未把请求发出去；响应头预算 ${budgetMs}ms 不包含连接时间）`
-  }
-  return `${first}（请求发出后超过 ${budgetMs}ms 仍未拿到响应头；连接耗时 ${headerBudget.connectMs()}ms 不计入这个预算）`
+/** 连接失败文案：说清"请求压根没发出去"，并把用户填的**秒数**（而不是内部毫秒）说给他听。 */
+function connectTimeoutNote(first, connectBudget, connectTimeoutMs) {
+  const seconds = connectTimeoutMs / 1000
+  const shown = Number.isInteger(seconds) ? String(seconds) : seconds.toFixed(1)
+  return `${first}（连接阶段超过 ${Math.round(connectBudget.connectMs())}ms 仍未把请求发出去；你设的连接超时是 ${shown} 秒）`
 }
 
 /** 按端点拼出一次生图/改图请求：生图走 JSON，改图走 multipart。 */
@@ -1276,61 +1243,20 @@ function imageRequestSpec({ endpoint, kind, prompt, size, model, n, file }) {
 }
 
 /**
- * 超时之后的一次探活：这家服务商现在是活的吗？
+ * 一次取图尝试：只负责"把请求发出去并拿到可用图片"。
  *
- * 为什么需要它：客户端**看不到对方有没有收到请求**——HTTP 没有"已收到"确认，1xx 中间响应
- * 在 fetch 里也拿不到（实测 `103 Early Hints` 不触发任何回调）。所以"响应头超时"这一条
- * 错误信息本身分不清两种完全不同的处境：
- *   - 服务商已经挂了 / 地址不通：再等多久都没用，应该马上去修配置；
- *   - 服务商正在慢慢生成（同步接口憋几十秒很常见，实测 42–61 秒）：只是我们等不了。
- * 探活能给出可操作的区分：打一个**便宜且不产生生图费用**的 `GET {baseUrl}/models`，
- * 通了就说明"服务在、密钥有效"，问题在"这次生成太慢"。
+ * 两类失败分开，因为对用户是两件事：
+ *   · `unreachable`——**没连上**（连接超时、DNS/TCP/TLS/代理失败、请求发出后传输断了）：
+ *     交给上层换备用，最后仍连不上就报「模型连接失败」；
+ *   · `failed`——连上了、也回了包，但这次没出图（非 2xx、不是 JSON、回包没有可用图片）：
+ *     同样换备用，但文案要说的是"服务商回了什么"，不是"连不上"。
  *
- * 刻意保守：任何 HTTP 响应都算"活着"（404/401 也说明服务器在应答）；探活自身失败或超时
- * 只作为**软提示**附在错误后面，绝不改变原先的失败判定，也不影响是否换备用。
- */
-async function probeProviderAlive(endpoint, signal) {
-  if (endpoint === undefined || typeof endpoint.baseUrl !== 'string' || endpoint.baseUrl === '') return ''
-  const budget = new AbortController()
-  const forward = () => budget.abort(signal?.reason)
-  signal?.addEventListener?.('abort', forward, { once: true })
-  const timer = setTimeout(() => budget.abort(new Error('probe-timeout')), PROVIDER_PROBE_TIMEOUT_MS)
-  const startedAt = Date.now()
-  try {
-    const response = await fetch(`${endpoint.baseUrl}/models`, {
-      method: 'GET',
-      headers: authHeaders(endpoint.apiKey),
-      signal: budget.signal,
-    })
-    return `（超时后探活：${endpoint.baseUrl}/models ${Date.now() - startedAt}ms 内应答 HTTP ${response.status}——服务商是活的、密钥有效，这次只是生成慢；可把「主模型超时」调大）`
-  } catch (error) {
-    if (signal !== undefined && signal !== null && signal.aborted === true) return ''
-    return `（超时后探活：${endpoint.baseUrl}/models 也连不上——服务商当前不可达，不只是这次慢：${describeFetchFailure(error, `${endpoint.baseUrl}/models`)}）`
-  } finally {
-    clearTimeout(timer)
-    signal?.removeEventListener?.('abort', forward)
-  }
-}
-
-/**
- * 一次取图尝试：只负责"发出请求并拿到可用图片"。
- *
- * 网络失败、响应头超时、非 2xx（含回包不是 JSON）、以及**回包正常但解析不出任何可用图片**
- * 都不在这里抛，而是交回上层决定要不要换备用——从用户视角这四种都是"这次没出图"。
- * 图片已经产出、只是传输失败（url 形态下载失败）才是硬错误：那是已经计过费的一次生成，
+ * 图片已经产出、只是 url 形态下载失败才是硬错误（直接抛）：那是已经计过费的一次生成，
  * 换备用会重复计费。
  */
-async function requestImagesOnce({ endpoint, kind, prompt, size, model, n, file, signal, budgetMs }) {
+async function requestImagesOnce({ endpoint, kind, prompt, size, model, n, file, signal, connectTimeoutMs }) {
   const spec = imageRequestSpec({ endpoint, kind, prompt, size, model, n, file })
-  const attempt = await attemptWithHeaderBudget({ url: spec.url, init: spec.init, signal, budgetMs, connectGraceMs: CONNECT_GRACE_MS })
-  if (attempt.kind === 'timeout') {
-    // 只在"发出去了但没回头"时探活：连接阶段超时已经说清是连不上，再探一次没有新信息。
-    if (!attempt.error.message.includes('连接阶段')) {
-      const note = await probeProviderAlive(endpoint, signal)
-      if (note !== '') return { kind: 'timeout', error: new Error(`${attempt.error.message}${note}`) }
-    }
-    return attempt
-  }
+  const attempt = await attemptWithConnectBudget({ url: spec.url, init: spec.init, signal, connectTimeoutMs })
   if (attempt.kind !== 'response') return attempt
   let payload
   try {
@@ -1349,14 +1275,17 @@ async function requestImagesOnce({ endpoint, kind, prompt, size, model, n, file,
 /**
  * 跑一次"主模型 → 备用模型"的取图。
  *
- * 换备用的条件：网络失败、非 2xx（含回包不是 JSON）、超过 `budgetMs` 没拿到响应头、
- * 以及回包正常却解析不出任何可用图片（"这次没出图"）。
- * 取消（exec.signal 已中止）**不换**；备用没配或不可用时，把主模型的错误如实报出去，
- * 并把"备用为什么没上"一并说清楚。
+ * 换备用的条件：**连不上**（连接超时 / 网络层失败）、非 2xx（含回包不是 JSON）、
+ * 以及回包正常却解析不出任何可用图片（"这次没出图"）。**不再按响应时间判断**——
+ * "服务商能不能连上"与"图要画多久"是两件事，后者交给整次调用的上限 `timeoutMs` 兜底
+ * （同步生图憋几十秒是常态，实测 42–61 秒）。
+ *
+ * 两个模型各有自己的连接上限：主用取用户配置（秒），备用固定 30 秒。
+ * 取消（exec.signal 已中止）**不换**；两家都连不上时，最终错误以「模型连接失败」开头。
  *
  * @returns {{ images, endpoint, warning? }}
  */
-async function requestImagesWithFallback({ plan, label, kind, prompt, size, n, file, signal, budgetMs }) {
+async function requestImagesWithFallback({ plan, label, kind, prompt, size, n, file, signal, primaryConnectMs, fallbackConnectMs }) {
   /*
    * 主用可能在**构造期**就不可用（路由指向的服务商不在、缺地址、缺凭据）。
    * imageAttemptPlan 把这种失败收在 `primaryNote` 里并保留备用：备用可用就直接走备用，
@@ -1370,16 +1299,18 @@ async function requestImagesWithFallback({ plan, label, kind, prompt, size, n, f
     first = { kind: 'failed', error: new Error(plan.primaryNote ?? '主用模型不可用') }
   } else {
     primaryLabel = `「${primary.model}」`
-    first = await requestImagesOnce({ endpoint: primary, kind, prompt, size, model: primary.model, n, file, signal, budgetMs })
+    first = await requestImagesOnce({ endpoint: primary, kind, prompt, size, model: primary.model, n, file, signal, connectTimeoutMs: primaryConnectMs })
     if (first.kind === 'images') return { ...first, endpoint: primary }
     if (first.kind === 'cancelled') throw first.error
   }
   if (plan.fallback === undefined) {
     const note = plan.fallbackNote === undefined ? '' : `（备用模型不可用：${plan.fallbackNote}）`
+    // 连不上就是连不上：即使没有备用可换，用户需要看到的也是「模型连接失败」，而不是一句泛泛的失败。
+    if (first.kind === 'unreachable') throw new Error(modelConnectFailureNote(`主用模型${primaryLabel}：${first.error.message}`, undefined, plan.fallbackNote))
     throw new Error(`${label}${primaryLabel === '主用模型' ? '' : primaryLabel}失败：${first.error.message}${note}`)
   }
   const fallback = plan.fallback
-  const second = await requestImagesOnce({ endpoint: fallback, kind, prompt, size, model: fallback.model, n, file, signal, budgetMs })
+  const second = await requestImagesOnce({ endpoint: fallback, kind, prompt, size, model: fallback.model, n, file, signal, connectTimeoutMs: fallbackConnectMs })
   if (second.kind === 'images') {
     /*
      * 主用是构造期失败（路由失效/缺地址/缺凭据）时，文案里不能写"模型「undefined」失败"——
@@ -1394,7 +1325,24 @@ async function requestImagesWithFallback({ plan, label, kind, prompt, size, n, f
     }
   }
   if (second.kind === 'cancelled') throw second.error
+  // 备用也没连上 → 这就是用户要的那句「模型连接失败」（主用原因 + 备用原因 + 去哪儿查）。
+  if (second.kind === 'unreachable') {
+    throw new Error(modelConnectFailureNote(
+      primary === undefined ? `主用：${first.error.message}` : `主用模型${primaryLabel}：${first.error.message}`,
+      `备用模型「${fallback.model}」：${second.error.message}`,
+      undefined,
+    ))
+  }
   throw new Error(`${label}${primaryLabel}失败：${first.error.message}；备用模型「${fallback.model}」也失败：${second.error.message}`)
+}
+
+/** 两家都连不上时给用户的那句话：固定以「模型连接失败」开头，后面才是可操作的原因。 */
+function modelConnectFailureNote(primaryReason, fallbackReason, fallbackNote) {
+  const parts = [`模型连接失败：${primaryReason}`]
+  if (fallbackReason !== undefined) parts.push(fallbackReason)
+  if (fallbackNote !== undefined && fallbackNote !== '') parts.push(`备用模型不可用：${fallbackNote}`)
+  parts.push('请检查「设置 → 生图桥」里的接口地址与本机网络，或点一次「测试连接」确认这家服务商是否可达。')
+  return parts.join('；')
 }
 
 /**
@@ -1515,8 +1463,14 @@ async function settleImages(args) {
   }
 }
 
-/** 两个工具共用的输出声明：模型面按视觉能力分叉，界面面恒久化图片引用。 */
-const OUTPUT = {
+/**
+ * 两个工具共用的输出声明：模型面按视觉能力分叉，界面面恒久化图片引用。
+ *
+ * **导出是为了让验收能真的执行它**（verify-manifest 直接调 `OUTPUT.render(...)` 断言内容与
+ * 块顺序），而不是去 grep 源码——"看起来在验、其实没人验"是本项目踩过的坑。平台只读
+ * `name` / `inject` / `Config` / `apply`，多一个导出对它没有任何影响，**请不要删掉这个 export**。
+ */
+export const OUTPUT = {
   schema: OUTPUT_SCHEMA,
   render: (_args, value) => {
     const blocks = [{ type: 'text', text: envelopeOf(value) }]
@@ -1534,6 +1488,32 @@ const OUTPUT = {
           },
         })
       }
+    }
+    /*
+     * 末尾补一行"这张图是谁生成的"。
+     *
+     * 为什么非写进 content 不可：对话稳定后，平台手上只剩结果的两样东西——`content`
+     * （**就是本函数的返回值**：`dsh-tools/lib/types/index.js` 的 `createSuccessResult()` 里
+     * `rendered = tool.output.render(...)` 紧接着 `content = snapshotProjection(name, 'render',
+     * rendered)`）与 `meta`（`presentationMeta` 的产出，且只在 `exec.parent === undefined` 时
+     * 生成，只有本插件注册的 keyed toolview 会读）。而那个 keyed toolview 在稳定后被包进一个
+     * 高度为 0 的滚动容器里、屏幕上看不见；能稳定显示的是**平台按 content 渲染的原生卡片**
+     * （用户看到的图片与文件行就是它）。所以想让这行字在任何渲染路径下都在，只能放进 content。
+     * 相关证据：`dsh-tool-fs/lib/index.js` 的注释 "The canonical value never crosses the wire —
+     * only the model-facing render text and this JSON `meta`"；客户端派发点在
+     * `dsh-client-ui-tool/lib/client.js` 的 `ToolCall`：`renderSlot("tool.call.toolview", owner,
+     * { entryKey: toolName, hookContext, fallback: GenericToolCard })`。
+     *
+     * 取舍：`content` 是**模型可见**输出，模型会多读到这一行。因此刻意写成语言中立、非命令式的
+     * `model: <名字>`——Host 不参与界面本地化，写成中文句子在英文界面下会突兀，这种形式两边都
+     * 读得通、也不会被误当成指令。值取 `value.model`（**真正产出这张图的模型**，主用失败改用
+     * 备用时就是备用那个），**不取 `args.model`**（那是用户请求的模型，可能根本没产出这张图）。
+     * 为空或非字符串时**一个块都不加**，绝不出现空的 `model: `。
+     *
+     * 位置固定在**最后一个块**：原生卡片按顺序渲染，于是它落在图片下方。
+     */
+    if (typeof value.model === 'string' && value.model.trim() !== '') {
+      blocks.push({ type: 'text', text: `model: ${value.model.trim()}` })
     }
     return blocks
   },
@@ -1786,7 +1766,16 @@ export function apply(ctx, config) {
    * 注册本身不需要附件服务，只有执行时才需要（settleImages 会自行检查并给出明确错误）。
    * 否则一旦那个回调没有触发，就会静默地一个工具都注册不上——这类失败极难察觉。
    */
-  try {
+  if (!toolsCompileAvailable) {
+    /*
+     * 方案 A：宁可不给工具，也不给"没有参数说明、没有参数校验"的残缺工具。
+     * 这里**不抛错**：设置页、自诊断与 RPC 通道都还正常，用户能从启动自述里看到这件事和
+     * 该怎么做；抛错会让整行插件失效，反而把设置页也一起带走。
+     */
+    note('dsh-tools 未解析：两个工具未注册（参数无法编译成 JSON Schema，宁可不注册也不静默降级）')
+    note('修复：确认这台机器装了 dsh 本体（npm i -g @deepseek-ai/dsh），并让 DSH_BIN 指向它的 lib/bin.js')
+    void finish({})
+  } else try {
     /*
      * 注册到刚查到的那个服务对象上，而不是再读一次 `ctx.tools`：两者在真实 Cordis 里是
      * 同一个对象，但桩环境（或属性访问被守卫时）可能只有 `ctx.get('tools')` 可用——
@@ -1795,9 +1784,18 @@ export function apply(ctx, config) {
      */
     const tools = ctx.get('tools')
     if (tools === undefined) throw new Error('tools 服务未挂载，无法注册工具')
+    /*
+     * 面向模型的一句说明：结果里带着 `model: <实际使用的模型名>`，请把它转述给用户。
+     *
+     * 为什么必须写在这里：这行字是**模型可见**的信息源，没被告知的模型不会去用它，
+     * 用户就永远看不到"这张图是谁生成的"。写成共用常量 = 同一事实只说一次，两个工具
+     * 各自引用一遍；措辞只讲"结果里有什么 + 期望你做什么"，不写内部机制（那些在代码
+     * 注释与 README 里）。
+     */
+    const MODEL_ATTRIBUTION_HINT = '结果末尾有 model: <实际使用的模型名>；请在回复中说明这张图由哪个模型生成（备用接管时说明）。'
     tools.register(defineTool({
       name: 'image_generate',
-      description: '用外部生图模型按提示词生成图片，并把结果保存为可查看的图片。当用户要求画图、生成插画/图标/海报，或需要任何图像产物时使用；本工具不依赖当前模型自身的绘图能力。',
+      description: `用外部生图模型按提示词生成图片，并把结果保存为可查看的图片。当用户要求画图、生成插画/图标/海报，或需要任何图像产物时使用；本工具不依赖当前模型自身的绘图能力。${MODEL_ATTRIBUTION_HINT}`,
       parameters: {
         prompt: { type: 'string', required: true, description: '图片内容的描述，越具体越好（主体、风格、构图、光线、文字等）。' },
         size: { type: 'string', description: `图片尺寸，例如 1024x1024、1024x1536、1536x1024。默认 ${resolved.size}。` },
@@ -1828,7 +1826,8 @@ export function apply(ctx, config) {
             size,
             n: 1,
             signal: budget.signal,
-            budgetMs: live.fallbackAfterMs,
+            primaryConnectMs: msFromSeconds(live.connectTimeoutSeconds),
+            fallbackConnectMs: msFromSeconds(FALLBACK_CONNECT_TIMEOUT_S, FALLBACK_CONNECT_TIMEOUT_S),
           })
         } catch (error) {
           throw callFailureOf(error, exec, budget)
@@ -1848,7 +1847,7 @@ export function apply(ctx, config) {
 
     tools.register(defineTool({
       name: 'image_edit',
-      description: '用外部生图模型按提示词修改一张已有图片（局部重绘、换风格、增删元素等）。图片来自会话工作区里的文件路径。',
+      description: `用外部生图模型按提示词修改一张已有图片（局部重绘、换风格、增删元素等）。图片来自会话工作区里的文件路径。${MODEL_ATTRIBUTION_HINT}`,
       parameters: {
         prompt: { type: 'string', required: true, description: '要如何修改这张图，例如「把背景换成夜晚的街道」。' },
         image_path: { type: 'string', required: true, description: '待修改图片的路径，由文件系统后端解析。' },
@@ -1889,7 +1888,8 @@ export function apply(ctx, config) {
             size,
             file: { bytes, mediaType, name },
             signal: budget.signal,
-            budgetMs: live.fallbackAfterMs,
+            primaryConnectMs: msFromSeconds(live.connectTimeoutSeconds),
+            fallbackConnectMs: msFromSeconds(FALLBACK_CONNECT_TIMEOUT_S, FALLBACK_CONNECT_TIMEOUT_S),
           })
         } catch (error) {
           throw callFailureOf(error, exec, budget)
@@ -1968,7 +1968,7 @@ async function appendClientLog(payload) {
 /**
  * 设置页的环回通道：与 `/api` 走同一道来源与会话栅栏。
  *
- * 三个方法：`test` 探活、`log` 收客户端诊断、`models` 拉模型列表（供设置页的下拉框）。
+ * 三个方法：`test` 测试连接、`log` 收客户端诊断、`models` 拉模型列表（供设置页的下拉框）。
  * `test` / `models` 的 payload 都是 `{ baseUrl, apiKey, keyRef }`；凭据只认 `apiKey` 与
  * `keyRef` 两者之一，都没有就直接返回失败——绝不借用别的服务商的密钥。
  */

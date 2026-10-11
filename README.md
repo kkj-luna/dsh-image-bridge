@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="plugins/dsh-image-bridge-v4/icon.svg" width="96" alt="生图桥">
+  <img src="docs/logo.png" width="96" alt="生图桥">
 </p>
 
 # 生图桥 dsh-image-bridge
@@ -43,12 +43,12 @@ dsh plugin --profile web add <本仓库绝对路径>/plugins/dsh-image-bridge-v4
 
 ## 超时与换备用
 
-生图接口是同步的，憋几十秒很正常（实测 42–61 秒），两个超时值都别往小里调：
+生图接口是同步的，憋几十秒很正常（实测 42–61 秒）——所以**只用"连不上"判断换备用，不用"画得慢"**：
 
-- **「主模型超时(毫秒)」= `fallbackAfterMs`，默认 90000**：**请求真正发出之后**多久没拿到响应头就改用备用。DNS / TCP / TLS 的连接耗时不计入。
-- **`timeoutMs`，默认 180000**：整次调用的上限。
-- **连不上就换：15 秒**——DNS / TCP / TLS / 代理 15 秒还没把请求发出去，直接算连接失败并改用备用（`CONNECT_GRACE_MS`，**刻意不做成设置项**）。它不占用上面那条响应头预算，也不会越过「主模型超时」（两者取小）。
-- 超时后 Host 会探活（`GET {baseUrl}/models`），把「服务商挂了」和「服务商在慢慢画」分成两句能读懂的话。
+- **「连接超时(秒)」= `connectTimeoutSeconds`，默认 15**（设置页按秒填，代码内部换算毫秒）：DNS / TCP / TLS / 代理 15 秒还没把请求发出去，就算这家连不上，**改用备用模型**。
+- **备用模型的连接上限固定 30 秒**，不是设置项。
+- **请求一旦发出就不再计时**：服务商画多久都照等，由 `timeoutMs`（默认 180000）兜底。
+- **两家都连不上时**，错误以「**模型连接失败**」开头，并列出两次尝试各自的原因；想确认某家到底通不通，点设置页的「测试连接」。
 
 ## 支持的服务商
 
@@ -75,15 +75,15 @@ dsh plugin --profile web add <本仓库绝对路径>/plugins/dsh-image-bridge-v4
 ## 测试
 
 ```sh
-node .dib-verify/verify-manifest.mjs   # 43   清单与跨文件一致性
-node .dib-verify/verify-client.mjs     # 168  客户端注册与组件渲染
-node .dib-verify/verify-host.mjs       # 145  Host 端到端
+node .dib-verify/verify-manifest.mjs   # 53   清单与跨文件一致性
+node .dib-verify/verify-client.mjs     # 169  客户端注册与组件渲染
+node .dib-verify/verify-host.mjs       # 147  Host 端到端
 node .dib-verify/verify-security.mjs   # 12   安全边界（SSRF 拒收、回包上限）
 node .dib-verify/verify-resolve.mjs    # 8    依赖解析健壮性
 node .dib-verify/verify-upgrade.mjs    # 24   升级后用户配置是否保留
 ```
 
-共 **400 条断言**，无需联网、无需真实密钥。跨进程端到端另需先起一个本地模拟接口：
+共 **413 条断言**，无需联网、无需真实密钥。跨进程端到端另需先起一个本地模拟接口：
 
 ```sh
 node .dib-verify/mock-image-api.mjs 8799   # 另开一个终端

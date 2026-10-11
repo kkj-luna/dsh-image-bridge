@@ -66,7 +66,7 @@ check(
   isDeepStrictEqual(baseline.effective?.config?.modelRoutes, sampleConfig().modelRoutes),
   JSON.stringify(baseline.effective?.config?.modelRoutes),
 )
-check('普通升级：fallbackAfterMs 保留', baseline.effective?.config?.fallbackAfterMs === 15000, String(baseline.effective?.config?.fallbackAfterMs))
+check('普通升级：connectTimeoutSeconds 保留', baseline.effective?.config?.connectTimeoutSeconds === 15, String(baseline.effective?.config?.connectTimeoutSeconds))
 
 /* ─────────────────────────────────────────── ③ 版本号与默认值的变化不应该影响用户配置 */
 
@@ -80,7 +80,7 @@ check(
 )
 check(
   '结论：用户没写过的字段既不会丢、也不会从新默认值继承（新增字段必须靠代码内兜底）',
-  isDeepStrictEqual(Object.keys(bumped.effective?.config ?? {}).sort(), ['activeProviderId', 'fallbackAfterMs', 'modelRoutes', 'providers']),
+  isDeepStrictEqual(Object.keys(bumped.effective?.config ?? {}).sort(), ['activeProviderId', 'connectTimeoutSeconds', 'modelRoutes', 'providers']),
   Object.keys(bumped.effective?.config ?? {}).join(','),
 )
 

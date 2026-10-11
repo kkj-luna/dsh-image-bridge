@@ -215,6 +215,36 @@ const navDom = (() => {
 })()
 
 globalThis.document = navDom.document
+
+/*
+ * 全局**桩时钟**：把 setInterval / clearInterval 换成可以手动推进的桩。
+ *
+ * 两个理由，都是踩出来的：
+ *  ① 「生成中」的秒级计时用的是真实 setInterval；一次性渲染（invoke）没有卸载动作，
+ *     于是定时器留在事件循环里，脚本跑完 SUMMARY 也**不退出**（第一版就是这样被拖住 3 分钟）；
+ *  ② 断言要"时间推进后秒数递增"，真等 2 秒既慢又脆——手动 tick 才是确定性做法。
+ * 需要推进时间的地方用 `stubClock.tick()`，要查清理情况用 `stubClock.cleared` / `stubClock.timers`。
+ */
+const stubClock = {
+  timers: new Map(),
+  cleared: [],
+  nextId: 1,
+  tick() {
+    for (const entry of [...this.timers.values()]) entry.fn()
+    return this.timers.size
+  },
+}
+globalThis.setInterval = (fn, ms) => {
+  const id = stubClock.nextId
+  stubClock.nextId += 1
+  stubClock.timers.set(id, { fn, ms })
+  return id
+}
+globalThis.clearInterval = (id) => {
+  stubClock.cleared.push(id)
+  stubClock.timers.delete(id)
+}
+
 globalThis.MutationObserver = class {
   constructor(callback) {
     this.callback = callback
@@ -253,13 +283,15 @@ check(
 )
 
 /*
- * 「主模型超时」的默认值：**从 client.js 源码读**，不在这里写死。
+ * 「连接超时」的默认值（**秒**）：**从 client.js 源码读**，不在这里写死。
  * 写死过一次的代价：Host 把默认值从 15000 改成 90000（同步生图实测 42–61 秒，15 秒会把正常
  * 的慢生成误判成失败），这里仍在断言 15000，于是套件报红——测试该跟着实现走，而不是反着来。
+ * 现在两边都只算"请求有没有发出去"，而且**用户按秒填**（Host 侧 `DEFAULT_CONNECT_TIMEOUT_S`），
+ * 所以这里读的是 client.js 的秒常量，断言写"秒"。
  */
-const CLIENT_DEFAULT_FALLBACK_MS = (() => {
-  const value = Number(/const DEFAULT_FALLBACK_MS = (\d+)/u.exec(clientSource)?.[1])
-  if (!Number.isInteger(value) || value <= 0) throw new Error('没能从 client.js 读到 DEFAULT_FALLBACK_MS')
+const CLIENT_DEFAULT_CONNECT_S = (() => {
+  const value = Number(/const DEFAULT_CONNECT_TIMEOUT_S = (\d+)/u.exec(clientSource)?.[1])
+  if (!Number.isInteger(value) || value <= 0) throw new Error('没能从 client.js 读到 DEFAULT_CONNECT_TIMEOUT_S')
   return value
 })()
 
@@ -390,17 +422,9 @@ try {
 check('卡片组件在所有状态下都不抛错', crashed === null, crashed === null ? '' : String(crashed?.stack ?? crashed))
 check('成功态渲染出图片元素（自带渲染，不走被占用的子插槽）', successCardText.includes('dib-gallery'), successCardText.slice(0, 200))
 
-/* ---------------------------------------------------------------- 卡片底部「由 X 生成」 */
+/* ---------------------------------------------------------------- 卡片渲染辅助 */
 
-/*
- * 数据源必须是 `meta.model`（Host 的 `presentationMeta.model` = **真正产出这张图**的模型；
- * 主用失败改用备用时它就是备用那个），**不允许用 `args.model` 兜底**：那是"用户请求的模型"，
- * 旧结果里恰好只有它，兜底会显示一个没产出这张图的名字。
- */
-const bylineRowOf = (element) => {
-  const tree = treeOf(element)
-  return tree.nodes.find((node) => String(node.props?.className ?? '').split(/\s+/u).includes('dib-byline'))
-}
+/** 渲染一张已结算的卡片（返回元素树）。 */
 const renderCard = (block, toolName) => {
   hookState = []
   return invoke(ImageResultRow, { ...commonProps, toolName: toolName ?? 'image_generate', phase: 'result', block }).element
@@ -413,86 +437,103 @@ const settledBlock = (meta, extra) => ({
   ...(extra ?? {}),
 })
 
-const withModel = renderCard(settledBlock({
-  model: 'qwen-image-3.0',
-  prompt: '一只猫',
-  imageCapable: true,
-  images: [{ attachmentId: 'sha256:x', mediaType: 'image/png', bytes: 10, width: 1, height: 1 }],
-}))
-const withModelRow = bylineRowOf(withModel)
-/*
- * 上游 locale 失灵时的兜底：真机上 `t` 来自插槽，热重载后可能返回空串/键名/不含占位符的串。
- * 那种情况下 `.replace('{model}', …)` 会产出一行**空文本的行**——行在、字没了，最难查。
- * 所以：模板里没有 `{model}` 就退回内置中文模板，绝不能渲染出空行。
- */
-check(
-  '①b 词典模板不含 {model} 占位符时退回内置中文模板（绝不渲染空文本的行）',
-  (() => {
-    hookState = []
-    const brokenTemplate = invoke(ImageResultRow, {
-      t: (key) => (key === 'byline.model' ? '' : key),
+/* ------------------------------------------------------------------ *
+ * A. 生成中的秒级计时
+ *
+ * 「正在生成图片…」后面要跟一个每秒递增的秒数。这段占位是用户**唯一能看到本卡片内容**的
+ * 时机（对话稳定后卡片会被宿主折叠/隐藏），所以它值得被认真验：
+ *   首帧就有数字（不能先空一秒）、每秒 +1、**结束/卸载时必须清掉定时器**、zh/en 都走语言包。
+ * 时间推进**不真等**：用文件顶部那个全局桩时钟（`stubClock`）手动 tick。
+ * 状态推进用 createSession（它按路径持久化 hook，重渲染才会带着新秒数）。
+ * ------------------------------------------------------------------ */
+{
+  const timers = stubClock.timers
+  const clearedIds = stubClock.cleared
+  const pendingTextOf = (tree) => {
+    const node = tree.nodes.find((entry) => String(entry.props?.className ?? '').split(/\s+/u).includes('dib-pending'))
+    return node === undefined ? '' : textOfElement(node).trim()
+  }
+  {
+    const startProps = { ...commonProps, toolName: 'image_generate', phase: 'start', block: { phase: 'start', args: { prompt: '一只猫' } } }
+    const timerSession = createSession(ImageResultRow, startProps)
+    const firstFrame = timerSession.tree()
+    check(
+      '① 生成中首帧就带秒数（0s 立即可见，不用先空一秒）',
+      pendingTextOf(firstFrame) === '正在生成图片… 0s'
+        && firstFrame.nodes.some((node) => node.props?.['data-dib-elapsed'] === '0')
+        && zhDict['running.elapsed'] === '{seconds}s',
+      JSON.stringify({ text: pendingTextOf(firstFrame), timers: timers.size }).slice(0, 160),
+    )
+    stubClock.tick()
+    const afterOne = timerSession.tree()
+    stubClock.tick()
+    const afterTwo = timerSession.tree()
+    check(
+      '② 时钟推进后秒数递增（桩时钟手动 tick，不真等）',
+      pendingTextOf(afterOne) === '正在生成图片… 1s'
+        && pendingTextOf(afterTwo) === '正在生成图片… 2s'
+        && afterTwo.nodes.some((node) => node.props?.['data-dib-elapsed'] === '2'),
+      JSON.stringify({ one: pendingTextOf(afterOne), two: pendingTextOf(afterTwo) }).slice(0, 160),
+    )
+    // 状态切到已结算（生成结束）→ effect 依赖变化 → **这一个** session 的定时器必须被清掉
+    const timersBefore = timers.size
+    const clearedBefore = clearedIds.length
+    timerSession.props = { ...startProps, phase: 'result', block: settledBlock({ prompt: '一只猫', imageCapable: true, images: [] }) }
+    const settledTree = timerSession.tree()
+    check(
+      '③ 生成结束（状态切换）后定时器被清理：clearInterval 被调用、该定时器从桩里消失',
+      clearedIds.length > clearedBefore
+        && timers.size === timersBefore - 1
+        && settledTree.nodes.every((node) => node.props?.['data-dib-elapsed'] === undefined),
+      JSON.stringify({ cleared: clearedIds.length - clearedBefore, timersBefore, timersAfter: timers.size }).slice(0, 160),
+    )
+
+    /* zh / en 两套：定时文案必须跟着语言包走，而不是硬编码中文 */
+    const enTimerSession = createSession(ImageResultRow, {
+      t: (key) => enDict[key] ?? key,
       toolName: 'image_generate',
-      loadImage: () => Promise.resolve('data:image/png;base64,AAAA'),
-      phase: 'result',
-      block: settledBlock({ model: 'gpt-image-2.5', prompt: 'x', imageCapable: true, images: [] }),
-    }).element
-    const row = bylineRowOf(brokenTemplate)
-    const text = row === undefined ? '' : textOfElement(row).trim()
-    return row !== undefined && text === '由 gpt-image-2.5 生成' && text !== ''
-  })(),
-  JSON.stringify({ zh: zhDict['byline.model'] }).slice(0, 160),
-)
+      phase: 'start',
+      block: { phase: 'start', args: { prompt: 'a cat' } },
+    })
+    const enTree = enTimerSession.tree()
+    check(
+      '④ zh / en 两套都有计时文案，且渲染结果跟着语言包走',
+      typeof zhDict['running.elapsed'] === 'string'
+        && typeof enDict['running.elapsed'] === 'string'
+        && pendingTextOf(enTree) === 'Generating image… 0s'
+        && !pendingTextOf(enTree).includes('生成')
+        // 它也必须挂到（桩）时钟上——否则下面那句"清理"就无从谈起
+        && timers.size >= 1,
+      JSON.stringify({ zh: zhDict['running.elapsed'], en: enDict['running.elapsed'], en0: pendingTextOf(enTree) }).slice(0, 200),
+    )
+    /*
+     * 收尾：把这个 session 也推到已结算，让它的定时器被清掉——测试里"挂上就不管"的定时器
+     * 会留在桩时钟里（第一版用真实 setInterval，脚本跑完 SUMMARY 都不退出，正是这个原因）。
+     */
+    enTimerSession.props = { ...enTimerSession.props, block: settledBlock({ prompt: 'a cat', imageCapable: true, images: [] }) }
+    enTimerSession.tree()
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * B. 署名行已放弃（方案改为"由模型在对话里说明"）
+ *
+ * 留一条**源码级守卫**：客户端里不许再出现署名行的类名/词典键/去重函数。真机上那行字
+ * 曾经"渲染了却看不到"（宿主在对话稳定后把卡片折叠/隐藏），排查成本很高；既然改走
+ * Host content 那一行 + 模型在回复里说明，就别让它悄悄回流。
+ * ------------------------------------------------------------------ */
 check(
-  '① 有 meta.model 时卡片底部渲染「由 <模型名> 生成」，文案与词典逐字一致',
-  withModelRow !== undefined
-    && textOfElement(withModelRow).trim() === '由 qwen-image-3.0 生成'
-    && textOfElement(withModelRow).trim() === zhDict['byline.model'].replace('{model}', 'qwen-image-3.0')
-    && withModelRow.props.title === 'qwen-image-3.0'
-    // 位置：在图片画廊之后（卡片最下面），不是头部徽标那种位置
-    && (() => {
-      const tree = treeOf(withModel)
-      const gallery = tree.nodes.findIndex((node) => String(node.props?.className ?? '').includes('dib-gallery'))
-      const byline = tree.nodes.findIndex((node) => String(node.props?.className ?? '').includes('dib-byline'))
-      return gallery >= 0 && byline > gallery
-    })(),
-  JSON.stringify({ text: withModelRow === undefined ? null : textOfElement(withModelRow).trim(), zh: zhDict['byline.model'] }).slice(0, 200),
-)
-check(
-  '② 旧结果（没有 meta.model）不渲染这一行：不留空行、不留占位',
-  (() => {
-    const legacy = renderCard(settledBlock({ prompt: '一只猫', imageCapable: true, images: [{ attachmentId: 'sha256:x', mediaType: 'image/png', bytes: 10, width: 1, height: 1 }] }))
-    return bylineRowOf(legacy) === undefined && !JSON.stringify(legacy).includes('dib-byline')
-  })(),
-  JSON.stringify({ rows: treeOf(renderCard(settledBlock({ prompt: 'x' }))).nodes.filter((node) => String(node.props?.className ?? '').includes('dib-byline')).length }),
-)
-check(
-  '③ 旧结果里即使有 args.model 也不显示（数据源只能是 meta.model，绝不拿请求参数兜底）',
-  (() => {
-    const legacyWithArgs = renderCard(settledBlock(undefined, { args: { prompt: '一只猫', model: 'requested-model-v9' } }))
-    return bylineRowOf(legacyWithArgs) === undefined
-  })(),
-  JSON.stringify({ text: JSON.stringify(renderCard(settledBlock(undefined, { args: { model: 'requested-model-v9' } }))).slice(0, 120) }),
-)
-check(
-  '④ zh/en 两套词典各有一条：中文「由 {model} 生成」、英文「Generated by {model}」，都不带句尾句号',
-  zhDict['byline.model'] === '由 {model} 生成'
-    && enDict['byline.model'] === 'Generated by {model}'
-    && zhDict['byline.model'] !== enDict['byline.model']
-    && !/[。.]$/u.test(zhDict['byline.model'])
-    && !/[。.]$/u.test(enDict['byline.model'])
-    && (() => {
-      // 英文界面下渲染一遍：文案必须跟着语言包走，而不是硬编码中文
-      const enElement = invoke(ImageResultRow, {
-        t: (key) => enDict[key] ?? key,
-        toolName: 'image_generate',
-        loadImage: () => Promise.resolve('data:image/png;base64,AAAA'),
-        phase: 'result',
-        block: settledBlock({ model: 'dall-e-3', prompt: 'a cat', imageCapable: true, images: [] }),
-      }).element
-      const row = bylineRowOf(enElement)
-      return row !== undefined && textOfElement(row).trim() === 'Generated by dall-e-3'
-    })(),
-  JSON.stringify({ zh: zhDict['byline.model'], en: enDict['byline.model'] }).slice(0, 200),
+  '⑤ 署名行已彻底移除（源码级守卫：不得再出现 dib-byline / byline.model / 去重函数）',
+  !clientSource.includes('dib-byline')
+    && !clientSource.includes('byline.model')
+    && !clientSource.includes('contentHasModelLine')
+    // 计时是这一轮新增的东西，顺手确认它没被守卫误伤
+    && clientSource.includes('running.elapsed'),
+  JSON.stringify({
+    dibByline: clientSource.includes('dib-byline'),
+    bylineKey: clientSource.includes('byline.model'),
+    dedup: clientSource.includes('contentHasModelLine'),
+  }),
 )
 
 /* ------------------------------------------------------------------ *
@@ -571,23 +612,6 @@ check(
     JSON.stringify({ hardcoded: rings.filter((rule) => /#[0-9a-fA-F]{3,8}/u.test(rule)).length }),
   )
 }
-check(
-  '⑤ 长模型名不撑破卡片：整行可任意断行、字号比正文小、只用主题令牌',
-  (() => {
-    const longName = 'vendor-name/very-long-image-model-name-v2.1-preview-2026-03-03'
-    const longRow = bylineRowOf(renderCard(settledBlock({ model: longName, prompt: 'x', imageCapable: true, images: [] })))
-    const cssText = styles.map((style) => style.textContent).join('')
-    const rule = /\.dib-byline\{[^}]*\}/u.exec(cssText)?.[0] ?? ''
-    return longRow !== undefined
-      && textOfElement(longRow).trim() === `由 ${longName} 生成`
-      && rule.includes('overflow-wrap:anywhere')
-      && rule.includes('font-size:11px')
-      && rule.includes('var(--dsw-alias-label-tertiary)')
-      && !/#[0-9a-fA-F]{3,8}|rgba?\(|hsla?\(/u.test(rule)
-  })(),
-  (/\.dib-byline\{[^}]*\}/u.exec(styles.map((style) => style.textContent).join(''))?.[0] ?? '(缺 CSS)').slice(0, 200),
-)
-
 if (typeof boundaryType === 'function') {
   const healthy = new boundaryType({ children: 'child' })
   healthy.state = { error: null }
@@ -2121,13 +2145,13 @@ check(
 check(
   '两条说明小字是最终文案（zh 不带句尾句号、en 保留英文句号）',
   hintTextOf(routesTree, `${ROUTE_SELECTS['generate.primary']}-hint`) === '工具调用时优先使用'
-    && hintTextOf(routesTree, `${ROUTE_SELECTS['generate.fallback']}-hint`) === '主模型超时仍未返回或连接失败，自动改用'
+    && hintTextOf(routesTree, `${ROUTE_SELECTS['generate.fallback']}-hint`) === '主模型连不上或这次没出图时，自动改用'
     && zhDict['route.primaryHint'] === '工具调用时优先使用'
-    && zhDict['route.fallbackHint'] === '主模型超时仍未返回或连接失败，自动改用'
+    && zhDict['route.fallbackHint'] === '主模型连不上或这次没出图时，自动改用'
     && zhDict['route.unset'] === '主模型'
     && zhDict['route.noFallback'] === '备用模型'
     && enDict['route.primaryHint'] === 'Used first when the tools call the API.'
-    && enDict['route.fallbackHint'] === 'Used when the primary times out or fails to connect.'
+    && enDict['route.fallbackHint'] === 'Used when the primary cannot be reached or returns no image.'
     && enDict['route.unset'] === 'Primary model'
     && enDict['route.noFallback'] === 'Fallback model',
   JSON.stringify({
@@ -2249,7 +2273,7 @@ check(
     && routesPatch.modelRoutes?.generate?.fallback?.providerId === 'zhipu'
     && routesPatch.modelRoutes?.generate?.fallback?.model === 'wan2.7-image'
     && routesPatch.modelRoutes?.edit?.primary?.providerId === ''
-    && routesPatch.fallbackAfterMs === CLIENT_DEFAULT_FALLBACK_MS
+    && routesPatch.connectTimeoutSeconds === CLIENT_DEFAULT_CONNECT_S
     // activeProviderId 仍然原样写回：界面不再有切换入口，但 Host 的三级回退要用它。
     && routesPatch.activeProviderId === 'zhipu',
   JSON.stringify(routesPatch ?? null).slice(0, 320),
@@ -2297,7 +2321,9 @@ check(
   JSON.stringify(manualRoutesPatch?.modelRoutes ?? null).slice(0, 240),
 )
 
-/* ⑦ 主模型超时：非法值不落盘，合法值 / 留空按默认写 */
+/* ⑦ 连接超时（秒）：非法值不落盘，合法值 / 留空按默认写，zh/en 文案成对 */
+const CONNECT_TIMEOUT_INPUT = 'dib-connect-timeout'
+const saveRoutesButtonOf = (tree) => tree.nodes.find((node) => node.type === 'button' && node.props?.['data-dib-action'] === 'save-routes')
 const timeoutBundle = sectionWithRecording({ size: '1024x1024' })
 const timeoutSession = createSession(timeoutBundle.component, {
   t: undefined,
@@ -2305,33 +2331,62 @@ const timeoutSession = createSession(timeoutBundle.component, {
   __initial: { phase: 'idle', providers: [zhipuFull, openaiProvider], activeProviderId: 'zhipu' },
 })
 let timeoutTree = timeoutSession.tree()
-timeoutSession.change(inputById(timeoutTree, 'dib-fallback-ms'), 'abc')
-timeoutTree = timeoutSession.tree()
-timeoutSession.click(timeoutTree.nodes.find((node) => node.type === 'button' && node.props?.['data-dib-action'] === 'save-routes'))
-await sleep(30)
-timeoutTree = timeoutSession.tree()
+/*
+ * 非法输入**逐个**过一遍再断言：Host 只认正整数秒（`Number.isInteger(x) && x > 0`），
+ * 界面必须同一口径——非数字、0、负数、小数一个都不许"洗"成默认值，一个都不许落盘。
+ */
+const refusedDrafts = ['abc', '0', '-5', '1.5']
+for (const draft of refusedDrafts) {
+  timeoutSession.change(inputById(timeoutTree, CONNECT_TIMEOUT_INPUT), draft)
+  timeoutTree = timeoutSession.tree()
+  timeoutSession.click(saveRoutesButtonOf(timeoutTree))
+  await sleep(30)
+  timeoutTree = timeoutSession.tree()
+}
 check(
-  '主模型超时填了非法值时不写入任何数据（并给出原因）',
-  timeoutBundle.updates.length === 0 && timeoutTree.text.includes('主模型超时必须是正整数毫秒数'),
-  JSON.stringify({ updates: timeoutBundle.updates.length, hint: timeoutTree.text.includes('主模型超时必须是正整数毫秒数') }).slice(0, 140),
+  '连接超时填了非法值（非数字 / 0 / 负数 / 小数）时一次都不写入，并给出点名字段的原因',
+  timeoutBundle.updates.length === 0
+    && refusedDrafts.every((draft) => inputById(timeoutTree, CONNECT_TIMEOUT_INPUT) !== undefined)
+    && timeoutTree.text.includes('连接超时必须是正整数秒数'),
+  JSON.stringify({ updates: timeoutBundle.updates.length, hint: timeoutTree.text.includes('连接超时必须是正整数秒数') }).slice(0, 160),
 )
-timeoutSession.change(inputById(timeoutTree, 'dib-fallback-ms'), '20000')
+timeoutSession.change(inputById(timeoutTree, CONNECT_TIMEOUT_INPUT), '20')
 timeoutTree = timeoutSession.tree()
-timeoutSession.click(timeoutTree.nodes.find((node) => node.type === 'button' && node.props?.['data-dib-action'] === 'save-routes'))
+timeoutSession.click(saveRoutesButtonOf(timeoutTree))
 await sleep(30)
 check(
-  '超时改成合法值后写进 patch（fallbackAfterMs=20000）',
-  timeoutBundle.updates[0]?.patch?.fallbackAfterMs === 20000,
-  JSON.stringify(timeoutBundle.updates[0]?.patch?.fallbackAfterMs ?? null),
+  '连接超时改成合法值后**按秒**写进 patch（connectTimeoutSeconds=20，不是毫秒）',
+  timeoutBundle.updates[0]?.patch?.connectTimeoutSeconds === 20
+    && timeoutBundle.updates[0]?.patch?.fallbackAfterMs === undefined,
+  JSON.stringify(timeoutBundle.updates[0]?.patch?.connectTimeoutSeconds ?? null),
 )
-timeoutSession.change(inputById(timeoutTree, 'dib-fallback-ms'), '')
+timeoutSession.change(inputById(timeoutTree, CONNECT_TIMEOUT_INPUT), '')
 timeoutTree = timeoutSession.tree()
-timeoutSession.click(timeoutTree.nodes.find((node) => node.type === 'button' && node.props?.['data-dib-action'] === 'save-routes'))
+timeoutSession.click(saveRoutesButtonOf(timeoutTree))
 await sleep(30)
 check(
-  '超时留空按默认值写（值从 client.js 的 DEFAULT_FALLBACK_MS 读，避免两边漂移）',
-  timeoutBundle.updates[1]?.patch?.fallbackAfterMs === CLIENT_DEFAULT_FALLBACK_MS,
-  JSON.stringify(timeoutBundle.updates.map((entry) => entry.patch.fallbackAfterMs)),
+  '连接超时留空按默认值写（值从 client.js 的 DEFAULT_CONNECT_TIMEOUT_S 读，避免两边漂移）',
+  timeoutBundle.updates[1]?.patch?.connectTimeoutSeconds === CLIENT_DEFAULT_CONNECT_S,
+  JSON.stringify(timeoutBundle.updates.map((entry) => entry.patch.connectTimeoutSeconds)),
+)
+check(
+  '连接超时的标签 / 占位 / 说明 / 报错在 zh 与 en 里成对（写明单位是秒、默认 15）',
+  zhDict['connectTimeoutSeconds'] === '连接超时(秒)'
+    && enDict['connectTimeoutSeconds'] === 'Connect timeout (seconds)'
+    && zhDict['connectTimeoutSeconds.placeholder'] === String(CLIENT_DEFAULT_CONNECT_S)
+    && enDict['connectTimeoutSeconds.placeholder'] === String(CLIENT_DEFAULT_CONNECT_S)
+    && String(zhDict['connectTimeoutSeconds.hint']).includes('秒')
+    && String(enDict['connectTimeoutSeconds.hint']).includes('seconds')
+    && String(zhDict['connectTimeoutSeconds.hint']).includes(String(CLIENT_DEFAULT_CONNECT_S))
+    && zhDict['connectTimeoutSeconds.hint'] !== enDict['connectTimeoutSeconds.hint']
+    && String(zhDict['connectTimeoutInvalid']).includes('连接超时')
+    && String(enDict['connectTimeoutInvalid']).includes('connect timeout')
+    && zhDict['connectTimeoutInvalid'] !== enDict['connectTimeoutInvalid']
+    // 备用模型自己的连接上限是固定的 30 秒，不是设置项——它不该出现在界面上。
+    && !timeoutTree.text.includes('固定 30')
+    && !Object.keys(zhDict).some((key) => key.includes('fallbackConnect'))
+    && !Object.keys(enDict).some((key) => key.includes('fallbackConnect')),
+  JSON.stringify({ zhLabel: zhDict['connectTimeoutSeconds'], enLabel: enDict['connectTimeoutSeconds'], zhInvalid: zhDict['connectTimeoutInvalid'] }).slice(0, 240),
 )
 
 /* ⑧ 主页改选择后，浮层里的「当前生图模型」标记跟着走（同一份状态） */
@@ -2642,10 +2697,13 @@ await sleep(30)
 const savedPatch = saveBundle.updates.length === 1 ? saveBundle.updates[0].patch : {}
 const savedProvider = Array.isArray(savedPatch.providers) && savedPatch.providers.length === 1 ? savedPatch.providers[0] : {}
 check(
-  '保存把 providers 与 activeProviderId 写进 settings.update',
+  '保存把 providers / activeProviderId / 连接超时（**秒**）一起写进 settings.update',
   saveBundle.updates.length === 1 && saveBundle.updates[0].ns === 'image-bridge-v4'
-    && Array.isArray(savedPatch.providers) && savedPatch.providers.length === 1,
-  JSON.stringify(saveBundle.updates).slice(0, 240),
+    && Array.isArray(savedPatch.providers) && savedPatch.providers.length === 1
+    // 这条路径以前带的是毫秒的 fallbackAfterMs，而且会把非法值悄悄改成默认值；现在是秒。
+    && savedPatch.connectTimeoutSeconds === CLIENT_DEFAULT_CONNECT_S
+    && savedPatch.fallbackAfterMs === undefined,
+  JSON.stringify({ patch: savedPatch.connectTimeoutSeconds ?? null, fallbackAfterMs: savedPatch.fallbackAfterMs ?? null }).slice(0, 200),
 )
 check(
   'provider.id 由名称生成小写 slug，keyRef 按规则派生',
@@ -2665,6 +2723,39 @@ check(
   '诊断日志只记密钥长度 / 是否配置，不含密钥明文',
   !logPayloads().includes(secret) && logPayloads().includes('keyLength'),
   logPayloads().slice(0, 240),
+)
+
+/*
+ * 提供商保存路径与「保存模型设置」必须**同一口径**。
+ *
+ * 这个输入框在两条保存路径下写的是同一份配置：以前一条把非法值悄悄改写成默认值、另一条拒绝，
+ * 同一个填错的数字在哪个按钮下结果不一样（一个"保存成功"、一个报错）。现在两条都拒绝，而且
+ * **整个保存一起拒绝**——配置与密钥一个都不落盘，不留半截状态。
+ */
+const providerTimeoutBundle = sectionWithRecording({ size: '1024x1024' })
+const providerTimeoutTree = pageWith(providerTimeoutBundle, {
+  providers: [],
+  activeProviderId: '',
+  connectTimeoutDraft: '0',
+  editor: {
+    mode: 'add',
+    initial: {
+      label: 'My Provider',
+      baseUrl: 'https://api.example.com/v1',
+      keyRef: '',
+      models: ['m-alpha'],
+      imageModel: 'm-alpha',
+      editModel: '',
+      keyDraft: secret,
+    },
+  },
+})
+providerTimeoutTree.forms[0].props.onSubmit({ preventDefault() {} })
+await sleep(30)
+check(
+  '提供商保存路径对同一个非法连接超时同样拒绝（配置与密钥一个都不写）',
+  providerTimeoutBundle.updates.length === 0 && providerTimeoutBundle.credentialSets.length === 0,
+  JSON.stringify({ updates: providerTimeoutBundle.updates.length, credentialSets: providerTimeoutBundle.credentialSets.length }).slice(0, 160),
 )
 
 /* 不动输入框直接保存：不能把星号当密钥写进去（credentials.set 一次都不能被调用） */
@@ -3172,3 +3263,13 @@ check('新增文案 zh 与 en 一一对应', zhKeys.join(',') === enKeys.join(',
 const failed = results.filter((entry) => !entry.ok)
 console.log(`\nSUMMARY total=${results.length} passed=${results.length - failed.length} failed=${failed.length}`)
 process.exitCode = failed.length === 0 ? 0 : 1
+
+/*
+ * 显式收尾：SUMMARY 已经打完，这里没有待刷新的输出，所以 `process.exit` 是安全的。
+ *
+ * 为什么需要它：本套件把全局 `setInterval` 换成桩时钟、又 import 了浏览器半的模块，跑完后
+ * 事件循环里可能还挂着环境留下的 handle（实测在受限沙箱里是 2 个管道 Socket）。那会让
+ * "进程不退出"，看起来像死循环——排查过一次：其实 168 条断言早就跑完了，只是脚本不肯结束。
+ * 没有这条时，任何人（或 CI）都得靠外部超时来判定成败，而超时看起来就像失败。
+ */
+process.exit(failed.length === 0 ? 0 : 1)
