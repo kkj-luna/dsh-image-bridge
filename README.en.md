@@ -15,21 +15,21 @@ Give a [DeepSeek Harness](https://github.com/deepseek-ai) model that **cannot dr
 
 ## Install
 
-Requires a local `@deepseek-ai/dsh` (a working `dsh web`). If you do not have one:
-
-```sh
-npm i -g @deepseek-ai/dsh
-```
-
-### One command (recommended)
+Install the plugin (it is on npm — one command):
 
 ```sh
 dsh plugin --profile web add kkj520-dsh-image-bridge
 ```
 
-Restart `dsh web` and open **Settings → Image Bridge**. The package is on npm, so you get a prebuilt install: no cloning, no local path to remember, and no source-build approval step.
+Restart `dsh web` and open **Settings → Image Bridge**. You get a prebuilt install: no cloning, no local path to remember.
 
-**Rather not restart by hand?** Let your agent do it — start a new conversation and send this:
+This requires a local `@deepseek-ai/dsh` (a working `dsh web`). If you do not have one:
+
+```sh
+npm i -g @deepseek-ai/dsh
+```
+
+**Rather not type commands?** Let your agent do it — start a new conversation and send this:
 
 ```text
 Install this plugin: dsh plugin --profile web add kkj520-dsh-image-bridge
@@ -38,32 +38,15 @@ Then restart dsh web and confirm that Settings → Image Bridge opens and both t
 
 The agent installs, restarts, and checks the result for you.
 
-### Two other ways
-
-To track the latest commits (when npm lags behind):
+**To track the latest commits** (when npm lags behind):
 
 ```sh
 dsh plugin --profile web add github:kkj520/dsh-image-bridge
 ```
 
-To develop this plugin — clone the repo, then install using **the repository root**:
+### How to confirm it loaded
 
-```sh
-dsh plugin --profile web add <absolute path to the cloned repo>
-```
-
-Those two install source, so after editing `index.js` / `client.js` a restart of `dsh web` is enough to see the change (plugin code is not hot-reloaded).
-
-> The `github:` form works because since v0.3.0 **the plugin package root *is* the repository root**: when pnpm fetches a git dependency it packs the repository root, and there is no way to point it at a subdirectory.
-
-### About the names, and the restart
-
-- Package name `kkj520-dsh-image-bridge`, version **0.4.0**. The author prefix keeps it unique on npm — the plain name `dsh-image-bridge` was already taken by someone else. The settings-page badge shows only the repository name, `dsh-image-bridge`.
-- Installation adds the plugin row to the profile config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). The `-v4` in that row id is an **internal rewrite counter**, there only to avoid colliding with older copies on the same machine; it means nothing for day-to-day use.
-- **Upgrading from v0.3.0 or earlier**: the package name changed twice (`@local/dsh-image-bridge` → `kkj520-dsh-image-bridge`), so that one dependency line in your profile has to change too. **The row id and the settings namespace did not move**, so your provider configuration is not lost.
-- **Restart `dsh web` afterwards** — plugin code is not hot-reloaded, and the settings page will not appear before the restart.
-
-### Confirm it loaded — any one of the three
+After restarting `dsh web`, any one of the three (**the restart is required** — plugin code is not hot-reloaded):
 
 - **Settings → Image Bridge** shows the settings page;
 - `$DSH_HOME/dsh-image-bridge-startup.json` lists three `steps` (schema ready, both tools registered, test channel mounted) and `services.tools` is `true`;
@@ -75,7 +58,14 @@ Those two install source, so after editing `index.js` / `client.js` a restart of
 dsh plugin --profile web remove kkj520-dsh-image-bridge
 ```
 
-The plugin manager can remove it as well.
+You can also remove it under **Settings → Plugins**.
+
+| You may be wondering | Answer |
+| --- | --- |
+| Why does the package name carry `kkj520-`? | To stay unique on npm — the plain name `dsh-image-bridge` was already taken. The settings-page badge shows only the repository name |
+| Do I have to restart? | **Yes** — plugin code is not hot-reloaded |
+| Will upgrading lose my configuration? | No. The row id and settings namespace have always been `image-bridge-v4`; the package name changed twice but it is only an install identifier |
+| What if I want to change the code? | See "Developing this plugin" in the [full manual](docs/manual.en.md) — a developer path, not needed for normal use |
 
 ## Three steps to start
 
@@ -188,7 +178,7 @@ generated-images/                   generated output (ignored, not committed)
 | Document | Contents |
 | --- | --- |
 | [Full plugin manual](docs/manual.en.md) | configuration, behaviour details, troubleshooting, implementation notes |
-| [Changelog](CHANGELOG.md) | what changed in each version (currently **v0.3.0**) |
+| [Changelog](CHANGELOG.md) | what changed in each version (currently **v0.4.0**) |
 | [Verification report](.dib-verify/verify-report.md) · [second round](.dib-verify/verify-report-2.md) | independent verification results, including what was not covered |
 
 ## Feedback

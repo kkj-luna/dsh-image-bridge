@@ -15,53 +15,36 @@
 
 ## 安装
 
-前提：本机装着 `@deepseek-ai/dsh`（`dsh web` 跑得起来）。没有就先装：
-
-```sh
-npm i -g @deepseek-ai/dsh
-```
-
-### 一条命令（推荐）
+装插件（包在 npm 上，一条命令）：
 
 ```sh
 dsh plugin --profile web add kkj520-dsh-image-bridge
 ```
 
-重启 `dsh web`，打开 **设置 → 生图桥**。包在 npm 上，装的是预构建产物——不用克隆仓库、不用记任何本地路径，也不会触发源码构建授权。
+重启 `dsh web`，打开 **设置 → 生图桥**。装的是预构建产物，不用克隆仓库、不用记本地路径。
 
-**不想手动重启？** 让 Agent 装：新建对话，把下面这句话发过去，它会自己装、重启并核对结果。
+前提是本机装着 `@deepseek-ai/dsh`（`dsh web` 跑得起来）。没有就先装：
+
+```sh
+npm i -g @deepseek-ai/dsh
+```
+
+**懒得敲命令？** 让 Agent 装：新建对话，把下面这句发过去，它会自己装、重启并核对结果。
 
 ```text
 帮我安装这个插件：dsh plugin --profile web add kkj520-dsh-image-bridge
 装完重启 dsh web，并确认「设置 → 生图桥」能打开、两个工具已注册。
 ```
 
-### 另外两种装法
-
-跟最新提交（npm 上还没发到那一版时用）：
+**想跟最新提交**（npm 上还没发到那一版时）：
 
 ```sh
 dsh plugin --profile web add github:kkj520/dsh-image-bridge
 ```
 
-开发本插件时——克隆到本机，用**仓库根目录**装：
+### 装完怎么确认
 
-```sh
-dsh plugin --profile web add <克隆下来的仓库绝对路径>
-```
-
-后两种装的是源码，改完 `index.js` / `client.js` 重启 `dsh web` 就能看到效果（插件代码不会被热重载）。
-
-> `github:` 那条路之所以走得通，是因为从 v0.3.0 起**插件包根目录就是仓库根**：pnpm 取 git 依赖时只会打仓库根那个包，没法指定子目录。
-
-### 关于名字与重启
-
-- 包名 `kkj520-dsh-image-bridge`，版本 **0.4.0**。名字里带作者前缀是为了在 npm 上唯一——`dsh-image-bridge` 这个名字已被他人占用。设置页徽标只显示仓库名 `dsh-image-bridge`，不显示前缀。
-- 安装会把插件行加进 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。行 id 里那个 `-v4` 是**内部重写版本号**，只用于避免与本机旧副本冲突，对使用没有影响。
-- **从 v0.3.0 或更早升级上来**：包名变过两次（`@local/dsh-image-bridge` → `kkj520-dsh-image-bridge`），profile 里那一行依赖要跟着改。**行 id 与设置命名空间没动**，所以你的服务商配置不会丢。
-- **装完必须重启 `dsh web`**：插件代码不会被热重载，重启前设置页不会出现。
-
-### 确认装好了，三条任选
+重启 `dsh web` 后，三条任选（**重启是必须的**，插件代码不会被热重载）：
 
 - 打开 **设置 → 生图桥**，能看到设置页；
 - `$DSH_HOME/dsh-image-bridge-startup.json` 里 `steps` 有三步（`Config schema 就绪` / `两个工具已注册` / `测试通道已挂载`）、`services.tools` 为 `true`；
@@ -73,7 +56,14 @@ dsh plugin --profile web add <克隆下来的仓库绝对路径>
 dsh plugin --profile web remove kkj520-dsh-image-bridge
 ```
 
-也可以用插件管理器删除。
+也可以在「设置 → 插件」里删。
+
+| 你可能想知道 | 答案 |
+| --- | --- |
+| 包名为什么带 `kkj520-` | 为了在 npm 上唯一——`dsh-image-bridge` 已被别人占用。设置页徽标只显示仓库名 `dsh-image-bridge` |
+| 装完要不要重启 | **要**，插件代码不会被热重载 |
+| 从旧版本升上来配置会丢吗 | 不会。行 id 与设置命名空间一直是 `image-bridge-v4`，包名换过两次但它只是个安装标识 |
+| 想改代码怎么办 | 见[完整手册](docs/manual.md)的「开发本插件」——那是开发者路径，普通使用不需要 |
 
 ## 三步开始
 
@@ -186,7 +176,7 @@ generated-images/                   生图输出（已忽略，不入库）
 | 文档 | 内容 |
 | --- | --- |
 | [插件完整手册](docs/manual.md) | 配置项、行为细节、排查、实现要点 |
-| [变更记录](CHANGELOG.md) | 每个版本改了什么（当前 **v0.3.0**） |
+| [变更记录](CHANGELOG.md) | 每个版本改了什么（当前 **v0.4.0**） |
 | [验证报告](.dib-verify/verify-report.md) · [第二轮](.dib-verify/verify-report-2.md) | 独立验证结论（含未覆盖范围） |
 
 ## 反馈

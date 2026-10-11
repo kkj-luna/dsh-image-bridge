@@ -10,22 +10,42 @@ Give **models that cannot draw** a connection to an external image model. Config
 
 ## Installation
 
-Ask the agent in a DSH session, or install this directory with the plugin manager:
+**From npm (recommended — one command):**
 
+```sh
+dsh plugin --profile web add kkj520-dsh-image-bridge
 ```
-plugin_manager  action: install_bundle
-                target: <absolute path to this directory>
+
+**To track the latest commits** (when npm lags behind): `dsh plugin --profile web add github:kkj520/dsh-image-bridge`
+
+Either way, the plugin row is inserted into the profile's config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). **Restart `dsh web` afterwards**, then open **Settings → Image Bridge**.
+
+Package name `kkj520-dsh-image-bridge`, version `0.4.0`. The author prefix keeps it unique on npm (the plain name `dsh-image-bridge` was already taken); the settings-page badge shows only the repository name, `dsh-image-bridge`.
+
+### Developing this plugin
+
+To work on the code, install from a local directory: clone the repo, then use **the repository root** (the root, not a subdirectory):
+
+```sh
+dsh plugin --profile web add <absolute path to the cloned repo>
 ```
 
-Installation writes a `link:` dependency into the profile and inserts the plugin row into the profile's config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). **Restart `dsh web` afterwards**, then open **Settings → Image Bridge**.
+That writes a `link:` dependency pointing at your local source — **after editing `index.js` / `client.js`, a restart of `dsh web` is enough to see the change** (plugin code is not hot-reloaded; config changes are a separate channel and unaffected).
 
-Package name `@local/dsh-image-bridge` (the `@local/` prefix is DSH convention for a locally authored plugin that is not published to npm), version `0.3.0`.
+Two things to watch:
+
+- **Do not move or rename that directory**: the link points at the original path, so moving it breaks the install and you have to reinstall from the new path.
+- **Do not mix a local source install with the npm one**: both use the same package name, so `dsh plugin add` reports "already installed". Remove first, then add.
+
+To check nothing broke after a change, the repository root ships six offline suites (`npm test` — no network, no real API key).
 
 ### The three installation situations
 
 **First install.** Run the command above, restart `dsh web`, then open **Settings → Image Bridge**. The list holds exactly one card: named "Default provider", tagged "Existing config" (the synthesised legacy single-provider record — base URL `https://api.openai.com/v1`, generation model `gpt-image-1`, size `1024x1024`; all of them are Config-schema defaults, since `cordis.patch.yml` deliberately carries no `config`). The four dropdowns are disabled, with the line "Add a model provider and test the connection first" beneath them — **that is the normal state of a fresh install, not a fault**. The shortest path from there is to edit that card: paste your API Key → Test connection → Save → then pick models in the Models section.
 
-**Updating an existing install.** The directory is installed as a `link:`, so **whatever is in the source directory is what runs** — copy the new version over it (or `git pull`) and restart `dsh web`. No reinstall, and no need to remove anything first. Conversely, **do not move or rename this directory**: the link points at the original path, so moving it breaks the install and you have to `install_bundle` again from the new path. Your configuration lives on the profile row, not inside the plugin, so overwriting files never loses it.
+**Updating an existing install.** For an npm install, the npm version is what counts: run `dsh plugin --profile web add kkj520-dsh-image-bridge` again and restart `dsh web` — no need to remove anything first. For a local-directory install (see "Developing this plugin" above), **whatever is in the source directory is what runs** — copy the new version over it or `git pull`, then restart.
+
+Neither loses your configuration: it lives on the profile row (row id `image-bridge-v4`), not inside the plugin directory, so renaming the package or overwriting files makes no difference to it. Conversely, with a local-directory install **do not move or rename that directory** — the link points at the original path, so you would have to reinstall from the new one.
 
 **Uninstalling.** Disable or remove the bundle in the plugin manager. **Neither the config nor the credentials are cleaned up for you**: the config row (provider list, model routes, connect timeout) goes away with the row, while the keys stay in `$DSH_HOME/.credentials.yaml` — deliberately, see the third of the **three safety constraints** below. If you really want them gone, delete the lines starting with `DSH_IMAGE_BRIDGE_` from that file yourself.
 
@@ -85,7 +105,7 @@ The entry point is **Settings → Image Bridge**. Top to bottom the page is: pag
 
 ### Page header
 
-`[icon] Image Bridge  dsh-image-bridge  v0.3.0`, with one subtitle line below. The badge links to the GitHub repository (opens in a new tab) and shows only the repository name — no `@local/` prefix. The icon follows the theme colour.
+`[icon] Image Bridge  dsh-image-bridge  v0.4.0`, with one subtitle line below. The badge links to the GitHub repository (opens in a new tab) and shows only the repository name — no `@local/` prefix. The icon follows the theme colour.
 
 ### The icon has two sources (do not edit the wrong one)
 
