@@ -33,3 +33,5 @@ Thumbs.db
 # 参考 README 的本地缓存（抓下来对照写法用的，不入库）
 .ref-*.tmp*
 .refcache-test.tmp
+# 提交消息的临时文件（本机提交用；沙箱内删不掉，用忽略规则挡住）
+.dib-verify/*.tmp.txt
