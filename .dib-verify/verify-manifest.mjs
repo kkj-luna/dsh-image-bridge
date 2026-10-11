@@ -181,6 +181,28 @@ check(
 const settingsNs = /const SETTINGS_NS = '([^']+)'/u.exec(client)?.[1] ?? ''
 check('补丁行 id 等于客户端写入的设置命名空间', rowId === settingsNs, `patch id=${rowId} client SETTINGS_NS=${settingsNs}`)
 
+/*
+ * 连接宽限（连不上超过它就切备用）必须是**单一来源**的 15 秒。
+ *
+ * 数值是产品决策：填错地址/对端下线时最多等 15 秒就该换人，而不是干等满「主模型超时」。
+ * 改它就得过来一起改并说明理由——和上面那条默认值断言同一个道理。
+ *
+ * 单一来源这一条是补历史坑：`attemptWithHeaderBudget` 的默认参数曾经另写一份 10000，
+ * 于是"调用方没传 connectGraceMs"的路径与常量各走各的，改一处不会报红。
+ */
+const connectGraceMs = Number(/const CONNECT_GRACE_MS = (\d+)/u.exec(host)?.[1] ?? Number.NaN)
+check(
+  '连接宽限是约定的 15 秒（连不上超过它就改用备用模型）',
+  connectGraceMs === 15000,
+  `CONNECT_GRACE_MS=${Number.isNaN(connectGraceMs) ? '(未找到)' : connectGraceMs}`,
+)
+const connectGraceDefault = /connectGraceMs = ([A-Za-z_0-9]+)/u.exec(host)?.[1] ?? ''
+check(
+  '连接宽限只有一个来源：函数默认参数引用常量，不再另写一份字面量',
+  connectGraceDefault === 'CONNECT_GRACE_MS',
+  `默认参数=${connectGraceDefault === '' ? '(未找到)' : connectGraceDefault}`,
+)
+
 const hostToolNames = [...host.matchAll(/name:\s*'(image_[a-z]+)'/gu)].map((match) => match[1]).sort()
 const clientViewKeys = (/const TOOL_KEYS = \[([^\]]+)\]/u.exec(client)?.[1] ?? '')
   .split(',')

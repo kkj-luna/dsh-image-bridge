@@ -1502,6 +1502,25 @@ check(
   `实际=${connectPhaseError === '' ? '(没有抛错)' : connectPhaseError}`,
 )
 
+/* ⑦b-2 连不上**必须真的切备用**：⑦b 只钉住了错误文案，这里钉行为本身。
+       主用是不可路由地址（请求压根发不出去），备用是活的模拟服务商 → 结果必须来自备用，
+       且备用确实收到了请求；结果里的警告要同时说清"为什么没成"与"已改用谁"。
+       预算取 600ms（连接宽限与预算取小，见 headerBudgetOf），所以这条不会真的等 15 秒。 */
+setRoutes({ primary: { providerId: 'blackhole-vendor', model: 'blackhole-image' }, fallback: { providerId: 'vendor-one', model: 'vendor-image-v2' } }, emptyRole(), 600)
+lastVendorGenerateBody = undefined
+const connectSwapValue = await providerGenerate.execute({ prompt: 'unreachable primary must swap' }, exec)
+check(
+  '⑦b-2 连接阶段超时（连不上）→ 真的改用备用模型出图，且备用收到了请求',
+  connectSwapValue.model === 'vendor-image-v2' && String(lastVendorGenerateBody).includes('vendor-image-v2'),
+  `model=${connectSwapValue.model} 备用收到请求=${typeof lastVendorGenerateBody === 'string'}`,
+)
+const connectSwapWarning = (Array.isArray(connectSwapValue.warnings) ? connectSwapValue.warnings : []).join(' | ')
+check(
+  '⑦b-2 警告里同时有点名的失败原因（连接阶段）与"已改用备用模型"',
+  connectSwapWarning.includes('连接阶段') && connectSwapWarning.includes('已改用备用模型') && connectSwapWarning.includes('vendor-image-v2'),
+  connectSwapWarning === '' ? '(没有警告)' : connectSwapWarning,
+)
+
 /* ⑦c 发出很快、服务商拖 5s → 必须报"请求发出后"，并说明连接不计入该预算。 */
 setRoutes({ primary: { providerId: 'slow-header-vendor', model: 'slow-header-image' }, fallback: emptyRole() }, emptyRole(), 1000)
 slowHeaderStartAt = 0

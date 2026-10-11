@@ -494,6 +494,83 @@ check(
     })(),
   JSON.stringify({ zh: zhDict['byline.model'], en: enDict['byline.model'] }).slice(0, 200),
 )
+
+/* ------------------------------------------------------------------ *
+ * 图片状态文案与「未知错误」不能硬编码（A11）
+ *
+ * 卡片里有三处文案曾经写死：图片加载中 / 图片加载失败 / 未知错误（还有 img 的 alt）。
+ * 硬编码的后果不是报错——是**英文界面里冒出中文**（或反过来），没人会为此开 issue，
+ * 但界面看起来就是没做完。所以断言既查词典，也**真的用英文渲染一遍**。
+ * ------------------------------------------------------------------ */
+{
+  const pendingBlock = settledBlock({
+    prompt: 'a cat',
+    imageCapable: true,
+    images: [{ attachmentId: 'sha256:x', mediaType: 'image/png', bytes: 10, width: 1, height: 1 }],
+  })
+  const renderWith = (dict) => invoke(ImageResultRow, {
+    t: (key) => dict[key] ?? key,
+    toolName: 'image_generate',
+    // 不 resolve：停在"加载中"，正好覆盖那条待机文案
+    loadImage: () => new Promise(() => {}),
+    phase: 'result',
+    block: pendingBlock,
+  }).element
+
+  check(
+    '图片状态与替代文本都走语言包（中英各有一条，且两两不同）',
+    zhDict['image.loading'] === '图片加载中…' && enDict['image.loading'] === 'Loading image…'
+      && zhDict['image.loadFailed'] !== enDict['image.loadFailed']
+      && zhDict['image.alt'] !== enDict['image.alt']
+      && zhDict['error.unknown'] !== enDict['error.unknown'],
+    JSON.stringify({ zh: zhDict['image.loading'], en: enDict['image.loading'] }),
+  )
+  check(
+    '英文界面下"加载中"渲染英文（硬编码中文会在这里红）',
+    textOfElement(renderWith(enDict)).includes('Loading image…') && !textOfElement(renderWith(enDict)).includes('图片加载中'),
+    JSON.stringify(textOfElement(renderWith(enDict)).slice(0, 120)),
+  )
+  check(
+    '中文界面下"加载中"渲染中文（我们没把中文弄丢）',
+    textOfElement(renderWith(zhDict)).includes('图片加载中…'),
+    JSON.stringify(textOfElement(renderWith(zhDict)).slice(0, 120)),
+  )
+
+  /* 失败且没有正文时，不能出现那句写死的 'unknown error'。 */
+  const failedBlock = settledBlock(undefined, {
+    kind: 'tool-result',
+    isError: true,
+    content: [],
+  })
+  const failedEn = invoke(ImageResultRow, {
+    t: (key) => enDict[key] ?? key,
+    toolName: 'image_generate',
+    loadImage: () => Promise.resolve('data:image/png;base64,AAAA'),
+    phase: 'result',
+    block: failedBlock,
+  }).element
+  check(
+    '失败卡片没有正文时显示词典里的「未知错误」（不是写死的 unknown error）',
+    textOfElement(failedEn).includes(enDict['error.unknown']) && !JSON.stringify(failedEn).includes('unknown error'),
+    JSON.stringify(textOfElement(failedEn).slice(0, 120)),
+  )
+}
+
+/* 焦点环：令牌缺失时不能整条失效（A13）——键盘用户看不到焦点比样式难看严重得多。 */
+{
+  const focusRingCss = styles.map((node) => String(node.textContent ?? '')).join('')
+  const rings = (focusRingCss.match(/outline:var\(--dsw-focus-ring-width[^}]*/gu) ?? [])
+  check(
+    '每个 focus-visible 的焦点环都带宽度 fallback（缺令牌也不会整条失效）',
+    rings.length >= 4 && rings.every((rule) => rule.includes('--dsw-focus-ring-width,')),
+    JSON.stringify({ count: rings.length, sample: rings[0]?.slice(0, 90) ?? null }),
+  )
+  check(
+    '焦点环颜色兜底到主题令牌，而不是字面色（硬编码颜色会绕过主题）',
+    rings.length > 0 && rings.every((rule) => !/#[0-9a-fA-F]{3,8}/u.test(rule)) && rings.every((rule) => rule.includes('var(--dsw-alias-')),
+    JSON.stringify({ hardcoded: rings.filter((rule) => /#[0-9a-fA-F]{3,8}/u.test(rule)).length }),
+  )
+}
 check(
   '⑤ 长模型名不撑破卡片：整行可任意断行、字号比正文小、只用主题令牌',
   (() => {

@@ -173,8 +173,21 @@ const DEFAULT_FALLBACK_AFTER_MS = 90000
 /** 超时后那次探活的超时：健康检查必须快，慢的探活本身没有诊断价值。 */
 const PROVIDER_PROBE_TIMEOUT_MS = 4000
 
-/** 连接阶段的宽限：只为防止"一直连不上"拖到 timeoutMs 上限，不参与响应头预算。 */
-const CONNECT_GRACE_MS = 10000
+/**
+ * 连接阶段的宽限：**连不上就改用备用模型**的那条线，15 秒。
+ *
+ * 与「主模型超时」（fallbackAfterMs）分工明确，互不吃掉对方的额度：
+ *   · 这条线管"请求压根没发出去"（DNS 解析不了、TCP 连不上、TLS 握不上手、代理不通）；
+ *   · 请求真的发出去之后，剩下的等待交给响应头预算。
+ * 所以填错地址、对端下线这类问题最多让人等 15 秒，而不是干等满整个「主模型超时」。
+ *
+ * 仍然受「主模型超时」的约束：headerBudgetOf 取 `min(connectGraceMs, budgetMs)`，
+ * 用户把「主模型超时」调到比 15 秒更小时按更小的那个走，绝不越过用户自己设的整段上限。
+ *
+ * 刻意**不**做成设置项：15 秒既够跨境冷连接（实测 381ms）与常见代理握手，又短到
+ * "地址不通"能被立刻发现；把它交给用户只会多一个会填错的旋钮。
+ */
+const CONNECT_GRACE_MS = 15000
 
 /** 设置页「测试连接」用的环回 RPC 通道。 */
 const RPC_CHANNEL = '/dsh-image-bridge'
@@ -1162,15 +1175,16 @@ function headerBudgetOf({ budgetMs, startedAt, connectGraceMs }) {
  * 之后读 body 不受它限制（整次调用的上限仍由工具的 timeoutMs 管）。
  *
  * **预算从"请求真正发出"起算**（见 headerBudgetOf）：DNS / TCP / TLS 不占额度，且截止时刻
- * 固定不随事件刷新。连接阶段另有 `connectGraceMs` 上限（且不超过预算本身），只为防止
- * "一直连不上"把整次调用拖到 timeoutMs；正常的跨境连接（实测 381ms）远低于它。
+ * 固定不随事件刷新。连接阶段另有 `CONNECT_GRACE_MS`（15 秒，且不超过预算本身）——**超过它
+ * 还没把请求发出去就是连接失败，交给上层切备用**，而不是让人干等满「主模型超时」；
+ * 正常的跨境连接（实测 381ms）远低于它。
  *
  * 网络层失败保留既有的"去掉 exec.signal 重试一次"兜底（fetchResilient 的行为），
  * 但重试时换成只带预算的信号——否则"多久没响应头就换人"会在重试路径上失效。
  *
  * @returns {{kind:'response', response}|{kind:'timeout'|'cancelled'|'failed', error}}
  */
-async function attemptWithHeaderBudget({ url, init, signal, budgetMs, connectGraceMs = 10000 }) {
+async function attemptWithHeaderBudget({ url, init, signal, budgetMs, connectGraceMs = CONNECT_GRACE_MS }) {
   const budget = new AbortController()
   const startedAt = Date.now()
   let expired = false
