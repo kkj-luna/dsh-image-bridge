@@ -127,9 +127,12 @@ const rowName = /^\s*name:\s*'?([^'\s]+)'?/mu.exec(patch)?.[1] ?? ''
 check('补丁行 name 指向本包', rowName === manifest.name, `name=${rowName} 期望=${manifest.name}`)
 
 /*
- * 改名（@local/image-bridge-v4 → @local/dsh-image-bridge）时最容易漏的就是"只改一半"：
- * 包名、Host 导出的 name、补丁行 name 三处必须逐字一致，否则表现为插件加载不出来或
- * 清单里出现一张解析不了的重复卡片。这条断言专门盯这个。
+ * 改名时最容易漏的就是"只改一半"：包名、Host 导出的 name、补丁行 name 三处必须逐字一致，
+ * 否则表现为插件加载不出来，或清单里出现一张解析不了的重复卡片。这条断言专门盯这个。
+ *
+ * v0.4.0 又改过一次名（`@local/dsh-image-bridge` → `kkj520-dsh-image-bridge`，为了能发布 npm）：
+ * `@local/` 不是任何人拥有的 scope，发不出去；而补丁行的 `name` 必须等于**安装用的包名**
+ * （loader 走 `resolveBundleDir("dsh", name, …)` 去解析），所以两者只能一起改。
  */
 const hostExportName = /export const name = '([^']+)'/u.exec(host)?.[1] ?? ''
 check(

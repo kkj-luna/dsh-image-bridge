@@ -1543,19 +1543,26 @@ const inlineGlyph = titleRowChildren.find((child) => child?.type === 'svg')
 const badgeNode = titleRowChildren[2]
 const badgeText = badgeNode === undefined ? '' : textOfElement(badgeNode).trim()
 const manifestJson = JSON.parse(await readFile(`${ROOT}/package.json`, 'utf8'))
-/* 徽标显示的仓库名（与 client.js 的 REPO_NAME 一致）：包名去掉 scope 前缀。 */
-const repoName = String(manifestJson.name).replace(/^@[^/]+\//u, '')
+/*
+ * 徽标显示的仓库名取自**客户端自己的常量**（`client.js` 的 `REPO_NAME`），不在这里推导。
+ *
+ * 以前的写法是"包名去掉 scope 前缀"，那在包名是 `@local/dsh-image-bridge` 时恰好等于仓库名；
+ * 改成 `kkj520-dsh-image-bridge` 之后这个推导就错了（推出来是 `kkj520-dsh-image-bridge`，
+ * 而界面上显示的是仓库名 `dsh-image-bridge`）。断言应当核对**界面真的用了哪个常量**，
+ * 而不是自己再猜一遍推导规则——否则规则一变，测试会红在一个它并不该管的地方。
+ */
+const repoName = /const REPO_NAME = '([^']+)'/u.exec(clientSource)?.[1] ?? ''
 /* 仓库地址常量：与 client.js 的 REPO_URL 一致。 */
-const repoUrl = 'https://github.com/kkj520/dsh-image-bridge'
+const repoUrl = /const REPO_URL = '([^']+)'/u.exec(clientSource)?.[1] ?? ''
 check(
   '页头第一行：[单色图标] + 「生图桥」标题 + 仓库徽标（版本与 package.json 逐字一致、不显示 scope 前缀）',
   headerNode !== undefined
     && titleRowChildren.map((child) => child?.type).join(',') === 'svg,h2,a'
     && textOfElement(titleRowChildren[1]).trim() === '生图桥'
     && zhDict['nav'] === '生图桥'
-    // 版本仍与清单逐字一致；显示名换成仓库名（去掉 @local/），不再逐字等于包名。
+    // 版本仍与清单逐字一致；显示名换成仓库名，不再逐字等于包名。
     && badgeNode?.props?.children === `${repoName}  v${manifestJson.version}`
-    && manifestJson.name === '@local/dsh-image-bridge',
+    && manifestJson.name === 'kkj520-dsh-image-bridge',
   JSON.stringify({ row: titleRowChildren.map((child) => child?.type), badge: badgeText, version: manifestJson.version }).slice(0, 220),
 )
 check(
@@ -1573,16 +1580,17 @@ check(
   JSON.stringify({ target: badgeNode?.props?.target ?? null, rel: badgeNode?.props?.rel ?? null }).slice(0, 200),
 )
 check(
-  '③ 徽标文案 = 仓库名 + 版本，且**不含** scope 前缀（@local/ 对外无意义）',
+  '③ 徽标文案 = 仓库名 + 版本，且**不把包名整串显示出来**（`kkj520-` 前缀对使用无意义）',
   badgeText === `${repoName}  v${manifestJson.version}`
-    && badgeText.startsWith('dsh-image-bridge')
-    && !badgeText.includes('@local/')
+    && repoName !== '' && badgeText.startsWith(repoName)
+    && badgeText.includes(manifestJson.version)
+    // 徽标显示仓库名，而包名带用户名前缀：两者不是同一个字符串，界面只显示前者。
     && !badgeText.includes(manifestJson.name)
     && typeof badgeNode?.props?.title === 'string' && badgeNode.props.title.includes(repoUrl)
     && typeof badgeNode?.props?.['aria-label'] === 'string' && badgeNode.props['aria-label'].includes(repoUrl)
     // 悬停要有可点击的视觉反馈，且只用主题令牌
     && /\.dib-page-badge:hover\{[^}]*var\(--dsw-/u.test(styles.map((style) => style.textContent).join('')),
-  JSON.stringify({ badge: badgeText, title: badgeNode?.props?.title ?? null }).slice(0, 220),
+  JSON.stringify({ badge: badgeText, repoName, pkg: manifestJson.name, title: badgeNode?.props?.title ?? null }).slice(0, 240),
 )
 /*
  * A12：徽标的可访问名称必须走语言包。它是页头唯一的链接，硬编码中文会在英文界面里让读屏

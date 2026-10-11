@@ -10,16 +10,19 @@
 
 ## 安装
 
-在 DSH 会话里让 Agent 执行，或用插件管理器安装本目录：
+**从 npm 装（推荐，一条命令）：**
 
+```sh
+dsh plugin --profile web add kkj520-dsh-image-bridge
 ```
-plugin_manager  action: install_bundle
-                target: <本目录的绝对路径>
-```
 
-安装会写成 `link:` 依赖，并把插件行插入 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。**装完重启 `dsh web`**，再打开「设置 → 生图桥」。
+**跟最新提交**（npm 上还没发到那一版时）：`dsh plugin --profile web add github:kkj520/dsh-image-bridge`
 
-包名 `@local/dsh-image-bridge`（`@local/` 是 DSH 对本地自作插件的惯例，不发布到 npm），版本 `0.3.0`。
+**开发本插件**：克隆到本机，用仓库根目录装 —— `dsh plugin --profile web add <仓库绝对路径>`（会写成 `link:` 依赖，改完代码重启即可）。
+
+三种装法都会把插件行插入 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。**装完重启 `dsh web`**，再打开「设置 → 生图桥」。
+
+包名 `kkj520-dsh-image-bridge`，版本 `0.4.0`。名字带作者前缀是为了在 npm 上唯一（`dsh-image-bridge` 已被他人占用）；设置页徽标只显示仓库名 `dsh-image-bridge`。
 
 ### 安装的三种情形
 

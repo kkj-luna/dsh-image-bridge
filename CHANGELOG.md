@@ -2,6 +2,41 @@
 
 版本号在仓库根的 `package.json`，同时会显示在设置页页头徽标上（`client.js` 的 `PACKAGE_VERSION` 必须与它逐字一致，验收有断言盯着）。
 
+## v0.4.0 — 2026-10-11
+
+**加入 npm 安装**：包名从 `@local/dsh-image-bridge` 改为 **`kkj520-dsh-image-bridge`**，并发布到 npm。
+
+```sh
+dsh plugin --profile web add kkj520-dsh-image-bridge
+```
+
+**为什么必须改名**：`@local/` 不是任何人拥有的 npm scope，**发不出去**；而补丁行的 `name` 必须等于**安装用的包名**（loader 走 `resolveBundleDir("dsh", name, …)` 去解析这个包），所以"包名"与"补丁行 name"只能一起改。实测确认过：仓库根原本没有 `package.json` 时 `github:` 装法也会失败，同一处结构决定了两件事。
+
+**保持不变（更新不丢配置的关键）**
+
+- 补丁行 id `image-bridge-v4` 与设置命名空间 `image-bridge-v4` **一个字都没动**——行 id 是 profile 配置的锚点，也是设置页写入的命名空间。
+- 升级只需改 profile 里那一行的依赖名（`@local/dsh-image-bridge` → `kkj520-dsh-image-bridge`）。`verify-upgrade` 那套断言覆盖了改名场景，按真实层序合成后确认配置零漂移。
+
+**包清单（为发布 npm 补齐）**
+
+- 去掉 `private: true`（留着就发不出去），加 `publishConfig.access: public`。
+- 补 `repository` / `homepage` / `bugs` / `keywords`（npm 页面与搜索引擎需要）。
+- 加 `scripts.test`（一条命令跑完六套验收）与 `scripts.prepublishOnly`（发布前先过清单断言——**发错版本发不出去**比发出去再撤回代价小得多）。
+
+**三种装法**
+
+| 方式 | 命令 | 适合 |
+| --- | --- | --- |
+| **npm（推荐）** | `dsh plugin --profile web add kkj520-dsh-image-bridge` | 日常使用；预构建安装，免源码构建授权 |
+| GitHub | `dsh plugin --profile web add github:kkj520/dsh-image-bridge` | 想跟最新提交、或 npm 上还没发到那一版 |
+| 本地目录 | `dsh plugin --profile web add <仓库绝对路径>` | 开发本插件 |
+
+**验收**
+
+- 断言 **425** 条全绿。改名涉及三处必须逐字一致的声明（`package.json` / `index.js` 的 `export const name` / `cordis.patch.yml` 的 `name`），断言会抓"只改一半"。
+- 顺带修掉一条**断言里的错误假设**：徽标文案原先按"包名去掉 scope = 仓库名"推导，改名后这个推导不再成立。现在改为读取客户端自己的 `REPO_NAME` 常量——测试应当核对**界面真的用了哪个常量**，而不是自己再猜一遍推导规则。
+- 链接检查 27 个相对链接零死链。
+
 ## v0.3.0 — 2026-10-11
 
 **一条命令安装**：插件包根目录从 `plugins/dsh-image-bridge-v4/` 上移到**仓库根**。

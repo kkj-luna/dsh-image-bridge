@@ -15,45 +15,52 @@ Give a [DeepSeek Harness](https://github.com/deepseek-ai) model that **cannot dr
 
 ## Install
 
-### One command (recommended)
-
 Requires a local `@deepseek-ai/dsh` (a working `dsh web`). If you do not have one:
 
 ```sh
 npm i -g @deepseek-ai/dsh
 ```
 
-Then:
+### One command (recommended)
 
 ```sh
-dsh plugin --profile web add github:kkj520/dsh-image-bridge
+dsh plugin --profile web add kkj520-dsh-image-bridge
 ```
 
-Restart `dsh web` and open **Settings → Image Bridge**. No cloning, no local path to remember — since v0.3.0 the plugin package root *is* the repository root, which is what makes the `github:` form work.
+Restart `dsh web` and open **Settings → Image Bridge**. The package is on npm, so you get a prebuilt install: no cloning, no local path to remember, and no source-build approval step.
 
 **Rather not restart by hand?** Let your agent do it — start a new conversation and send this:
 
 ```text
-Install this plugin: github:kkj520/dsh-image-bridge
+Install this plugin: dsh plugin --profile web add kkj520-dsh-image-bridge
 Then restart dsh web and confirm that Settings → Image Bridge opens and both tools are registered.
 ```
 
 The agent installs, restarts, and checks the result for you.
 
-### From a local directory (when developing this plugin)
+### Two other ways
 
-Clone the repo, then install using **the repository root**:
+To track the latest commits (when npm lags behind):
+
+```sh
+dsh plugin --profile web add github:kkj520/dsh-image-bridge
+```
+
+To develop this plugin — clone the repo, then install using **the repository root**:
 
 ```sh
 dsh plugin --profile web add <absolute path to the cloned repo>
 ```
 
-That installs your local copy, so after editing `index.js` / `client.js` a restart of `dsh web` is enough to see the change (plugin code is not hot-reloaded).
+Those two install source, so after editing `index.js` / `client.js` a restart of `dsh web` is enough to see the change (plugin code is not hot-reloaded).
+
+> The `github:` form works because since v0.3.0 **the plugin package root *is* the repository root**: when pnpm fetches a git dependency it packs the repository root, and there is no way to point it at a subdirectory.
 
 ### About the names, and the restart
 
-- Package name `@local/dsh-image-bridge`, version **0.3.0**. The `@local/` prefix is DSH's official convention for locally authored plugins — it exists so a local plugin never collides with a real npm package — and the plugin is **not published to npm**. The settings-page badge shows only `dsh-image-bridge`, without that prefix.
+- Package name `kkj520-dsh-image-bridge`, version **0.4.0**. The author prefix keeps it unique on npm — the plain name `dsh-image-bridge` was already taken by someone else. The settings-page badge shows only the repository name, `dsh-image-bridge`.
 - Installation adds the plugin row to the profile config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). The `-v4` in that row id is an **internal rewrite counter**, there only to avoid colliding with older copies on the same machine; it means nothing for day-to-day use.
+- **Upgrading from v0.3.0 or earlier**: the package name changed twice (`@local/dsh-image-bridge` → `kkj520-dsh-image-bridge`), so that one dependency line in your profile has to change too. **The row id and the settings namespace did not move**, so your provider configuration is not lost.
 - **Restart `dsh web` afterwards** — plugin code is not hot-reloaded, and the settings page will not appear before the restart.
 
 ### Confirm it loaded — any one of the three
@@ -65,7 +72,7 @@ That installs your local copy, so after editing `index.js` / `client.js` a resta
 ### Uninstall
 
 ```sh
-dsh plugin --profile web remove @local/dsh-image-bridge
+dsh plugin --profile web remove kkj520-dsh-image-bridge
 ```
 
 The plugin manager can remove it as well.

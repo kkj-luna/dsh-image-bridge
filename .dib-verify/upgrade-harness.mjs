@@ -66,7 +66,7 @@ export function sampleConfig(overrides = {}) {
  */
 export function userRow({ id = 'image-bridge-v4', name, config, disabled } = {}) {
   const row = { id }
-  if (name !== null) row.name = name ?? '@local/dsh-image-bridge'
+  if (name !== null) row.name = name ?? 'kkj520-dsh-image-bridge'
   if (disabled !== undefined) row.disabled = disabled
   if (config !== undefined) row.config = config
   return row
@@ -76,7 +76,7 @@ export function userRow({ id = 'image-bridge-v4', name, config, disabled } = {})
  * 插件 bundle 层：它的 `cordis.patch.yml` 只 `insert` 一行。
  * `config` 省略即"补丁里不写 config、默认值交给 schema"（当前仓库的实际写法）。
  */
-export function bundleLayer({ id = 'image-bridge-v4', name = '@local/dsh-image-bridge', config } = {}) {
+export function bundleLayer({ id = 'image-bridge-v4', name = 'kkj520-dsh-image-bridge', config } = {}) {
   return [{ insert: [{ id, name, ...(config === undefined ? {} : { config }) }] }]
 }
 

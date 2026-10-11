@@ -15,43 +15,50 @@
 
 ## 安装
 
-### 一条命令（推荐）
-
 前提：本机装着 `@deepseek-ai/dsh`（`dsh web` 跑得起来）。没有就先装：
 
 ```sh
 npm i -g @deepseek-ai/dsh
 ```
 
-然后：
+### 一条命令（推荐）
+
+```sh
+dsh plugin --profile web add kkj520-dsh-image-bridge
+```
+
+重启 `dsh web`，打开 **设置 → 生图桥**。包在 npm 上，装的是预构建产物——不用克隆仓库、不用记任何本地路径，也不会触发源码构建授权。
+
+**不想手动重启？** 让 Agent 装：新建对话，把下面这句话发过去，它会自己装、重启并核对结果。
+
+```text
+帮我安装这个插件：dsh plugin --profile web add kkj520-dsh-image-bridge
+装完重启 dsh web，并确认「设置 → 生图桥」能打开、两个工具已注册。
+```
+
+### 另外两种装法
+
+跟最新提交（npm 上还没发到那一版时用）：
 
 ```sh
 dsh plugin --profile web add github:kkj520/dsh-image-bridge
 ```
 
-重启 `dsh web`，打开 **设置 → 生图桥**。装完就能用，不用先克隆仓库、也不用记任何本地路径——从 v0.3.0 起插件包根目录就是仓库根，`github:` 那条路才走得通。
-
-**不想重启？** 也可以让 Agent 装：新建对话，把下面这句话发过去，它会自己装、重启并核对结果。
-
-```text
-帮我安装这个插件：github:kkj520/dsh-image-bridge
-装完重启 dsh web，并确认「设置 → 生图桥」能打开、两个工具已注册。
-```
-
-### 从本地目录装（开发本插件时用）
-
-把仓库克隆到本机，然后用**仓库根目录**装：
+开发本插件时——克隆到本机，用**仓库根目录**装：
 
 ```sh
 dsh plugin --profile web add <克隆下来的仓库绝对路径>
 ```
 
-装的是本机那份代码，所以改完 `index.js` / `client.js` 重启 `dsh web` 就能看到效果（插件代码不会被热重载）。
+后两种装的是源码，改完 `index.js` / `client.js` 重启 `dsh web` 就能看到效果（插件代码不会被热重载）。
+
+> `github:` 那条路之所以走得通，是因为从 v0.3.0 起**插件包根目录就是仓库根**：pnpm 取 git 依赖时只会打仓库根那个包，没法指定子目录。
 
 ### 关于名字与重启
 
-- 包名 `@local/dsh-image-bridge`，版本 **0.3.0**。`@local/` 是 DSH 给本地自作插件的官方命名约定（作用是不与 npm 上的真包撞名），**不发布到 npm**；设置页徽标只显示 `dsh-image-bridge`，不显示这个前缀。
+- 包名 `kkj520-dsh-image-bridge`，版本 **0.4.0**。名字里带作者前缀是为了在 npm 上唯一——`dsh-image-bridge` 这个名字已被他人占用。设置页徽标只显示仓库名 `dsh-image-bridge`，不显示前缀。
 - 安装会把插件行加进 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。行 id 里那个 `-v4` 是**内部重写版本号**，只用于避免与本机旧副本冲突，对使用没有影响。
+- **从 v0.3.0 或更早升级上来**：包名变过两次（`@local/dsh-image-bridge` → `kkj520-dsh-image-bridge`），profile 里那一行依赖要跟着改。**行 id 与设置命名空间没动**，所以你的服务商配置不会丢。
 - **装完必须重启 `dsh web`**：插件代码不会被热重载，重启前设置页不会出现。
 
 ### 确认装好了，三条任选
@@ -63,7 +70,7 @@ dsh plugin --profile web add <克隆下来的仓库绝对路径>
 ### 卸载
 
 ```sh
-dsh plugin --profile web remove @local/dsh-image-bridge
+dsh plugin --profile web remove kkj520-dsh-image-bridge
 ```
 
 也可以用插件管理器删除。
