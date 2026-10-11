@@ -50,6 +50,16 @@ dsh plugin --profile web add github:kkj-luna/dsh-image-bridge
 dsh plugin --profile web add <absolute path to this repo>
 ```
 
+> **A freshly published version may not install.** pnpm has a **24-hour minimum release age** by default (`minimumReleaseAge`, which stops a just-poisoned version from being pulled in immediately): within 24 hours of a release, the command above **silently falls back to the previous version** — it looks like it succeeded, but you did not get the newest one.
+>
+> To install a specific version right away, name it and the age gate is bypassed:
+>
+> ```sh
+> dsh plugin --profile web add kkj-luna-dsh-image-bridge@0.4.2
+> ```
+>
+> To check which version you actually got, look at the version in the settings-page badge, or run `dsh plugin --profile web list`.
+
 ### How to confirm it loaded
 
 After restarting `dsh web`, any one of the three (**the restart is required** — plugin code is not hot-reloaded):

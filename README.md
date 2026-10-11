@@ -48,6 +48,16 @@ dsh plugin --profile web add github:kkj-luna/dsh-image-bridge
 dsh plugin --profile web add <本仓库绝对路径>
 ```
 
+> **刚发布的版本可能装不到。** pnpm 默认有 **24 小时发布年龄门槛**（`minimumReleaseAge`，防止刚被投毒的版本立刻被装上）：新版本发布后 24 小时内，上面那条命令会**静默退回上一个版本**——你看到装成功了，但装的不是最新的。
+>
+> 想立刻装到指定版本，点名版本号即可绕过门槛：
+>
+> ```sh
+> dsh plugin --profile web add kkj-luna-dsh-image-bridge@0.4.2
+> ```
+>
+> 检查实际装到的是哪一版：看设置页页头徽标的版本号，或 `dsh plugin --profile web list`。
+
 ### 装完怎么确认
 
 重启 `dsh web` 后，三条任选（**重启是必须的**，插件代码不会被热重载）：
