@@ -6,7 +6,7 @@
 
 [English](README.en.md) | 中文
 
-[![stars](https://img.shields.io/github/stars/kkj520/dsh-image-bridge?style=flat)](https://github.com/kkj520/dsh-image-bridge)
+[![stars](https://img.shields.io/github/stars/kkj-luna/dsh-image-bridge?style=flat)](https://github.com/kkj-luna/dsh-image-bridge)
 [![dsh](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4f8cff)](https://github.com/deepseek-ai)
 
 给 [DeepSeek Harness](https://github.com/deepseek-ai) 里**没有作图能力的模型**接上外部生图服务。装一个插件，模型就多出 `image_generate`（生图）与 `image_edit`（改图）两个工具，图片作为持久附件出现在对话里，同时另存到会话工作区 `generated-images/`。
@@ -18,7 +18,7 @@
 装插件（包在 npm 上，一条命令）：
 
 ```sh
-dsh plugin --profile web add kkj520-dsh-image-bridge
+dsh plugin --profile web add kkj-luna-dsh-image-bridge
 ```
 
 重启 `dsh web`，打开 **设置 → 生图桥**。装的是预构建产物，不用克隆仓库、不用记本地路径。
@@ -32,14 +32,14 @@ npm i -g @deepseek-ai/dsh
 **懒得敲命令？** 让 Agent 装：新建对话，把下面这句发过去，它会自己装、重启并核对结果。
 
 ```text
-帮我安装这个插件：dsh plugin --profile web add kkj520-dsh-image-bridge
+帮我安装这个插件：dsh plugin --profile web add kkj-luna-dsh-image-bridge
 装完重启 dsh web，并确认「设置 → 生图桥」能打开、两个工具已注册。
 ```
 
 **想跟最新提交**（npm 上还没发到那一版时）：
 
 ```sh
-dsh plugin --profile web add github:kkj520/dsh-image-bridge
+dsh plugin --profile web add github:kkj-luna/dsh-image-bridge
 ```
 
 ### 装完怎么确认
@@ -53,14 +53,14 @@ dsh plugin --profile web add github:kkj520/dsh-image-bridge
 ### 卸载
 
 ```sh
-dsh plugin --profile web remove kkj520-dsh-image-bridge
+dsh plugin --profile web remove kkj-luna-dsh-image-bridge
 ```
 
 也可以在「设置 → 插件」里删。
 
 | 你可能想知道 | 答案 |
 | --- | --- |
-| 包名为什么带 `kkj520-` | 为了在 npm 上唯一——`dsh-image-bridge` 已被别人占用。设置页徽标只显示仓库名 `dsh-image-bridge` |
+| 包名为什么带 `kkj-luna-` | 为了在 npm 上唯一——`dsh-image-bridge` 已被别人占用。设置页徽标只显示仓库名 `dsh-image-bridge` |
 | 装完要不要重启 | **要**，插件代码不会被热重载 |
 | 从旧版本升上来配置会丢吗 | 不会。行 id 与设置命名空间一直是 `image-bridge-v4`，包名换过两次但它只是个安装标识 |
 | 想改代码怎么办 | 见[完整手册](docs/manual.md)的「开发本插件」——那是开发者路径，普通使用不需要 |
@@ -181,7 +181,7 @@ generated-images/                   生图输出（已忽略，不入库）
 
 ## 反馈
 
-提 [issue](https://github.com/kkj520/dsh-image-bridge/issues) 时附上三份自诊断文件的路径，排查会快很多：
+提 [issue](https://github.com/kkj-luna/dsh-image-bridge/issues) 时附上三份自诊断文件的路径，排查会快很多：
 
 | 文件 | 内容 |
 | --- | --- |

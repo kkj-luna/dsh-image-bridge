@@ -4,18 +4,20 @@
 
 ## v0.4.0 — 2026-10-11
 
-**加入 npm 安装**：包名从 `@local/dsh-image-bridge` 改为 **`kkj520-dsh-image-bridge`**，并发布到 npm。
+**加入 npm 安装**：包名从 `@local/dsh-image-bridge` 改为 **`kkj-luna-dsh-image-bridge`**，并发布到 npm。
 
 ```sh
-dsh plugin --profile web add kkj520-dsh-image-bridge
+dsh plugin --profile web add kkj-luna-dsh-image-bridge
 ```
 
 **为什么必须改名**：`@local/` 不是任何人拥有的 npm scope，**发不出去**；而补丁行的 `name` 必须等于**安装用的包名**（loader 走 `resolveBundleDir("dsh", name, …)` 去解析这个包），所以"包名"与"补丁行 name"只能一起改。实测确认过：仓库根原本没有 `package.json` 时 `github:` 装法也会失败，同一处结构决定了两件事。
 
+**GitHub 用户名改为 `kkj-luna`**：仓库地址、issue 链接、README 徽章、`client.js` 里的 `REPO_URL` 与 `package.json` 的 `repository`/`homepage`/`bugs` 一起更新。npm 包名里的前缀跟着用户名走（`kkj520-dsh-image-bridge` → `kkj-luna-dsh-image-bridge`）——**旧包名从未发布过**，所以这次改名不影响任何已安装的用户。GitHub 会自动重定向旧地址，但配置里写死的 URL 必须自己改，否则徽章与 issue 链接会指向重定向而非真实地址。
+
 **保持不变（更新不丢配置的关键）**
 
 - 补丁行 id `image-bridge-v4` 与设置命名空间 `image-bridge-v4` **一个字都没动**——行 id 是 profile 配置的锚点，也是设置页写入的命名空间。
-- 升级只需改 profile 里那一行的依赖名（`@local/dsh-image-bridge` → `kkj520-dsh-image-bridge`）。`verify-upgrade` 那套断言覆盖了改名场景，按真实层序合成后确认配置零漂移。
+- 升级只需改 profile 里那一行的依赖名（`@local/dsh-image-bridge` → `kkj-luna-dsh-image-bridge`）。`verify-upgrade` 那套断言覆盖了改名场景，按真实层序合成后确认配置零漂移。
 
 **包清单（为发布 npm 补齐）**
 
@@ -27,8 +29,8 @@ dsh plugin --profile web add kkj520-dsh-image-bridge
 
 | 方式 | 命令 | 适合 |
 | --- | --- | --- |
-| **npm（推荐）** | `dsh plugin --profile web add kkj520-dsh-image-bridge` | 日常使用；预构建安装，免源码构建授权 |
-| GitHub | `dsh plugin --profile web add github:kkj520/dsh-image-bridge` | 想跟最新提交、或 npm 上还没发到那一版 |
+| **npm（推荐）** | `dsh plugin --profile web add kkj-luna-dsh-image-bridge` | 日常使用；预构建安装，免源码构建授权 |
+| GitHub | `dsh plugin --profile web add github:kkj-luna/dsh-image-bridge` | 想跟最新提交、或 npm 上还没发到那一版 |
 | 本地目录 | `dsh plugin --profile web add <仓库绝对路径>` | 开发本插件 |
 
 **验收**
@@ -42,7 +44,7 @@ dsh plugin --profile web add kkj520-dsh-image-bridge
 **一条命令安装**：插件包根目录从 `plugins/dsh-image-bridge-v4/` 上移到**仓库根**。
 
 ```sh
-dsh plugin --profile web add github:kkj520/dsh-image-bridge
+dsh plugin --profile web add github:kkj-luna/dsh-image-bridge
 ```
 
 为什么必须动结构：`dsh plugin add` 对 git 形式（`github:owner/repo`）是把整仓交给 pnpm 取包，**没法指定子目录**——它只会打仓库根那个 `package.json`。插件在子目录里时这条命令根本走不通，只能"先克隆、再填本地绝对路径"。dsh-market / superpowers-dsh / whale-widget 这些插件的仓库根都直接是插件包，原因就在这里。

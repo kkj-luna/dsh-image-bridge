@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: 'kkj520-dsh-image-bridge',
+  id: 'kkj-luna-dsh-image-bridge',
   factory(require) {
     /**
      * 生图桥 · Client 半。
@@ -1153,16 +1153,16 @@ window.__ModuleLoader__.load({
      *
      * - `PACKAGE_NAME` 必须与 package.json 的 `name` 逐字一致（客户端模块拿不到清单，
      *   只能写成常量，验收里有一条断言专门盯"改版本忘了同步"）；
-     * - 徽标上**不显示包名的作者前缀**（`kkj520-`）——那是为了在 npm 上唯一而加的，
+     * - 徽标上**不显示包名的作者前缀**（`kkj-luna-`）——那是为了在 npm 上唯一而加的，
      *   对使用没有意义（插件市场的徽标同样只写 `dsh-market`），所以单独用仓库名常量；
      * - 仓库地址也只留这一个常量，不在别处散落硬编码。
      */
-    const PACKAGE_NAME = 'kkj520-dsh-image-bridge'
+    const PACKAGE_NAME = 'kkj-luna-dsh-image-bridge'
     const PACKAGE_VERSION = '0.4.0'
-    /** 徽标上显示的仓库名（去掉 scope 前缀）。 */
+    /** 徽标上显示的仓库名。 */
     const REPO_NAME = 'dsh-image-bridge'
     /** 徽标点击后打开的仓库地址。 */
-    const REPO_URL = 'https://github.com/kkj520/dsh-image-bridge'
+    const REPO_URL = 'https://github.com/kkj-luna/dsh-image-bridge'
 
     /**
      * 页头图标的图形数据。
@@ -3052,7 +3052,7 @@ window.__ModuleLoader__.load({
           // 包名与版本是技术标识，不翻译（zh/en 同一串）。
           /*
            * 徽标：仓库名 + 版本，**整段是一个真实链接**（不是 div+onClick——那样键盘不可达）。
-           * 形态对齐插件市场那一行：等宽、弱化色；包名的作者前缀（`kkj520-`）不显示（对外无意义）。
+           * 形态对齐插件市场那一行：等宽、弱化色；包名的作者前缀（`kkj-luna-`）不显示（对外无意义）。
            */
           h('a', {
             key: 'badge',

@@ -1547,7 +1547,7 @@ const manifestJson = JSON.parse(await readFile(`${ROOT}/package.json`, 'utf8'))
  * 徽标显示的仓库名取自**客户端自己的常量**（`client.js` 的 `REPO_NAME`），不在这里推导。
  *
  * 以前的写法是"包名去掉 scope 前缀"，那在包名是 `@local/dsh-image-bridge` 时恰好等于仓库名；
- * 改成 `kkj520-dsh-image-bridge` 之后这个推导就错了（推出来是 `kkj520-dsh-image-bridge`，
+ * 包名改成 `kkj-luna-dsh-image-bridge` 之后这个推导就错了（推出来是 `kkj-luna-dsh-image-bridge`，
  * 而界面上显示的是仓库名 `dsh-image-bridge`）。断言应当核对**界面真的用了哪个常量**，
  * 而不是自己再猜一遍推导规则——否则规则一变，测试会红在一个它并不该管的地方。
  */
@@ -1562,7 +1562,7 @@ check(
     && zhDict['nav'] === '生图桥'
     // 版本仍与清单逐字一致；显示名换成仓库名，不再逐字等于包名。
     && badgeNode?.props?.children === `${repoName}  v${manifestJson.version}`
-    && manifestJson.name === 'kkj520-dsh-image-bridge',
+    && manifestJson.name === 'kkj-luna-dsh-image-bridge',
   JSON.stringify({ row: titleRowChildren.map((child) => child?.type), badge: badgeText, version: manifestJson.version }).slice(0, 220),
 )
 check(
@@ -1580,7 +1580,7 @@ check(
   JSON.stringify({ target: badgeNode?.props?.target ?? null, rel: badgeNode?.props?.rel ?? null }).slice(0, 200),
 )
 check(
-  '③ 徽标文案 = 仓库名 + 版本，且**不把包名整串显示出来**（`kkj520-` 前缀对使用无意义）',
+  '③ 徽标文案 = 仓库名 + 版本，且**不把包名整串显示出来**（`kkj-luna-` 前缀对使用无意义）',
   badgeText === `${repoName}  v${manifestJson.version}`
     && repoName !== '' && badgeText.startsWith(repoName)
     && badgeText.includes(manifestJson.version)

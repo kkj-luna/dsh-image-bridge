@@ -1,5 +1,5 @@
 {
-  "name": "kkj520-dsh-image-bridge",
+  "name": "kkj-luna-dsh-image-bridge",
   "version": "0.4.0",
   "license": "MIT",
   "description": "生图桥：给没有生图/修图能力的模型接入外部生图模型。在 Web 界面配置 API 与 Key，模型即可直接调用生图/改图能力。",
@@ -7,11 +7,11 @@
   "main": "index.js",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kkj520/dsh-image-bridge.git"
+    "url": "git+https://github.com/kkj-luna/dsh-image-bridge.git"
   },
-  "homepage": "https://github.com/kkj520/dsh-image-bridge#readme",
+  "homepage": "https://github.com/kkj-luna/dsh-image-bridge#readme",
   "bugs": {
-    "url": "https://github.com/kkj520/dsh-image-bridge/issues"
+    "url": "https://github.com/kkj-luna/dsh-image-bridge/issues"
   },
   "keywords": [
     "deepseek-harness",

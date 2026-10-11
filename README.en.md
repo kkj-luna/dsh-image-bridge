@@ -6,7 +6,7 @@
 
 English | [中文](README.md)
 
-[![stars](https://img.shields.io/github/stars/kkj520/dsh-image-bridge?style=flat)](https://github.com/kkj520/dsh-image-bridge)
+[![stars](https://img.shields.io/github/stars/kkj-luna/dsh-image-bridge?style=flat)](https://github.com/kkj-luna/dsh-image-bridge)
 [![dsh](https://img.shields.io/badge/DeepSeek%20Harness-plugin-4f8cff)](https://github.com/deepseek-ai)
 
 Give a [DeepSeek Harness](https://github.com/deepseek-ai) model that **cannot draw** access to an external image service: install one plugin and the model gains two tools — `image_generate` and `image_edit` — with each result shown in the conversation as a persistent image attachment and saved to `generated-images/` in the session workspace.
@@ -18,7 +18,7 @@ Give a [DeepSeek Harness](https://github.com/deepseek-ai) model that **cannot dr
 Install the plugin (it is on npm — one command):
 
 ```sh
-dsh plugin --profile web add kkj520-dsh-image-bridge
+dsh plugin --profile web add kkj-luna-dsh-image-bridge
 ```
 
 Restart `dsh web` and open **Settings → Image Bridge**. You get a prebuilt install: no cloning, no local path to remember.
@@ -32,7 +32,7 @@ npm i -g @deepseek-ai/dsh
 **Rather not type commands?** Let your agent do it — start a new conversation and send this:
 
 ```text
-Install this plugin: dsh plugin --profile web add kkj520-dsh-image-bridge
+Install this plugin: dsh plugin --profile web add kkj-luna-dsh-image-bridge
 Then restart dsh web and confirm that Settings → Image Bridge opens and both tools are registered.
 ```
 
@@ -41,7 +41,7 @@ The agent installs, restarts, and checks the result for you.
 **To track the latest commits** (when npm lags behind):
 
 ```sh
-dsh plugin --profile web add github:kkj520/dsh-image-bridge
+dsh plugin --profile web add github:kkj-luna/dsh-image-bridge
 ```
 
 ### How to confirm it loaded
@@ -55,14 +55,14 @@ After restarting `dsh web`, any one of the three (**the restart is required** �
 ### Uninstall
 
 ```sh
-dsh plugin --profile web remove kkj520-dsh-image-bridge
+dsh plugin --profile web remove kkj-luna-dsh-image-bridge
 ```
 
 You can also remove it under **Settings → Plugins**.
 
 | You may be wondering | Answer |
 | --- | --- |
-| Why does the package name carry `kkj520-`? | To stay unique on npm — the plain name `dsh-image-bridge` was already taken. The settings-page badge shows only the repository name |
+| Why does the package name carry `kkj-luna-`? | To stay unique on npm — the plain name `dsh-image-bridge` was already taken. The settings-page badge shows only the repository name |
 | Do I have to restart? | **Yes** — plugin code is not hot-reloaded |
 | Will upgrading lose my configuration? | No. The row id and settings namespace have always been `image-bridge-v4`; the package name changed twice but it is only an install identifier |
 | What if I want to change the code? | See "Developing this plugin" in the [full manual](docs/manual.en.md) — a developer path, not needed for normal use |
@@ -183,7 +183,7 @@ generated-images/                   generated output (ignored, not committed)
 
 ## Feedback
 
-When you open an [issue](https://github.com/kkj520/dsh-image-bridge/issues), attach the paths of the three self-diagnostics — it makes triage much faster:
+When you open an [issue](https://github.com/kkj-luna/dsh-image-bridge/issues), attach the paths of the three self-diagnostics — it makes triage much faster:
 
 | File | Contents |
 | --- | --- |

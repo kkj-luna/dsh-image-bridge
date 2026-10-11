@@ -84,7 +84,7 @@ const toolsCompileAvailable = typeof defineTool === 'function'
 const schemastery = await loadOptional('@deepseek-ai/schemastery')
 const z = schemastery === undefined ? undefined : schemastery.default ?? schemastery
 
-export const name = 'kkj520-dsh-image-bridge'
+export const name = 'kkj-luna-dsh-image-bridge'
 
 /** 工具注册表是唯一的硬依赖；其余服务在 apply 内按需注入。 */
 export const inject = ['tools']
@@ -1922,7 +1922,7 @@ export function apply(ctx, config) {
  * 但一旦出错就是「插件装了却什么也没发生」。每次激活都覆写这份报告，便于直接定位。
  */
 async function writeStartupReport(detail) {
-  const report = { at: new Date().toISOString(), plugin: 'kkj520-dsh-image-bridge', ...detail }
+  const report = { at: new Date().toISOString(), plugin: 'kkj-luna-dsh-image-bridge', ...detail }
   const bases = [
     typeof process.env.DSH_HOME === 'string' && process.env.DSH_HOME !== '' ? process.env.DSH_HOME : undefined,
     join(homedir(), '.dsh'),

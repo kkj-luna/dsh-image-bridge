@@ -9,4 +9,4 @@
 # 一个不存在的服务、第一次生图必然失败——所以默认值一律交给 schema，包内不写死任何地址。
 - insert:
     - id: image-bridge-v4
-      name: 'kkj520-dsh-image-bridge'
+      name: 'kkj-luna-dsh-image-bridge'

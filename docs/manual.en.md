@@ -13,14 +13,14 @@ Give **models that cannot draw** a connection to an external image model. Config
 **From npm (recommended — one command):**
 
 ```sh
-dsh plugin --profile web add kkj520-dsh-image-bridge
+dsh plugin --profile web add kkj-luna-dsh-image-bridge
 ```
 
-**To track the latest commits** (when npm lags behind): `dsh plugin --profile web add github:kkj520/dsh-image-bridge`
+**To track the latest commits** (when npm lags behind): `dsh plugin --profile web add github:kkj-luna/dsh-image-bridge`
 
 Either way, the plugin row is inserted into the profile's config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). **Restart `dsh web` afterwards**, then open **Settings → Image Bridge**.
 
-Package name `kkj520-dsh-image-bridge`, version `0.4.0`. The author prefix keeps it unique on npm (the plain name `dsh-image-bridge` was already taken); the settings-page badge shows only the repository name, `dsh-image-bridge`.
+Package name `kkj-luna-dsh-image-bridge`, version `0.4.0`. The author prefix keeps it unique on npm (the plain name `dsh-image-bridge` was already taken); the settings-page badge shows only the repository name, `dsh-image-bridge`.
 
 ### Developing this plugin
 
@@ -43,7 +43,7 @@ To check nothing broke after a change, the repository root ships six offline sui
 
 **First install.** Run the command above, restart `dsh web`, then open **Settings → Image Bridge**. The list holds exactly one card: named "Default provider", tagged "Existing config" (the synthesised legacy single-provider record — base URL `https://api.openai.com/v1`, generation model `gpt-image-1`, size `1024x1024`; all of them are Config-schema defaults, since `cordis.patch.yml` deliberately carries no `config`). The four dropdowns are disabled, with the line "Add a model provider and test the connection first" beneath them — **that is the normal state of a fresh install, not a fault**. The shortest path from there is to edit that card: paste your API Key → Test connection → Save → then pick models in the Models section.
 
-**Updating an existing install.** For an npm install, the npm version is what counts: run `dsh plugin --profile web add kkj520-dsh-image-bridge` again and restart `dsh web` — no need to remove anything first. For a local-directory install (see "Developing this plugin" above), **whatever is in the source directory is what runs** — copy the new version over it or `git pull`, then restart.
+**Updating an existing install.** For an npm install, the npm version is what counts: run `dsh plugin --profile web add kkj-luna-dsh-image-bridge` again and restart `dsh web` — no need to remove anything first. For a local-directory install (see "Developing this plugin" above), **whatever is in the source directory is what runs** — copy the new version over it or `git pull`, then restart.
 
 Neither loses your configuration: it lives on the profile row (row id `image-bridge-v4`), not inside the plugin directory, so renaming the package or overwriting files makes no difference to it. Conversely, with a local-directory install **do not move or rename that directory** — the link points at the original path, so you would have to reinstall from the new one.
 
@@ -215,7 +215,7 @@ Upgrade compatibility: when `providers` is empty but the legacy `baseUrl`/`model
 
 ### Directory layout
 
-**Since v0.3.0 the repository root *is* the plugin package** — that is what makes the one-command install (`dsh plugin add github:kkj520/dsh-image-bridge`) work: when pnpm fetches a git dependency it packs the repository root, and there is no way to point it at a subdirectory.
+**Since v0.3.0 the repository root *is* the plugin package** — that is what makes the one-command install (`dsh plugin add github:kkj-luna/dsh-image-bridge`) work: when pnpm fetches a git dependency it packs the repository root, and there is no way to point it at a subdirectory.
 
 ```text
 dsh-image-bridge/          ← repository root = package root

@@ -13,14 +13,14 @@
 **从 npm 装（推荐，一条命令）：**
 
 ```sh
-dsh plugin --profile web add kkj520-dsh-image-bridge
+dsh plugin --profile web add kkj-luna-dsh-image-bridge
 ```
 
-**跟最新提交**（npm 上还没发到那一版时）：`dsh plugin --profile web add github:kkj520/dsh-image-bridge`
+**跟最新提交**（npm 上还没发到那一版时）：`dsh plugin --profile web add github:kkj-luna/dsh-image-bridge`
 
 两种装法都会把插件行插入 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。**装完重启 `dsh web`**，再打开「设置 → 生图桥」。
 
-包名 `kkj520-dsh-image-bridge`，版本 `0.4.0`。名字带作者前缀是为了在 npm 上唯一（`dsh-image-bridge` 已被他人占用）；设置页徽标只显示仓库名 `dsh-image-bridge`。
+包名 `kkj-luna-dsh-image-bridge`，版本 `0.4.0`。名字带作者前缀是为了在 npm 上唯一（`dsh-image-bridge` 已被他人占用）；设置页徽标只显示仓库名 `dsh-image-bridge`。
 
 ### 开发本插件
 
@@ -43,7 +43,7 @@ dsh plugin --profile web add <克隆下来的仓库绝对路径>
 
 **首次安装。** 按上面一条命令装完、重启 `dsh web`，再打开「设置 → 生图桥」。此时列表里只有一张卡：名字「默认提供商」、带「现有配置」小标（旧单服务商配置合成的那张，地址 `https://api.openai.com/v1`、生图模型 `gpt-image-1`、尺寸 `1024x1024`，都来自 Host 的 Config schema 默认值，因为 `cordis.patch.yml` 刻意不写 `config`）。四个下拉是禁用的，下面一行写着「先添加并测试连接一个模型提供商」——**这是正常的新装状态，不是坏了**。最省事的走法就是编辑这张卡：填 API Key → 测试连接 → 保存 → 回「模型」区块选模型。
 
-**装过、要更新。** npm 装的知识 npm 上的最新版本为准：重新 `dsh plugin --profile web add kkj520-dsh-image-bridge` 再重启 `dsh web` 即可，不必先卸载。本地目录装的（见上面「开发本插件」）则是**源目录里的文件改了就是最新的**——覆盖文件或 `git pull` 后重启就行。
+**装过、要更新。** npm 装的知识 npm 上的最新版本为准：重新 `dsh plugin --profile web add kkj-luna-dsh-image-bridge` 再重启 `dsh web` 即可，不必先卸载。本地目录装的（见上面「开发本插件」）则是**源目录里的文件改了就是最新的**——覆盖文件或 `git pull` 后重启就行。
 
 两种情况都**不会丢配置**：用户配置存在 profile 的那一行上（行 id `image-bridge-v4`），不在插件目录里，换包名或覆盖文件都不影响它。反过来，本地目录装的时候**别移动或重命名那个目录**——链接指着原路径，移了就得从新路径重装一次。
 
@@ -215,7 +215,7 @@ DSH_IMAGE_BRIDGE_KEY_<ID>     ID = provider.id 转大写、非字母数字一律
 
 ### 目录结构
 
-**v0.3.0 起，仓库根目录就是插件包**——这是"一条命令安装"（`dsh plugin add github:kkj520/dsh-image-bridge`）的前提：pnpm 取 git 依赖时只会打仓库根那个包，没法指定子目录。
+**v0.3.0 起，仓库根目录就是插件包**——这是"一条命令安装"（`dsh plugin add github:kkj-luna/dsh-image-bridge`）的前提：pnpm 取 git 依赖时只会打仓库根那个包，没法指定子目录。
 
 ```text
 dsh-image-bridge/           ← 仓库根 = 插件包根
