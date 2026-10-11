@@ -1649,8 +1649,11 @@ window.__ModuleLoader__.load({
             returnedModels: returned === null ? null : returned.length,
             imageModels: returned === null ? null : uniqueModels(returned).filter(isImageModel).length,
             adoptedModels: adopted === null ? null : adopted.length,
+            /*
+             * 只记"有没有填"，**不记长度**：密钥长度属于凭据元数据，能把穷举空间缩小一截，
+             * 而它对排查这件事没有任何帮助（"填没填"才是要回答的问题）。
+             */
             keyProvided: state.keyDraft.length > 0,
-            keyLength: state.keyDraft.length,
           }))
           const message = outcome.message === '' ? (outcome.ok ? tr('testOk') : tr('testFail')) : outcome.message
           /*
@@ -1686,8 +1689,8 @@ window.__ModuleLoader__.load({
             count: models.length,
             imageModels: models.filter(isImageModel).length,
             models: models.slice(0, 12),
+            // 只记"有没有填"，不记长度（见上面「测试连接」那处的说明）。
             keyProvided: state.keyDraft.length > 0,
-            keyLength: state.keyDraft.length,
           }))
           patch({
             phase: 'idle',
@@ -2199,7 +2202,8 @@ window.__ModuleLoader__.load({
             imageModel: record.imageModel,
             editModel: record.editModel,
             keySaved,
-            keyLength: keyDraft.length,
+            // 同上：只说明这次有没有一起保存密钥，不记录它的长度。
+            keyProvided: keyDraft.length > 0,
           }))
         } catch (error) {
           report('error', '提供商保存失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))

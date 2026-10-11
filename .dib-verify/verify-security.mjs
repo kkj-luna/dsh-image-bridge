@@ -11,7 +11,7 @@
  * 绝不能回退到"当前生效服务商"的地址（那正是真机事故的另一半）。
  */
 import { createServer } from 'node:http'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -47,8 +47,18 @@ const server = createServer((request, response) => {
     /*
      * 用 body 里的 prompt 判定"这是一次生图请求"，而不是靠路径前缀：
      * 本验收在意的是"服务商回了什么"，路径细节属于别的套件的范围。
+     *
+     * 两类暗号：
+     *   - `target:<名字>` → 回**恶意形态**（内网地址 / 超大正文），用于 SSRF 与上限用例；
+     *   - `plain` → 回一张**正常的内联图片**，用于"正常路径仍然可用"这类对照用例
+     *     （必须成功，否则"拒绝了该拒的"就无从区分"把功能整体改坏了"）。
      */
     const target = /"prompt":"target:([a-z]+)"/u.exec(body)?.[1]
+    if (target === undefined && /"prompt":"plain/u.test(body)) {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ data: [{ b64_json: PNG.toString('base64') }] }))
+      return
+    }
     if (target !== undefined) {
       if (target === 'huge') {
         // 先声明一个很大的 content-length，然后持续吐数据：客户端必须在上限处停下。
@@ -85,6 +95,12 @@ const origin = `http://127.0.0.1:${server.address().port}`
 const registered = []
 const routes = []
 const workRoot = await mkdtemp(join(tmpdir(), 'dib-sec-work-'))
+/*
+ * 把诊断日志也指到临时目录：本套件要灌日志验证"总量封顶 + 轮转"，绝不能在用户真实的
+ * `~/.dsh` 里灌 1 MiB 垃圾。插件在**调用时**读 `DSH_HOME`（不是加载时），所以这里设置有效。
+ */
+const logHome = await mkdtemp(join(tmpdir(), 'dib-sec-home-'))
+process.env.DSH_HOME = logHome
 
 /** 与插件 `effectiveConfigOf` 的读取路径对齐：设置服务给一行，行里带 providers。 */
 const rowValue = {
@@ -215,9 +231,147 @@ for (const [target, label] of [['metadata', '云元数据 169.254.169.254'], ['l
 
 /* ---------------------------------------------------------------- 收尾 */
 
+/* ------------------------------------------------------------------ *
+ * ④ 落盘不能跟着符号链接走出工作区
+ *
+ * 词法检查（`relative()` 不以 `..` 开头）挡不住 symlink：工作区里一个指向外部的
+ * `generated-images` 链接，拼接出来的路径"看起来"在工作区内，实际写到了外面。
+ * 这条既验拒绝路径，也验**正常路径仍然能写**——只验前者的话，把功能整体改坏也能通过。
+ * ------------------------------------------------------------------ */
+{
+  const outsideDir = await mkdtemp(join(tmpdir(), 'dib-sec-outside-'))
+  const linkWorkspace = await mkdtemp(join(tmpdir(), 'dib-sec-link-'))
+  let symlinkMade = false
+  try {
+    await symlink(outsideDir, join(linkWorkspace, 'generated-images'), 'junction')
+    symlinkMade = true
+  } catch {
+    /* Windows 上无权限建链接时跳过这一条（不伪装成通过） */
+  }
+  if (symlinkMade) {
+    outbound.length = 0
+    /*
+     * 注意断言的对象：落盘失败**不该**让整次调用失败——图已经生成、已经计费，丢结果更糟。
+     * 这里刻意**不 catch 抛错**，而是看返回值里的 `warnings`：拒绝原因必须出现在那里，
+     * 同时磁盘上一个字节都不能落到工作区外。
+     */
+    let linkValue
+    let linkError = ''
+    try {
+      linkValue = await generate.execute({ prompt: 'plain symlink escape' }, { ...exec, agent: { session: { header: { cwd: linkWorkspace } } } })
+    } catch (error) {
+      linkError = error instanceof Error ? error.message : String(error)
+    }
+    const outsideNames = await readdir(outsideDir).catch(() => [])
+    const linkNames = await readdir(join(linkWorkspace, 'generated-images')).catch(() => [])
+    const warnings = Array.isArray(linkValue?.warnings) ? linkValue.warnings : []
+    const refused = warnings.some((entry) => String(entry).includes('符号链接'))
+    check(
+      '④ 工作区里的目录链接指向外部时，落盘被拒绝（以警告降级，不丢已生成的图）',
+      linkError === '' && refused && outsideNames.length === 0 && linkNames.length === 0,
+      JSON.stringify({ linkError: linkError.slice(0, 80), refused, outsideNames, linkNames, warnings: warnings.map((entry) => String(entry).slice(0, 60)) }),
+    )
+  } else {
+    check('④ 工作区里的目录链接指向外部时，保存被拒绝且没有写到外面', false, '（本机无法创建符号链接，无法验证）')
+  }
+
+  /* 红-绿的另一半：普通工作区必须照常写入，别把正常路径一起挡了。 */
+  const plainWorkspace = await mkdtemp(join(tmpdir(), 'dib-sec-plain-'))
+  outbound.length = 0
+  let plainError = ''
+  try {
+    await generate.execute({ prompt: 'plain write' }, { ...exec, agent: { session: { header: { cwd: plainWorkspace } } } })
+  } catch (error) {
+    plainError = error instanceof Error ? error.message : String(error)
+  }
+  const plainFiles = await readdir(join(plainWorkspace, 'generated-images')).catch(() => [])
+  check(
+    '④ 普通工作区照常写入生成的图片（防护没有把正常路径挡掉）',
+    plainError === '' && plainFiles.length === 1 && plainFiles[0].endsWith('.png'),
+    JSON.stringify({ plainError: plainError.slice(0, 80), plainFiles }),
+  )
+  /*
+   * 清理要**单独容错**：Windows 上删除含 junction 的目录可能抛 ENOTEMPTY（目标目录里的文件
+   * 还在被删的过程中），那是环境问题，不该把"验收结论"一起带走。断言已经跑完，清理失败
+   * 只记录一行提示。
+   */
+  const cleanup = async (target) => { await rm(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {}) }
+  await cleanup(outsideDir)
+  await cleanup(linkWorkspace)
+  await cleanup(plainWorkspace)
+}
+
+/* ------------------------------------------------------------------ *
+ * ⑤ 诊断日志总量封顶 + 轮转
+ *
+ * 这条通道由浏览器驱动，Host 没有观测手段，所以必须存在；但要是一个出错循环就能把用户磁盘
+ * 一路写满，那就是拒绝服务。原先只有"单条长度上限"，没有总量与速率上限。
+ * ------------------------------------------------------------------ */
+{
+  const logPath = join(logHome, 'dsh-image-bridge-client.log')
+  const bigDetail = 'x'.repeat(8000)
+  // 灌到肯定超过 1 MiB：每条约 8 KiB，200 条约 1.6 MiB
+  for (let index = 0; index < 200; index += 1) {
+    await callRpc('log', { level: 'info', message: `flood-${index}`, detail: bigDetail }, `flood-${index}`)
+  }
+  const mainSize = await stat(logPath).then((info) => info.size).catch(() => 0)
+  check(
+    '⑤ 灌 200 条大日志后，主日志不超过 1 MiB（总量封顶）',
+    mainSize > 0 && mainSize <= 1024 * 1024 + 20 * 1024,
+    `主日志 ${mainSize} 字节`,
+  )
+  check(
+    '⑤ 速率上限先于总量上限生效：200 条里只有 60 条落盘（其余被丢弃并已计数）',
+    mainSize < 60 * 9000 + 20 * 1024,
+    `主日志 ${mainSize} 字节 ≈ ${Math.round(mainSize / 8192)} 条`,
+  )
+  /*
+   * 轮转单独验：预置一个"历史累积超过上限"的日志，再让插件写一条——它必须先轮转再写。
+   * 不能靠上面的灌流量来触发轮转：**速率上限会先把写入挡住**，日志根本长不到上限
+   * （这也正是上面那条断言在测的事）。
+   */
+  /*
+   * 丢弃痕迹要在**覆盖之前**取证：下面为了验轮转会把主日志整个覆盖掉，之后再读就没这条了。
+   * （这也说明取证时机本身就是断言的一部分——晚一步证据就没了。）
+   */
+  const floodText = await readFile(logPath, 'utf8').catch(() => '')
+  const dropNotice = floodText.split('\n').find((line) => line.includes('已丢弃')) ?? ''
+  check(
+    '⑤ 被限流时留下"丢了 N 条"的痕迹（否则会把丢弃误读成没发生）',
+    dropNotice !== '',
+    dropNotice.slice(0, 150) || '(主日志里没有丢弃提示)',
+  )
+
+  await writeFile(logPath, `${'y'.repeat(1100 * 1024)}\n`)
+  const beforeRotate = await stat(logPath).then((info) => info.size)
+  /*
+   * 上一个窗口已经被 200 条灌满，直接写会被"丢弃"而不是轮转（那正是限流在生效）。
+   * 这里让插件把窗口基准往前挪 10 秒，等价于"过了十分钟再来一条"——生产的限流规则没变，
+   * 变的只是测试驱动时间的方式；用 sleep 等 10 秒既慢又不可靠。
+   */
+  mod.advanceLogWindowForTest(10000)
+  await callRpc('log', { level: 'info', message: 'after-rotate', detail: 'short' }, 'after-rotate')
+  const rotatedSize = await stat(`${logPath}.1`).then((info) => info.size).catch(() => 0)
+  const afterRotate = await stat(logPath).then((info) => info.size).catch(() => 0)
+  check(
+    '⑤ 日志达到上限时轮转到 .1，主日志重新开始（不会无限增长）',
+    beforeRotate > 1024 * 1024 && rotatedSize > 1024 * 1024 && afterRotate < 64 * 1024,
+    JSON.stringify({ beforeRotate, rotatedSize, afterRotate }),
+  )
+  /* 轮转后主日志里应当有那条新记录；而"丢弃提示"可能在主日志或轮转文件里，两处都查。 */
+  const logText = await readFile(logPath, 'utf8').catch(() => '')
+  const rotatedText = await readFile(`${logPath}.1`, 'utf8').catch(() => '')
+  check(
+    '⑤ 轮转后新记录进主日志、旧内容进 .1（没有把内容弄丢）',
+    logText.includes('after-rotate') && rotatedText.includes('yyyy'),
+    JSON.stringify({ hasNew: logText.includes('after-rotate'), hasOld: rotatedText.includes('yyyy') }),
+  )
+}
+
 server.closeAllConnections?.()
 await new Promise((closed) => server.close(closed))
 await rm(workRoot, { recursive: true, force: true })
+await rm(logHome, { recursive: true, force: true })
 
 const failed = results.filter((entry) => !entry.ok)
 console.log(`\nSUMMARY total=${results.length} passed=${results.length - failed.length} failed=${failed.length}`)

@@ -364,13 +364,13 @@ For maintainers, one line each:
 
 ## Tests
 
-The regression suites live in `.dib-verify/` at the repository root. They need **no network and no real key**, and the six of them total **406 assertions** (measured):
+The regression suites live in `.dib-verify/` at the repository root. They need **no network and no real key**, and the six of them total **413 assertions** (measured):
 
 ```bash
 node .dib-verify/verify-manifest.mjs   # 47
 node .dib-verify/verify-client.mjs     # 168
 node .dib-verify/verify-host.mjs       # 147
-node .dib-verify/verify-security.mjs   # 12
+node .dib-verify/verify-security.mjs   # 19
 node .dib-verify/verify-resolve.mjs    # 8
 node .dib-verify/verify-upgrade.mjs    # 24
 ```

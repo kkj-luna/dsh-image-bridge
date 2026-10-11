@@ -2699,8 +2699,15 @@ check(
   JSON.stringify(saveBundle.credentialSets).slice(0, 240),
 )
 check(
-  '诊断日志只记密钥长度 / 是否配置，不含密钥明文',
-  !logPayloads().includes(secret) && logPayloads().includes('keyLength'),
+  /*
+   * 原先这条只要求"别记明文"，`keyLength` 是被**允许**的。审计指出：密钥长度也是凭据元数据，
+   * 能把穷举空间缩小一截，而对排查没有帮助（要回答的是"填没填"）。所以现在连长度也不许出现，
+   * 断言反过来钉住"不得出现 keyLength"——这是收紧，不是放宽。
+   */
+  '诊断日志只说密钥有没有填：不含密钥明文，也不含密钥长度',
+  !logPayloads().includes(secret)
+    && !logPayloads().includes('keyLength')
+    && logPayloads().includes('keyProvided'),
   logPayloads().slice(0, 240),
 )
 

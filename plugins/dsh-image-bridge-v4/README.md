@@ -364,13 +364,13 @@ dsh-image-bridge-v4/
 
 ## 测试
 
-回归测试在仓库根目录的 `.dib-verify/`，**无需联网、无需真实密钥**，六份合计 **406** 条断言（实测值）：
+回归测试在仓库根目录的 `.dib-verify/`，**无需联网、无需真实密钥**，六份合计 **413** 条断言（实测值）：
 
 ```bash
 node .dib-verify/verify-manifest.mjs   # 47
 node .dib-verify/verify-client.mjs     # 168
 node .dib-verify/verify-host.mjs       # 147
-node .dib-verify/verify-security.mjs   # 12
+node .dib-verify/verify-security.mjs   # 19
 node .dib-verify/verify-resolve.mjs    # 8
 node .dib-verify/verify-upgrade.mjs    # 24
 ```

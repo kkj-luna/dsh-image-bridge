@@ -20,7 +20,7 @@
  *
  * @module dsh-image-bridge
  */
-import { appendFile, mkdir, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, realpath, rename, stat, writeFile } from 'node:fs/promises'
 import diagnostics from 'node:diagnostics_channel'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
@@ -949,6 +949,19 @@ function fileNameFor(prompt, mediaType, index, total) {
 }
 
 /** 把字节写进会话工作区；目录逃出工作区时拒绝，绝不越界写文件。 */
+/**
+ * "解析后的真实路径落在工作区之外"这一个专用错误。
+ *
+ * 需要它是因为调用处要区分两种情况：**真的越界**（必须拒绝）与 **realpath 本身不可用**
+ * （目录刚被删、平台不支持等，应当放行）。靠匹配错误文案区分太脆——文案一改就静默失效。
+ */
+class WorkspaceEscapeError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'WorkspaceEscapeError'
+  }
+}
+
 async function writeWorkspaceCopy(cwd, outputDir, fileName, bytes) {
   if (typeof cwd !== 'string' || cwd.length === 0) return undefined
   const root = resolve(cwd)
@@ -958,6 +971,31 @@ async function writeWorkspaceCopy(cwd, outputDir, fileName, bytes) {
     throw new Error(`outputDir 必须位于会话工作区内，当前配置解析为工作区之外：${outputDir}`)
   }
   await mkdir(dir, { recursive: true })
+  /*
+   * 上面那条只挡"路径里写了 `..`"，挡不住 **symlink**：工作区里若有一个指向外部的符号链接
+   * （`generated-images` 本身是链接、或它是链接下的目录），拼接出来的词法路径仍然"在工作区内"，
+   * 实际写入却落在工作区外。
+   *
+   * 这里做**二次确认真实路径**：把两侧都解析成 realpath 再比一次。工作区内出现一个
+   * 指向外部的目录链接，本来就不是"保存图片"该有的形态，所以宁可拒绝并说清原因，
+   * 也不要照着链接写到用户没预期的地方。解析失败（目录刚被删、平台不支持等）时**不阻断**，
+   * 退回词法判断——宁可少一层防护，也不要让正常保存因为一次 stat 失败而整体失败。
+   */
+  try {
+    const realRoot = await realpath(root)
+    const realDir = await realpath(dir)
+    const realRel = relative(realRoot, realDir)
+    if (realRel.startsWith('..') || isAbsolute(realRel)) {
+      throw new WorkspaceEscapeError(`outputDir 解析后落在会话工作区之外（目录可能是符号链接）：${outputDir}`)
+    }
+  } catch (error) {
+    /*
+     * 只有"确实解析出工作区之外"这一种情况才向上抛；realpath 因为目录刚被删、平台不支持等原因
+     * 失败时**不阻断**，退回上面的词法判断——宁可少一层防护，也不要让正常保存整体失败。
+     * 用错误实例类型区分这两种情况，不靠匹配错误文案（文案一改就失效）。
+     */
+    if (error instanceof WorkspaceEscapeError) throw error
+  }
   const target = join(dir, fileName)
   await writeFile(target, bytes)
   return target
@@ -1913,14 +1951,92 @@ function clientLogPath() {
   return join(base, 'dsh-image-bridge-client.log')
 }
 
-/** 追加一条客户端诊断；字段都做了长度上限，避免日志被灌爆。 */
+/*
+ * 客户端诊断日志的**增长上限**。
+ *
+ * 这条通道是"浏览器主动回报"，Host 没有观测手段，所以它必须存在；但正因为它由对端驱动，
+ * 一个出错循环（客户端反复 report 同一条）就能把用户磁盘一路写满——原先只有单条长度上限，
+ * 没有总量与速率上限。
+ *
+ * 三层一起才挡得住，缺一层都不够：
+ *   ① **单条上限**：每条最多 `LOG_ENTRY_MAX_BYTES`（截断），异常巨大的 detail 也塞不进来；
+ *   ② **速率上限**：`LOG_MAX_ENTRIES_PER_WINDOW` 条 / `LOG_WINDOW_MS`，超出的丢弃并计数——
+ *      只限总量的话，高频小条目仍然会迅速吃满配额，把有价值的早期记录挤掉；
+ *   ③ **总量上限 + 轮转**：文件到 `LOG_MAX_BYTES` 就整体改名为 `.1`（只留一份备份）重新开始。
+ *      丢掉最老的记录，而不是无限增长。
+ *
+ * 被丢弃的条数会**如实写进日志**（第一次丢时写一条，之后每隔一段再写一条），否则"日志里没有"
+ * 会被误读成"没发生过"。丢弃不返回失败：日志写不进去不该让客户端那次操作失败。
+ */
+const LOG_MAX_BYTES = 1024 * 1024
+const LOG_ENTRY_MAX_BYTES = 10 * 1024
+const LOG_WINDOW_MS = 10000
+const LOG_MAX_ENTRIES_PER_WINDOW = 60
+/** 被限流时，最多每隔这么久留一条"丢了 N 条"的提示（同样直接写毫秒，不做单位换算）。 */
+const LOG_DROP_NOTICE_MS = 30000
+/** 日志里提示用的窗口秒数；与 `LOG_WINDOW_MS` 同源，避免两处各写一个数。 */
+const LOG_WINDOW_SECONDS = LOG_WINDOW_MS / 1000
+const logWindow = { startedAt: 0, count: 0, dropped: 0, lastNoticeAt: 0 }
+
+/** 记录一次写入是否放行；返回 false 表示这一条应当被丢弃（并已计入 dropped）。 */
+function logRateAllows(now) {
+  if (now - logWindow.startedAt >= LOG_WINDOW_MS) {
+    logWindow.startedAt = now
+    logWindow.count = 0
+  }
+  logWindow.count += 1
+  if (logWindow.count <= LOG_MAX_ENTRIES_PER_WINDOW) return true
+  logWindow.dropped += 1
+  return false
+}
+
+/**
+ * 把限流窗口的时间基准往前挪（等价于"窗口已经过去了一段时间"）。
+ *
+ * **只给进程外验收用**：没有它，同一个进程里跑完"灌 200 条触发限流"之后，紧接着的那次写入
+ * 仍然在同一个窗口内、也会被丢弃，于是"轮转"这条路径根本走不到。用 sleep 等 10 秒既慢又脆。
+ * 生产代码不调用它；这里也不是"放宽限流"，只是让测试能跳到一个新的窗口。
+ */
+export function advanceLogWindowForTest(ms) {
+  logWindow.startedAt -= ms
+}
+
+/** 追加一条客户端诊断；单条截断 + 速率限制 + 总量轮转，见上面 `LOG_MAX_BYTES` 的说明。 */
 async function appendClientLog(payload) {
   const level = typeof payload.level === 'string' ? payload.level.slice(0, 32) : 'info'
   const message = typeof payload.message === 'string' ? payload.message.slice(0, 2000) : ''
   const detail = typeof payload.detail === 'string' ? payload.detail.slice(0, 8000) : ''
   const path = clientLogPath()
-  await mkdir(dirname(path), { recursive: true })
-  await appendFile(path, `${new Date().toISOString()}\t${level}\t${message}\t${detail.replace(/\s+/gu, ' ')}\n`)
+  const now = Date.now()
+  if (!logRateAllows(now)) {
+    /*
+     * 被丢弃时：每 30 秒最多留一条"丢了 N 条"的提示。这条提示本身**不再走限流**，
+     * 否则日志里会彻底没有痕迹，事后无法区分"没发生"和"被丢了"。
+     */
+    if (now - logWindow.lastNoticeAt < LOG_DROP_NOTICE_MS) return { written: false, path, dropped: logWindow.dropped }
+    logWindow.lastNoticeAt = now
+    const notice = `${new Date(now).toISOString()}\twarn\t客户端日志触发速率上限，已丢弃 ${logWindow.dropped} 条\t每条上限 ${LOG_ENTRY_MAX_BYTES} 字节、${LOG_MAX_ENTRIES_PER_WINDOW} 条/${LOG_WINDOW_SECONDS} 秒\n`
+    try {
+      await mkdir(dirname(path), { recursive: true })
+      await appendFile(path, notice)
+    } catch {
+      /* 提示写不进去就算了，绝不能因此让调用方失败 */
+    }
+    return { written: false, path, dropped: logWindow.dropped }
+  }
+  const line = `${new Date(now).toISOString()}\t${level}\t${message}\t${detail.replace(/\s+/gu, ' ')}\n`
+  const clipped = Buffer.byteLength(line, 'utf8') > LOG_ENTRY_MAX_BYTES
+    ? `${line.slice(0, LOG_ENTRY_MAX_BYTES)}\n`
+    : line
+  try {
+    await mkdir(dirname(path), { recursive: true })
+    const size = await stat(path).then((info) => info.size).catch(() => 0)
+    if (size >= LOG_MAX_BYTES) await rename(path, `${path}.1`).catch(() => {})
+    await appendFile(path, clipped)
+  } catch {
+    /* 落盘失败不影响调用方：诊断日志写不进去不是业务错误 */
+    return { written: false, path }
+  }
   return { written: true, path }
 }
 
