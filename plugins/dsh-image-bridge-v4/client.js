@@ -2090,6 +2090,28 @@ window.__ModuleLoader__.load({
        * 切换入口；保存时依旧原样写回。
        */
 
+      /**
+       * 本页拥有的**全部字段**，一次写全。
+       *
+       * 为什么每次保存都写全、而不是只写"这次改的那个"：这一页有**三处保存**（删除提供商、
+       * 保存提供商、保存模型设置）加一处尺寸保存，它们写的是同一行配置。只写自己那部分时，
+       * 任何一次保存都可能把别的字段留在旧值上——审查把这条列为「size 与 providers 分两次
+       * 保存易丢改动」。写全之后，**任何一次保存都不会只落一半**，多条路径之间也不再互相
+       * 覆盖：不存在"只写 size"的路径，也就不存在"保存别的把 size 冲掉"。
+       *
+       * `size` 一律取自 `state.size`（尺寸的当前值就是它，没有独立草稿）。
+       */
+      const snapshotPatch = React.useCallback((overrides) => {
+        const base = {
+          providers: state.providers.map(plainProvider),
+          activeProviderId: state.activeProviderId,
+          modelRoutes: modelRoutesOf(state.routes, state.activeProviderId),
+          connectTimeoutSeconds: parseConnectTimeoutSeconds(state.connectTimeoutDraft),
+          size: state.size,
+        }
+        return { ...base, ...(overrides ?? {}) }
+      }, [state.providers, state.activeProviderId, state.routes, state.connectTimeoutDraft, state.size])
+
       /** 删除提供商：从列表里移除并落盘；密钥留在凭据服务里（不替用户做破坏性清理）。 */
       const removeProvider = React.useCallback(async (provider) => {
         const current = remotes.current
@@ -2102,7 +2124,7 @@ window.__ModuleLoader__.load({
         }
         patch({ phase: 'saving', status: '', statusKind: 'info' })
         try {
-          const written = await settings.update(SETTINGS_NS, { providers: next, activeProviderId }, undefined)
+          const written = await settings.update(SETTINGS_NS, snapshotPatch({ providers: next, activeProviderId }), undefined)
           const failure = failureOf(written)
           if (failure !== null) throw new Error(failure)
           patch({ phase: 'idle', providers: next, activeProviderId, confirmDelete: '', status: trRef.current('removed'), statusKind: 'ok', statusScope: 'provider' })
@@ -2162,12 +2184,12 @@ window.__ModuleLoader__.load({
             report('warn', '提供商未保存：连接超时不是正整数秒', JSON.stringify({ length: state.connectTimeoutDraft.length }))
             return
           }
-          const written = await settings.update(SETTINGS_NS, {
+          const written = await settings.update(SETTINGS_NS, snapshotPatch({
             providers: next,
             activeProviderId,
             modelRoutes: modelRoutesOf(state.routes, activeProviderId),
             connectTimeoutSeconds,
-          }, undefined)
+          }), undefined)
           const failure = failureOf(written)
           if (failure !== null) throw new Error(failure)
 
@@ -2230,12 +2252,12 @@ window.__ModuleLoader__.load({
         patch({ phase: 'saving', status: '', statusKind: 'info' })
         try {
           const modelRoutes = modelRoutesOf(state.routes, state.activeProviderId)
-          const written = await settings.update(SETTINGS_NS, {
-            providers: state.providers.map(plainProvider),
-            activeProviderId: state.activeProviderId,
-            modelRoutes,
-            connectTimeoutSeconds,
-          }, undefined)
+          /*
+           * 与上面「保存提供商」同一条路径：写**完整快照**，不写"只有这次改的部分"。
+           * 原先这里另写一份字段清单，两处一旦不同步就会出现"甲写一半、乙写另一半"的
+           * 窗口；现在只有 `snapshotPatch` 一个来源。
+           */
+          const written = await settings.update(SETTINGS_NS, snapshotPatch({ modelRoutes, connectTimeoutSeconds }), undefined)
           const failure = failureOf(written)
           if (failure !== null) throw new Error(failure)
           patch({ phase: 'idle', connectTimeoutDraft: String(connectTimeoutSeconds), status: trRef.current('routes.saved'), statusKind: 'ok', statusScope: 'routes' })
@@ -2253,7 +2275,13 @@ window.__ModuleLoader__.load({
         if (settings === undefined) return
         patch({ phase: 'saving', status: '', statusKind: 'info' })
         try {
-          const written = await settings.update(SETTINGS_NS, { size: state.size }, undefined)
+          /*
+           * 尺寸保存同样写**完整快照**：只写 `{ size }` 的话，这一路径本身就是"部分写"，
+           * 一旦将来有人把 size 也加进别的路径，两条路就会互相覆盖。统一成一个来源之后，
+           * 「保存尺寸」在语义上仍是"把尺寸存下来"，但它带上的其它字段都是**当前界面上的
+           * 真实值**，不会把用户已保存的配置改坏。
+           */
+          const written = await settings.update(SETTINGS_NS, snapshotPatch(), undefined)
           const failure = failureOf(written)
           if (failure !== null) throw new Error(failure)
           patch({ phase: 'idle', status: trRef.current('saved'), statusKind: 'ok', statusScope: 'size' })

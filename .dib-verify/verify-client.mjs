@@ -2368,8 +2368,7 @@ check(
   JSON.stringify({ zhLabel: zhDict['connectTimeoutSeconds'], enLabel: enDict['connectTimeoutSeconds'], zhInvalid: zhDict['connectTimeoutInvalid'] }).slice(0, 240),
 )
 
-/* ⑧ 主页改选择后，浮层里的「当前生图模型」标记跟着走（同一份状态） */
-const linkedBundle = sectionWithRecording({ size: '1024x1024' })
+/* ⑧ 主页改选择后，浮层里的「当前生图模型」标记跟着走（同一份状态） */const linkedBundle = sectionWithRecording({ size: '1024x1024' })
 const linkedSession = createSession(linkedBundle.component, {
   t: undefined,
   close: () => {},
@@ -2543,9 +2542,19 @@ sizeLiveTree = sizeSession.tree()
 sizeSession.click(sizeLiveTree.nodes.find((node) => node.type === 'button' && textOfElement(node).trim() === '保存尺寸'))
 await sleep(30)
 check(
-  '自定义尺寸 1280*720 保存后 patch.size 就是它（且这一次只写 size）',
-  sizeSaveBundle.updates[0]?.patch?.size === '1280*720' && sizeSaveBundle.updates[0]?.patch?.providers === undefined,
-  JSON.stringify(sizeSaveBundle.updates[0]?.patch ?? null).slice(0, 200),
+  /*
+   * 这条断言原先要求"这一次只写 size"——那是在把**部分写**当成正确行为。
+   * 审查的 A19 指出：这一页有四处保存写同一行配置，只写自己那部分时，任何一次保存都可能
+   * 把别的字段留在旧值上。现在四处都写**完整快照**，所以这里改为钉住新契约：
+   *   ① 尺寸确实写进去了；② 同一次写入**必须带上**本页拥有的其它字段，不允许出现只写一半的路径。
+   */
+  '自定义尺寸 1280*720 保存后写进 size，且这一次写入是完整快照（不再只写一半）',
+  sizeSaveBundle.updates[0]?.patch?.size === '1280*720'
+    && Array.isArray(sizeSaveBundle.updates[0]?.patch?.providers)
+    && typeof sizeSaveBundle.updates[0]?.patch?.activeProviderId === 'string'
+    && sizeSaveBundle.updates[0]?.patch?.modelRoutes !== undefined
+    && sizeSaveBundle.updates[0]?.patch?.connectTimeoutSeconds !== undefined,
+  JSON.stringify(Object.keys(sizeSaveBundle.updates[0]?.patch ?? {})),
 )
 
 /* 非预设的历史值：自动进入自定义模式并原样回显，保存也不改写 */
@@ -2684,6 +2693,26 @@ check(
     && savedPatch.fallbackAfterMs === undefined,
   JSON.stringify({ patch: savedPatch.connectTimeoutSeconds ?? null, fallbackAfterMs: savedPatch.fallbackAfterMs ?? null }).slice(0, 200),
 )
+
+/*
+ * A19 的回归防线：这一页有四处保存（删除提供商 / 保存提供商 / 保存模型设置 / 保存尺寸），
+ * 它们写的是**同一行配置**。只要有一条路径只写自己那部分，就会出现「甲写一半、乙写另一半」
+ * 的窗口——用户在 A 处的改动可能被 B 处的保存留在旧值上。
+ *
+ * 这条断言不看某个具体路径写了什么，而是钉住**字段全集一致**：四条路径写入的键名集合必须
+ * 完全相同，且必须覆盖本页拥有的全部字段。将来有人新加一条只写一半的保存路径，这里会红。
+ */
+{
+  const PAGE_OWNED_FIELDS = ['providers', 'activeProviderId', 'modelRoutes', 'connectTimeoutSeconds', 'size']
+  const keySets = saveBundle.updates.map((entry) => Object.keys(entry.patch ?? {}).sort().join(','))
+  const allSame = keySets.length > 0 && new Set(keySets).size === 1
+  const coversAll = keySets.length > 0 && PAGE_OWNED_FIELDS.every((field) => keySets[0].split(',').includes(field))
+  check(
+    '本页每次保存都写同一套完整字段（不会只写一半，A19）',
+    allSame && coversAll,
+    JSON.stringify({ keySets, missing: keySets.length === 0 ? PAGE_OWNED_FIELDS : PAGE_OWNED_FIELDS.filter((field) => !keySets[0].split(',').includes(field)) }).slice(0, 240),
+  )
+}
 check(
   'provider.id 由名称生成小写 slug，keyRef 按规则派生',
   savedProvider.id === 'my-provider' && savedProvider.keyRef === 'DSH_IMAGE_BRIDGE_KEY_MY_PROVIDER',
