@@ -12,16 +12,42 @@ url: https://github.com/kkj-luna/dsh-image-bridge
 name: kkj-luna/dsh-image-bridge
 category: model
 description:
-  en: Generation and editing for a model that cannot draw, through any OpenAI-compatible image API, with multiple providers and an automatic fallback model.
-  zh: 让没有生图/修图能力的模型接入任意 OpenAI 兼容生图接口，支持多个服务商与备用模型自动接管。
+  en: Text-to-image and image-to-image for a model that cannot draw, through any OpenAI-compatible image API, with multiple providers and an automatic fallback model.
+  zh: 让没有生图/修图能力的模型接入任意 OpenAI 兼容生图接口：支持文生图与图生图，可添加多个服务商，并为生图与修图各选主用与备用模型，主模型连不上时自动切换到备用。
 ```
+
+### 描述要覆盖"用户会搜的词"
+
+市场列表页的筛选/搜索读的就是这两个字段（实测：描述里含「生图」的条目 33 条、含「绘图」5 条、含「图片生成」6 条），所以描述既是"声明"也是"关键词面"。目前的覆盖：
+
+| 用户可能搜 | 描述里有没有 |
+| --- | --- |
+| 生图 / 修图 | ✅ 中英都有（"cannot draw"、生图/修图） |
+| 文生图 / 图生图 | ✅ 中文有；英文用 `text-to-image` / `image-to-image` |
+| 图片生成 / 绘图 / 画图 | ❌ 没有。若想覆盖，可在中文描述里补一句"（绘图/画图）"，**但别堆砌**——指南禁止营销措辞，堆词也可能被要求改回 |
+| OpenAI 兼容 | ✅ 中英都有 |
+
+**别为了搜索硬塞词。** 指南对描述的定位是"只说功能，不带营销词"，而且是**与代码核对**的：写了 `text-to-image` 就得真能做文生图（`image_generate` 只传提示词就是文生图），写了 `image-to-image` 就得真能图生图（`image_edit` 接受参考图）——这两条本插件都成立，所以可以写。
 
 **两个容易踩的格式坑**（来自[贡献指南](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/CONTRIBUTING.md)）：
 
-- 描述里出现 **`: `（冒号加空格）必须加引号**，否则 YAML 会把它当嵌套键。上面的英文描述里没有冒号，所以不必加引号；改文案时注意。
+- 描述里出现 **`: `（冒号加空格）必须加引号**，否则 YAML 会把它当嵌套键。上面的中文描述用了全角冒号 `：`，不受影响；英文描述里没有冒号，所以两行都不必加引号。改文案时留意。
 - `url` **必须与仓库地址完全一致**，不要写 `#readme` 之类的锚点。
 
-## 2. 对照收录要求
+## 2. 那些"看起来要填、其实不用填"的字段
+
+市场数据里每条还带这些字段——它们**全部由平台自动派生**，投稿的 YAML 里没有、也不该写：
+
+| 字段 | 从哪来 |
+| --- | --- |
+| `npm` / `version` / `install` | 你的仓库与 npm 包（`dsh plugin --profile web add <包名>` 由平台拼出） |
+| `stars` / `downloads` / `downloadsStart` / `downloadsEnd` / `downloadsCheckedAt` | GitHub 与 npm 的统计，平台定期抓 |
+| `capabilities` / `capabilityRedLines` / `capabilityCheckedAt` | 平台**扫你的代码**得出的（例如 `fs-write` / `fs-read` / `env`），用于向用户展示这个插件会碰什么 |
+| `owner` / `page` / `added` | 平台自己生成 |
+
+`capabilities` 值得留意：它是**自动扫描**的结果，所以插件里实际用了哪些能力（文件读写、环境变量、网络）会被如实列出来给用户看。本插件会写自诊断文件、读 `$DSH_HOME`、发外部 HTTP 请求，这些都会出现在那一栏——**这是好事**，说明平台在替用户做透明度背书。
+
+## 3. 对照收录要求
 
 | 要求 | 本插件的情况 |
 | --- | --- |
@@ -29,11 +55,11 @@ description:
 | 仓库创建满 1 天 | ✅ 已过 |
 | 有真实可用代码，不是空壳 | ✅ 两个工具 + 444 条离线断言 |
 | 在活跃维护 | ✅ |
-| **仓库带 `dsh-plugin` topic** | 见第 3 节——**这是硬性要求，且当前没加** |
-| 描述属实、不夸大 | ⚠️ 见第 3 节：GitHub 仓库描述里有一处失实，必须先改 |
+| **仓库带 `dsh-plugin` topic** | 见第 4 节——**这是硬性要求，且当前没加** |
+| 描述属实、不夸大 | ⚠️ 见第 4 节：GitHub 仓库描述里有一处失实，必须先改 |
 | 与现有插件功能重复 | ⚠️ 目录里已有 `dsh-image-create`、`dsh-ark9canvas` 等同类，见下 |
 
-## 3. 仓库元信息（改完再提 PR）
+## 4. 仓库元信息（改完再提 PR）
 
 指南把 `dsh-plugin` topic 列为**硬性要求**（"Add the `dsh-plugin` topic to your repo."），市场靠它检索。
 另外指南第 81 行那句话要当回事：
@@ -82,7 +108,7 @@ README 里已经有 GitHub 链接，所以这里放 npm 不冗余。
 - **Packages** ✅ 勾上——已经发了 npm，勾上更一致。
 - **Deployments** 不用勾。
 
-## 4. PR 描述（把差异化点说清楚）
+## 5. PR 描述（把差异化点说清楚）
 
 指南对重复功能的规则是：**"不是先来后到，是谁更好"**——重复的插件确实可能被拒，但**做得更好的分叉可以收录**。
 所以 PR 里要主动说明差异，而不是只贴一句"新增插件"：
@@ -105,7 +131,7 @@ README 里已经有 GitHub 链接，所以这里放 npm 不冗余。
 仓库根就是插件包（`dsh.bundle` 在根 package.json），支持一条命令安装。
 ```
 
-## 5. 提 PR 的步骤
+## 6. 提 PR 的步骤
 
 ```sh
 # 1. fork 后克隆
@@ -127,7 +153,7 @@ git push origin add-kkj-luna-dsh-image-bridge
 **不要手工改那两个 README**——它们由 `data/plugins/*.yml` 生成，合并后会由维护者在 `main` 上重新生成。
 （想本地预览也行：`npm ci && node scripts/generate-readme.mjs`，提交生成结果同样接受，只要与数据源一致。）
 
-## 6. 上架后的效果
+## 7. 上架后的效果
 
 合并后，用户可以在插件市场里搜到「生图桥」并一键安装——装的就是 npm 上的包，
 **预构建安装不需要 `allowBuilds` 构建授权**（这正是贡献指南推荐把插件发到 npm 的理由）。
