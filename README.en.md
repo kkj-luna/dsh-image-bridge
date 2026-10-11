@@ -195,8 +195,9 @@ generated-images/                   generated output (ignored, not committed)
 | Document | Contents |
 | --- | --- |
 | [Full plugin manual](docs/manual.en.md) | configuration, behaviour details, troubleshooting, implementation notes |
-| [Changelog](CHANGELOG.md) | what changed in each version (currently **v0.4.2**) |
+| [Changelog](CHANGELOG.md) | what changed in each version (currently **v0.4.3**) |
 | [Verification report](.dib-verify/verify-report.md) · [second round](.dib-verify/verify-report-2.md) | independent verification results, including what was not covered |
+| [Listing on the plugin marketplace](docs/marketplace.md) | want it to show up in the marketplace? entry file and PR steps |
 
 ## Feedback
 

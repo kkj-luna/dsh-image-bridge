@@ -20,7 +20,7 @@ dsh plugin --profile web add kkj-luna-dsh-image-bridge
 
 Either remote install inserts the plugin row into the profile's config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). **Restart `dsh web` afterwards**, then open **Settings → Image Bridge**.
 
-Package name `kkj-luna-dsh-image-bridge`, version `0.4.2`. The author prefix keeps it unique on npm (the plain name `dsh-image-bridge` was already taken); the settings-page badge shows only the repository name, `dsh-image-bridge`.
+Package name `kkj-luna-dsh-image-bridge`, version `0.4.3`. The author prefix keeps it unique on npm (the plain name `dsh-image-bridge` was already taken); the settings-page badge shows only the repository name, `dsh-image-bridge`.
 
 ### Developing this plugin
 
@@ -111,10 +111,10 @@ The entry point is **Settings → Image Bridge**. Top to bottom the page is: pag
 
 | Source | What it looks like | Where its colour comes from |
 | --- | --- | --- |
-| `icon.svg` (shipped with the package) | **White mark on brand blue**: the brand-blue rounded square plus a white line drawing — this is what the plugin list / market shows, matching how every other plugin there looks | The brand blue `#4176e6` in the file (the shell palette's `--dsw-static-deepseek-500`; in light themes `--dsw-alias-state-business-primary` is the same colour), with the mark stroked in white |
+| `icon.svg` (shipped with the package) | **Blue gradient mark on near-black**: the near-black rounded square plus a blue line drawing — this is what the plugin list / market shows | Background near-black `#111318` (slightly blue so it does not float on pure-black themes); the mark's stroke references the file's own `<linearGradient>`, `#8ecdff → #4a9eff`. The brightest stop must stay bright enough (an assertion enforces a luminance floor), or the mark smears into the dark background |
 | `GLYPH_SHAPES` in `client.js` (inline) | The 22 px mark in the page header, and the mark the plugin claims for its own row in the settings navigation | **`currentColor` only**: the navigation row is tinted by CSS `mask-image` (a mask reads alpha only), so the inline shapes **must not** contain any hard-coded colour, or dark themes get a blob that ignores the theme |
 
-The **geometry must match entry for entry** (frame + sun + deck/arch/two piers); a cross-file assertion watches this. The brand-blue background in `icon.svg` **is not part of the glyph group** — the navigation mask takes only what is inside `<g id="dib-icon-glyph">`, so putting the background into the inline shapes renders the navigation row as a solid square. The assertion is scoped the same way: **the colour discipline binds the inline shapes only; `icon.svg` is allowed to have the brand colour**.
+The **geometry must match entry for entry** (frame + sun + deck/arch/two piers); a cross-file assertion watches this. The background and gradient in `icon.svg` **are not part of the glyph group** — the navigation mask takes only what is inside `<g id="dib-icon-glyph">`, so putting the background into the inline shapes renders the navigation row as a solid square. The assertion is scoped the same way: **the colour discipline binds the inline shapes only; `icon.svg` has its own palette**.
 
 ### Provider cards
 
@@ -224,9 +224,10 @@ dsh-image-bridge/          ← repository root = package root
 ├── index.js           Host half: the two tools, multi-provider resolution, attachments and workspace writes, test/models/log channels, the startup report and degraded diagnostics
 ├── client.js          Client half: the custom tool card + the settings page (header, cards, dialog, Models, size)
 ├── locale/{zh,en}.json Display name and summary on the plugin card
-├── icon.svg           Plugin icon (white mark on brand blue, shipped with the package; same geometry as the inline shapes)
+├── icon.svg           Plugin icon (blue gradient mark on near-black, shipped with the package; same geometry as the inline shapes)
 ├── README.md          Repository front page (GitHub home / npm page)
 ├── docs/manual.en.md  This file; manual.md and README.en.md are the Chinese and English counterparts
+├── docs/marketplace.md Listing on the plugin marketplace: entry file and PR steps
 ├── CHANGELOG.md       Changelog
 ├── LICENSE            MIT
 ├── .npmignore         Packaging exclusions (see below)

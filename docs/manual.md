@@ -20,7 +20,7 @@ dsh plugin --profile web add kkj-luna-dsh-image-bridge
 
 两种远程装法都会把插件行插入 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。**装完重启 `dsh web`**，再打开「设置 → 生图桥」。
 
-包名 `kkj-luna-dsh-image-bridge`，版本 `0.4.2`。名字带作者前缀是为了在 npm 上唯一（`dsh-image-bridge` 已被他人占用）；设置页徽标只显示仓库名 `dsh-image-bridge`。
+包名 `kkj-luna-dsh-image-bridge`，版本 `0.4.3`。名字带作者前缀是为了在 npm 上唯一（`dsh-image-bridge` 已被他人占用）；设置页徽标只显示仓库名 `dsh-image-bridge`。
 
 ### 开发本插件
 
@@ -111,10 +111,10 @@ dsh plugin --profile web add <克隆下来的仓库绝对路径>
 
 | 出处 | 长什么样 | 颜色从哪来 |
 | --- | --- | --- |
-| `icon.svg`（随包分发） | **蓝底白图**：品牌蓝圆角方块 + 白色线条图形——插件列表/市场里显示的就是它，与列表里其它插件的观感一致 | 文件里的品牌蓝 `#4176e6`（外壳调色板 `--dsw-static-deepseek-500`，浅色主题下 `--dsw-alias-state-business-primary` 就是它），图形白色描边 |
+| `icon.svg`（随包分发） | **近黑底 + 渐变蓝图形**：近黑圆角方块 + 蓝色线条图形——插件列表/市场里显示的就是它 | 底色近黑 `#111318`（略偏蓝，以免在纯黑主题里浮起来），图形描边引用文件内的 `<linearGradient>` 渐变 `#8ecdff → #4a9eff`。渐变最亮端必须够亮（验收有亮度下限断言），否则黑底上会糊成一块 |
 | `client.js` 的 `GLYPH_SHAPES`（内联） | 页头那一行的 22px 图形，以及设置页左侧导航里认领来的标记 | **只用 `currentColor`**：导航那一行是靠 CSS `mask-image` 上色的（mask 只读 alpha），所以内联图形**不许**出现任何硬编码颜色，否则深色主题下会变成一块不跟主题的色斑 |
 
-两处的**几何数据必须逐条一致**（画框 + 太阳 + 桥面/拱/两个桥墩），验收里有跨文件断言盯着；`icon.svg` 里那块品牌蓝底色**不属于图形组**，导航遮罩只取 `<g id="dib-icon-glyph">` 里的图形——把底色也塞进内联图形会让导航渲染成一个实心方块。断言的范围也是这么划的：**颜色纪律只约束内联图形，`icon.svg` 允许有品牌色**。
+两处的**几何数据必须逐条一致**（画框 + 太阳 + 桥面/拱/两个桥墩），验收里有跨文件断言盯着；`icon.svg` 里那块底色与渐变**不属于图形组**，导航遮罩只取 `<g id="dib-icon-glyph">` 里的图形——把底色也塞进内联图形会让导航渲染成一个实心方块。断言的范围也是这么划的：**颜色纪律只约束内联图形，`icon.svg` 允许有自己的配色**。
 
 ### 提供商卡片
 
@@ -224,9 +224,10 @@ dsh-image-bridge/           ← 仓库根 = 插件包根
 ├── index.js            Host 半：两个工具、多提供商解析、附件与落盘、test/models/log 通道、启动自述与降级诊断
 ├── client.js           客户端半：自定义工具卡片 + 设置页（页头、卡片、浮层、模型区块、尺寸）
 ├── locale/{zh,en}.json 插件卡片上的显示名与简介
-├── icon.svg            插件图标（蓝底白图，随包分发；几何数据与内联图标同源）
+├── icon.svg            插件图标（近黑底 + 渐变蓝图形，随包分发；几何数据与内联图标同源）
 ├── README.md           仓库门面（GitHub 首页 / npm 页）
 ├── docs/manual.md      本文件（完整手册）；README.en.md 与 manual.en.md 是对应英文版
+├── docs/marketplace.md 上架插件市场的条目文件与 PR 步骤
 ├── CHANGELOG.md        变更记录
 ├── LICENSE             MIT
 ├── .npmignore          打包排除项（见下）
