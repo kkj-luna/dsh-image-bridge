@@ -29,7 +29,7 @@ dsh plugin --profile web add <本仓库绝对路径>/plugins/dsh-image-bridge-v4
 
 也可以让 Agent 用插件管理器装：`install_bundle`，target 传上面那个目录。
 
-- 包名 `@local/dsh-image-bridge`，版本 **0.2.0**。`@local/` 是 DSH 对本地自作插件的惯例，不发布到 npm。
+- 包名 `@local/dsh-image-bridge`，版本 **0.2.1**。`@local/` 是 DSH 对本地自作插件的惯例，不发布到 npm。
 - 安装会把插件行加进 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。
 - **装完必须重启 `dsh web`**：插件代码不会被热重载，重启前设置页不会出现。
 
@@ -151,7 +151,7 @@ generated-images/              生图输出（已忽略，不入库）
 | 文档 | 内容 |
 | --- | --- |
 | [插件完整说明](plugins/dsh-image-bridge-v4/README.md) | 配置项、行为细节、排查、实现要点 |
-| [变更记录](CHANGELOG.md) | 每个版本改了什么（当前 **v0.2.0**） |
+| [变更记录](CHANGELOG.md) | 每个版本改了什么（当前 **v0.2.1**） |
 | [验证报告](.dib-verify/verify-report.md) · [第二轮](.dib-verify/verify-report-2.md) | 独立验证结论（含未覆盖范围） |
 
 ## 反馈

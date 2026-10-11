@@ -21,7 +21,7 @@ plugin_manager  action: install_bundle
 
 Installation writes a `link:` dependency into the profile and inserts the plugin row into the profile's config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). **Restart `dsh web` afterwards**, then open **Settings → Image Bridge**.
 
-Package name `@local/dsh-image-bridge` (the `@local/` prefix is DSH convention for a locally authored plugin that is not published to npm), version `0.2.0`.
+Package name `@local/dsh-image-bridge` (the `@local/` prefix is DSH convention for a locally authored plugin that is not published to npm), version `0.2.1`.
 
 ### The three installation situations
 
@@ -87,7 +87,7 @@ The entry point is **Settings → Image Bridge**. Top to bottom the page is: pag
 
 ### Page header
 
-`[icon] Image Bridge  dsh-image-bridge  v0.2.0`, with one subtitle line below. The badge links to the GitHub repository (opens in a new tab) and shows only the repository name — no `@local/` prefix. The icon follows the theme colour.
+`[icon] Image Bridge  dsh-image-bridge  v0.2.1`, with one subtitle line below. The badge links to the GitHub repository (opens in a new tab) and shows only the repository name — no `@local/` prefix. The icon follows the theme colour.
 
 ### The icon has two sources (do not edit the wrong one)
 

@@ -21,7 +21,7 @@ plugin_manager  action: install_bundle
 
 安装会写成 `link:` 依赖，并把插件行插入 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。**装完重启 `dsh web`**，再打开「设置 → 生图桥」。
 
-包名 `@local/dsh-image-bridge`（`@local/` 是 DSH 对本地自作插件的惯例，不发布到 npm），版本 `0.2.0`。
+包名 `@local/dsh-image-bridge`（`@local/` 是 DSH 对本地自作插件的惯例，不发布到 npm），版本 `0.2.1`。
 
 ### 安装的三种情形
 
@@ -87,7 +87,7 @@ plugin_manager  action: install_bundle
 
 ### 页头
 
-`[图标] 生图桥  dsh-image-bridge  v0.2.0`，下面一句副标题。徽标是 GitHub 仓库链接（新标签页打开），只显示仓库名、不带 `@local/` 前缀；图标随主题着色。
+`[图标] 生图桥  dsh-image-bridge  v0.2.1`，下面一句副标题。徽标是 GitHub 仓库链接（新标签页打开），只显示仓库名、不带 `@local/` 前缀；图标随主题着色。
 
 ### 图标有两个出处（别改错地方）
 

@@ -29,7 +29,7 @@ dsh plugin --profile web add <absolute path to this repo>/plugins/dsh-image-brid
 
 Your agent can also install it through the plugin manager: `install_bundle` with that directory as the target.
 
-- Package name `@local/dsh-image-bridge`, version **0.2.0**. The `@local/` prefix is the DSH convention for locally authored plugins; it is not published to npm.
+- Package name `@local/dsh-image-bridge`, version **0.2.1**. The `@local/` prefix is the DSH convention for locally authored plugins; it is not published to npm.
 - Installation adds the plugin row to the profile config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to).
 - **Restart `dsh web` afterwards** — plugin code is not hot-reloaded, and the settings page will not appear before the restart.
 
@@ -151,7 +151,7 @@ generated-images/              generated output (ignored, not committed)
 | Document | Contents |
 | --- | --- |
 | [Full plugin guide](plugins/dsh-image-bridge-v4/README.md) (Chinese) | configuration, behaviour details, troubleshooting, implementation notes |
-| [Changelog](CHANGELOG.md) | what changed in each version (currently **v0.2.0**) |
+| [Changelog](CHANGELOG.md) | what changed in each version (currently **v0.2.1**) |
 | [Verification report](.dib-verify/verify-report.md) · [second round](.dib-verify/verify-report-2.md) | independent verification results, including what was not covered |
 
 ## Feedback
