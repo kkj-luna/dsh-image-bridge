@@ -26,6 +26,7 @@ Thumbs.db
 .dib-verify/probe-*.mjs
 # 同上，外加一次性诊断脚本；沙箱内不许删文件，用忽略规则挡住即可
 .dib-verify/*.tmp.mjs
+.dib-verify/*.tmp.cjs
 # 一次性诊断脚本的其它命名（同上，沙箱内删不掉）
 .dib-verify/describe-*.mjs
 .dib-mut/
