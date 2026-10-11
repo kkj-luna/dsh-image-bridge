@@ -198,6 +198,8 @@ DSH_IMAGE_BRIDGE_KEY_<ID>     ID = provider.id 转大写、非字母数字一律
 
 **同步生图接口常常要几十秒（实测 42–61 秒才回响应头），这个值不要设小。** 发不出去（连接一直建不起来）是另一种失败，错误里会写「连接阶段…」，不会说成「服务商没响应」。
 
+**连不上还有另一条硬线：15 秒**（`CONNECT_GRACE_MS`）。DNS 解析不了、TCP 连不上、TLS 握不上手、代理不通——15 秒还没把请求发出去就直接算连接失败，**改用备用模型**，不用等满「主模型超时」。两条线分工明确：15 秒只管"请求压根没发出去"，发出之后的等待才归「主模型超时」，所以填错地址这类问题最多让人等 15 秒。它与「主模型超时」取小（`min(connectGraceMs, budgetMs)`），不会越过你自己设的整段上限。刻意**不**做成设置项：15 秒足够覆盖跨境冷连接（实测 381ms）与常见代理握手，而多一个旋钮只会多一处会填错的地方。
+
 超时后 Host 会自动**探活**（`GET {baseUrl}/models`，4 秒内）：通了就在错误里说明"服务商是活的、密钥有效，这次只是生成慢，可把主模型超时调大"；不通就说明"当前不可达，不只是这次慢"。探活**只加提示、不改变是否换备用**。
 
 ### 三条安全约束（有意为之）
@@ -288,12 +290,12 @@ dsh-image-bridge-v4/
 └── icon.svg            插件图标
 ```
 
-回归测试在仓库根目录的 `.dib-verify/`，**无需联网、无需真实密钥**，共 390 条断言：
+回归测试在仓库根目录的 `.dib-verify/`，**无需联网、无需真实密钥**，共 400 条断言：
 
 ```bash
-node .dib-verify/verify-manifest.mjs   # 41
-node .dib-verify/verify-client.mjs     # 162
-node .dib-verify/verify-host.mjs       # 143
+node .dib-verify/verify-manifest.mjs   # 43
+node .dib-verify/verify-client.mjs     # 168
+node .dib-verify/verify-host.mjs       # 145
 node .dib-verify/verify-security.mjs   # 12
 node .dib-verify/verify-resolve.mjs    # 8
 node .dib-verify/verify-upgrade.mjs    # 24

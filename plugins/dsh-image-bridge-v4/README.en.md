@@ -189,6 +189,8 @@ The setting is **"Primary model timeout (ms)"**, default **90000**. It measures 
 
 **Synchronous image APIs routinely take tens of seconds (measured: 42–61 seconds before headers arrive), so do not set this low.** Failing to send at all (a connection that never comes up) is a different failure: the error says "connection phase…" rather than pretending the provider did not respond.
 
+**A second hard line covers "cannot connect": 15 seconds** (`CONNECT_GRACE_MS`). When DNS fails, TCP refuses, TLS will not handshake or the proxy is dead, and the request is still not on the wire after 15 seconds, that counts as a connection failure and the **fallback model takes over** — no waiting out the full "Primary model timeout". The two lines do not overlap: the 15 seconds only govern "the request never left", and everything after it belongs to the header budget, so a mistyped address costs at most 15 seconds. It is capped by "Primary model timeout" (`min(connectGraceMs, budgetMs)`) and never exceeds the ceiling you set yourself. It is deliberately **not** a setting: 15 seconds comfortably covers a cross-border cold connect (measured 381 ms) and ordinary proxy handshakes, and one more knob would only be one more thing to get wrong.
+
 After a timeout the host automatically **probes** the provider (`GET {baseUrl}/models`, within 4 seconds): if it answers, the error explains that the provider is alive and the key is valid and that this run was merely slow, suggesting a larger timeout; if not, it says the provider is currently unreachable rather than just slow. The probe **only adds a hint and never changes whether the fallback is used**.
 
 ### Two safety constraints (deliberate)
@@ -270,12 +272,12 @@ dsh-image-bridge-v4/
 └── icon.svg            Plugin icon
 ```
 
-The regression suites live in `.dib-verify/` at the repository root. They need **no network and no real key**, and total 390 assertions:
+The regression suites live in `.dib-verify/` at the repository root. They need **no network and no real key**, and total 400 assertions:
 
 ```bash
-node .dib-verify/verify-manifest.mjs   # 41
-node .dib-verify/verify-client.mjs     # 162
-node .dib-verify/verify-host.mjs       # 143
+node .dib-verify/verify-manifest.mjs   # 43
+node .dib-verify/verify-client.mjs     # 168
+node .dib-verify/verify-host.mjs       # 145
 node .dib-verify/verify-security.mjs   # 12
 node .dib-verify/verify-resolve.mjs    # 8
 node .dib-verify/verify-upgrade.mjs    # 24
