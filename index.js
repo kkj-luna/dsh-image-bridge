@@ -103,15 +103,18 @@ const routeEndpointSchema = () => z.object({
  *
  * 每个字段都标了 `volatile()`：settings 服务只允许在线改写 volatile 字段
  * （非 volatile 会在写入时被 `Config field "x" is not volatile` 拒绝）。
- * 写作命名空间就是本插件行的 id —— `image-bridge`。
+ * 写入命名空间就是本插件行的 id —— `image-bridge-v4`（见 `SETTINGS_NS`），
+ * 客户端 `client.js` 的 `SETTINGS_NS` 必须与它逐字一致。
  *
  * 多服务商是叠加在旧字段之上的一层：`providers` 非空时接口地址/模型/密钥都按
  * 「当前生效的服务商」走（`activeProviderId` 命中优先，没命中就取列表第一个）；
  * 只有 `providers` 为空时才整体回退到 baseUrl/model/editModel，
  * 因此老的（单服务商）配置不改也能继续用。
  *
- * `modelRoutes` 再往上一层：为生图/修图各指定主用与备用模型（可跨服务商），
- * 主用失败或迟迟拿不到响应头时自动改用备用。
+ * `modelRoutes` 再往上一层：为生图/修图各指定主用与备用模型（可跨服务商）。
+ * 换成备用的条件是**连不上或这次没出图**，与响应快慢无关——"服务商能不能连上"
+ * 与"图要画多久"是两件事，后者只由整次调用的 `timeoutMs` 兜底（早先那套
+ * "迟迟拿不到响应头就换人"的机制已在 v0.2.1 整体删除）。
  */
 export const Config = z === undefined ? undefined : z.object({
   baseUrl: z
@@ -138,7 +141,7 @@ export const Config = z === undefined ? undefined : z.object({
     .default([])
     .volatile()
     .description('多个生图服务商；非空时以 activeProviderId 选中的那一项为准。'),
-  activeProviderId: z.string().default('').volatile().description('当前生效的服务商 id；为空或找不到时回退到上面的 baseUrl/model。'),
+  activeProviderId: z.string().default('').volatile().description('当前生效的服务商 id；为空或指向已删除的条目时取服务商列表的第一项（列表为空才回退到上面的 baseUrl/model）。'),
   modelRoutes: z
     .object({
       generate: z.object({ primary: routeEndpointSchema().default({}), fallback: routeEndpointSchema().default({}) }).default({}),
@@ -146,7 +149,7 @@ export const Config = z === undefined ? undefined : z.object({
     })
     .default({})
     .volatile()
-    .description('生图/修图的模型路由：每项 { providerId, model }，可跨服务商选择；fallback 是主用失败或超时后的备用模型。'),
+    .description('生图/修图的模型路由：每项 { providerId, model }，可跨服务商选择；fallback 是主用连不上或这次没出图时改用的备用模型（不按响应时间切换）。'),
   connectTimeoutSeconds: z
     .number()
     .default(15)
@@ -162,6 +165,18 @@ const PROVIDER_KEY_PREFIX = 'DSH_IMAGE_BRIDGE_KEY_'
 
 /** 凭据服务接受的 ref 形状；推导出来的名字必须落在它里面，否则凭据服务会拒绝。 */
 const CREDENTIAL_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * 本插件允许的凭据名范围：要么是旧的单服务商常量，要么带本插件前缀。
+ *
+ * 为什么不能只校验"形状合法"：`keyRef` 可以由 RPC 调用方（设置页）与手改 profile 任意指定，
+ * 而 `resolveApiKey` 会在凭据服务查不到时**回退读同名环境变量**。只校验形状的话，
+ * `keyRef: "AWS_SECRET_ACCESS_KEY"` 就能把宿主任意环境变量取出来，再当 `Bearer` 发给
+ * **调用方同时指定的** baseUrl——一个凭据名控件变成了"读环境变量并外发"的原语（实测可复现）。
+ * 加了命名空间之后，能读到的只有本插件自己的密钥。
+ */
+const CREDENTIAL_REF_IN_NAMESPACE = (ref) => ref === API_KEY_REF
+  || (typeof ref === 'string' && ref.startsWith(PROVIDER_KEY_PREFIX) && CREDENTIAL_REF_PATTERN.test(ref))
 
 /** 拉取模型列表的超时毫秒数；列表接口只是给设置页选模型用，不能久等。 */
 const MODELS_TIMEOUT_MS = 15000
@@ -399,7 +414,7 @@ function providerKeyRef(id) {
  */
 function providerCredentialRef(id, declared) {
   const explicit = nonEmptyString(declared)
-  return explicit !== '' && CREDENTIAL_REF_PATTERN.test(explicit) ? explicit : providerKeyRef(id)
+  return CREDENTIAL_REF_IN_NAMESPACE(explicit) ? explicit : providerKeyRef(id)
 }
 
 /**
@@ -716,6 +731,11 @@ async function imageAttemptPlan({ ctx, config, role, requestedModel }) {
  * 发给 B 服务商，比报一个明确的"缺少密钥"糟糕得多。
  */
 async function resolveApiKey(ctx, ref = API_KEY_REF) {
+  /*
+   * 命名空间外的名字直接拒绝：见 CREDENTIAL_REF_IN_NAMESPACE 的说明——否则这就是一个
+   * "按名字读宿主任意环境变量并发出去"的原语。
+   */
+  if (!CREDENTIAL_REF_IN_NAMESPACE(ref)) return ''
   const credentials = ctx.get('credentials')
   if (credentials !== undefined) {
     try {
@@ -755,12 +775,99 @@ const IMAGE_DOWNLOAD_MAX_BYTES = 20 * 1024 * 1024
 const IMAGE_DOWNLOAD_TIMEOUT_MS = 15000
 
 /**
+ * 一个 IPv4 地址是否属于环回 / 私有 / 链路本地 / 保留段。
+ *
+ * 用**数值**判定而不是字符串前缀：`new URL()` 会把 `2130706433`、`0x7f.0.0.1`、
+ * `127.1` 这类写法统一归一成点分十进制，但反过来 `[::ffff:127.0.0.1]` 会被归一成
+ * `[::ffff:7f00:1]`（十六进制）——字符串前缀匹配在那里会漏掉（见 imageUrlRejection）。
+ */
+function isPrivateIpv4(address) {
+  const parts = address.split('.')
+  if (parts.length !== 4) return false
+  const octets = parts.map((part) => Number(part))
+  if (octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) return false
+  const [a, b] = octets
+  if (a === 0 || a === 10 || a === 127) return true
+  if (a === 169 && b === 254) return true
+  if (a === 172 && b >= 16 && b <= 31) return true
+  if (a === 192 && b === 168) return true
+  if (a === 100 && b >= 64 && b <= 127) return true
+  return false
+}
+
+/**
+ * 把 `[::ffff:7f00:1]` / `[::ffff:127.0.0.1]` 这类 IPv4-mapped 地址还原成点分十进制；
+ * 不是该形态就返回 undefined。
+ *
+ * `new URL()` 对 `[::ffff:127.0.0.1]` 与 `[::ffff:7f00:1]` 给出的是**同一个** hostname
+ * （十六进制、压缩写法，只有 3 组），所以这一层必须解映射，否则"换个写法"就能绕过
+ * 环回/私网判定。覆盖整段 `::ffff:0:0/96`（不只看 `::ffff:127.`），因为
+ * `[::ffff:169.254.169.254]`（云元数据）同样要拦。
+ */
+function ipv4FromMappedHost(host) {
+  /*
+   * 先做 IPv6 压缩展开：`URL` 归一化后通常是 `::ffff:7f00:1`（前导零组被压掉），
+   * 但也见过全展开的写法，两种都要认。
+   */
+  const expand = (text) => {
+    const halves = text.split('::')
+    if (halves.length > 2) return undefined
+    const head = halves[0] === '' ? [] : halves[0].split(':')
+    const tail = halves.length === 2 && halves[1] !== '' ? halves[1].split(':') : []
+    const missing = 8 - head.length - tail.length
+    if (halves.length === 1) return head.length === 8 ? head : undefined
+    if (missing < 1) return undefined
+    return [...head, ...Array.from({ length: missing }, () => '0'), ...tail]
+  }
+  const groups = expand(host)
+  if (groups === undefined || groups.length !== 8) return undefined
+  const values = groups.map((group) => (/^[0-9a-f]{1,4}$/u.test(group) ? Number.parseInt(group, 16) : Number.NaN))
+  if (values.some((value) => !Number.isInteger(value))) return undefined
+  // ::ffff:0:0/96 —— 前 5 组为 0，第 6 组为 ffff，后 32 位就是 IPv4 地址。
+  for (let index = 0; index < 5; index += 1) if (values[index] !== 0) return undefined
+  if (values[5] !== 0xffff) return undefined
+  const value = values[6] * 0x10000 + values[7]
+  return `${(value >>> 24) & 0xff}.${(value >>> 16) & 0xff}.${(value >>> 8) & 0xff}.${value & 0xff}`
+}
+
+/** 细看一个已归一化的主机名；域名返回 undefined（域名留给"不解析"这一层，见下）。 */
+function hostRejectionOf(host) {
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return '指向本机/本地网络'
+  if (host.includes(':')) {
+    const mapped = ipv4FromMappedHost(host)
+    if (mapped !== undefined) {
+      if (isPrivateIpv4(mapped)) return '指向私有网段'
+      return undefined
+    }
+    if (host === '::' || host === '::1') return '指向本机/本地网络'
+    const first = Number.parseInt(host.split(':')[0] || '0', 16)
+    if (!Number.isInteger(first)) return undefined
+    // fc00::/7（唯一本地地址）、fe80::/10（链路本地）
+    if ((first & 0xfe00) === 0xfc00) return '指向私有网段'
+    if ((first & 0xffc0) === 0xfe80) return '指向私有网段'
+    return undefined
+  }
+  if (isPrivateIpv4(host)) return '指向私有网段'
+  return undefined
+}
+
+/**
  * 服务商返回的图片地址能不能去取？
  *
  * 只允许 `http` / `https`，并拒绝环回与私有网段。理由：这个 URL 是**对方给的**，
  * 无条件去 fetch 就等于替它发内网请求（SSRF）——云元数据地址 `169.254.169.254`、
  * 局域网设备、本机服务都能被它借我们的进程探一遍；`file:` 之类的协议更不该碰。
  * 注意这是纵深防御：真实生图服务商给的都是公网 https 地址，拦掉这些不影响正常使用。
+ *
+ * 三个已知的绕过形态都在这里封掉（都曾实测可绕过）：
+ *   1. **IPv4-mapped IPv6**：`[::ffff:127.0.0.1]` 归一成 `[::ffff:7f00:1]`，字符串前缀匹配漏判
+ *      → 交给 `ipv4FromMappedHost` 解映射后按数值判；
+ *   2. **假阳性**：旧写法 `fc`/`fd` 前缀不锚定 IPv6 字面量，`fdic.gov`、`fc2.com` 这类
+ *      合法主机名会被误判成私网（下不下来图）→ 现在只在 host 含 `:` 时按前缀段判；
+ *   3. **重定向**：302 之后的地址从不过这道门 → 由 `fetchImageWithinGuard` 逐跳复检。
+ *
+ * **不解析 DNS**：只判主机名文本，所以"公网域名解析到 10.x"（含 DNS rebinding）仍然拦不住。
+ * 那条残余风险是刻意的取舍——解析后再 fetch 存在 TOCTOU，且会让本机 DNS 行为进入判定。
  */
 function imageUrlRejection(url) {
   let parsed
@@ -771,13 +878,7 @@ function imageUrlRejection(url) {
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return `不支持的协议 ${parsed.protocol}`
   const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/gu, '')
-  if (host === 'localhost' || host.endsWith('.localhost') || host === '::1' || host.endsWith('.local')) {
-    return '指向本机/本地网络'
-  }
-  if (/^(127\.|10\.|192\.168\.|169\.254\.|0\.)/u.test(host)) return '指向私有网段'
-  if (/^172\.(1[6-9]|2[0-9]|3[01])\./u.test(host)) return '指向私有网段'
-  if (/^(fe80:|fc|fd|::ffff:127\.)/iu.test(host)) return '指向私有网段'
-  return undefined
+  return hostRejectionOf(host)
 }
 
 /**
@@ -806,16 +907,23 @@ function baseUrlRejection(baseUrl) {
 const JSON_RESPONSE_MAX_BYTES = 32 * 1024 * 1024
 
 /**
- * 读取响应正文，带**上限**与**取消**。
+ * 分块读取响应正文，**边读边计数**，累计超过上限就立刻停止并销毁流。
  *
- * 响应头到手只是"对方开始答了"，正文可能几 MB、也可能永远不结束。旧实现直接 `text()`：
- * 既没有上限（恶意/故障服务商可以让内存放大），也不理 `exec.signal`（用户取消后照样读到底）。
- * 这里用 Promise.race 把正文读取和取消信号赛跑——不改动 fetch 语义，也不依赖流的中断细节。
+ * 这一层与"先看 content-length"是两个不同的防线：只信声明挡不住**不报长度**（分块传输）
+ * 或**谎报长度**的服务端。旧实现把 `response.text()` 整个读完之后才比长度——那时内存已经
+ * 被吃掉了（实测：分块 96 MiB 的响应能把 RSS 从 64 MiB 顶到 185 MiB，之后才报"超过上限"）。
+ * 取消也在这里生效：`Promise.race` 让 `reader.read()` 与中止信号赛跑，用户取消后不再读到底。
  */
-async function readCappedText(response, { signal, limitBytes = JSON_RESPONSE_MAX_BYTES } = {}) {
+async function readCappedBytes(response, { signal, limitBytes = JSON_RESPONSE_MAX_BYTES, tooLargeMessage } = {}) {
   const declared = Number(response.headers?.get?.('content-length'))
   if (Number.isFinite(declared) && declared > limitBytes) {
-    throw new Error(`接口回包声明 ${declared} 字节，超过 ${limitBytes} 字节上限`)
+    throw new Error(tooLargeMessage ?? `接口回包声明 ${declared} 字节，超过 ${limitBytes} 字节上限`)
+  }
+  const body = response.body
+  if (body === null || body === undefined || typeof body.getReader !== 'function') {
+    const buffer = await response.arrayBuffer()
+    if (buffer.byteLength > limitBytes) throw new Error(tooLargeMessage ?? `接口回包超过 ${limitBytes} 字节上限`)
+    return new Uint8Array(buffer)
   }
   let onAbort
   const aborted = new Promise((_resolve, reject) => {
@@ -827,29 +935,61 @@ async function readCappedText(response, { signal, limitBytes = JSON_RESPONSE_MAX
     onAbort = () => reject(new Error('已被调用方取消'))
     signal.addEventListener('abort', onAbort, { once: true })
   })
+  const reader = body.getReader()
+  const chunks = []
+  let total = 0
   try {
-    const text = await Promise.race([
-      response.text(),
-      aborted,
-    ])
-    if (typeof text === 'string' && text.length > limitBytes) {
-      throw new Error(`接口回包超过 ${limitBytes} 字节上限`)
+    for (;;) {
+      const { value, done } = await Promise.race([reader.read(), aborted])
+      if (done === true) break
+      total += value.length
+      if (total > limitBytes) {
+        throw new Error(tooLargeMessage ?? `接口回包超过 ${limitBytes} 字节上限`)
+      }
+      chunks.push(value)
     }
-    return text
+  } catch (error) {
+    // 超限/取消都必须把流关掉，否则对端的连接会挂在那里继续写。
+    await reader.cancel().catch(() => {})
+    throw error
   } finally {
     if (onAbort !== undefined && signal !== undefined && signal !== null) signal.removeEventListener('abort', onAbort)
   }
+  const merged = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    merged.set(chunk, offset)
+    offset += chunk.length
+  }
+  return merged
 }
 
-async function readJsonResponse(response, signal) {
+/**
+ * 读取响应正文并解码成文本，带**上限**与**取消**。
+ *
+ * 上限的实际执行在 `readCappedBytes`（边读边计数）；这里只负责解码与错误文案。
+ */
+async function readCappedText(response, { signal, limitBytes = JSON_RESPONSE_MAX_BYTES } = {}) {
+  const bytes = await readCappedBytes(response, { signal, limitBytes })
+  return new TextDecoder().decode(bytes)
+}
+
+/**
+ * 读回包并解析 JSON。
+ *
+ * `secrets` 是要从错误文案里抹掉的密钥：非 2xx 时服务商的报错正文会**原样**拼进错误，
+ * 而这类正文经常把收到的密钥回显出来（"Incorrect API key provided: sk-…"）。
+ * 这里抹一次，`callFailureOf` 与 RPC 通道再把它交给模型/设置页时就已经是干净的。
+ */
+async function readJsonResponse(response, signal, ...secrets) {
   const text = await readCappedText(response, { signal })
   if (!response.ok) {
-    throw new Error(`图片接口返回 ${response.status} ${response.statusText}：${truncate(text) || '(空响应)'}`)
+    throw new Error(redactSecrets(`图片接口返回 ${response.status} ${response.statusText}：${truncate(text) || '(空响应)'}`, ...secrets))
   }
   try {
     return JSON.parse(text)
   } catch {
-    throw new Error(`图片接口返回的不是 JSON：${truncate(text) || '(空响应)'}`)
+    throw new Error(redactSecrets(`图片接口返回的不是 JSON：${truncate(text) || '(空响应)'}`, ...secrets))
   }
 }
 
@@ -859,7 +999,7 @@ async function bytesOfItem(item, signal) {
     return new Uint8Array(Buffer.from(item.b64_json, 'base64'))
   }
   if (typeof item.url === 'string' && item.url.length > 0) {
-    // 这个地址是服务商给的，不是我们选的：先过 SSRF 白名单，再限时限长。
+    // 这个地址是服务商给的，不是我们选的：逐跳过 SSRF 守卫，再限时限长。
     const rejection = imageUrlRejection(item.url)
     if (rejection !== undefined) {
       throw new Error(`下载生成的图片失败：服务商返回的图片地址${rejection}，已拒绝请求（${truncate(item.url)}）`)
@@ -868,41 +1008,69 @@ async function bytesOfItem(item, signal) {
     const timer = setTimeout(() => controller.abort(new Error(`download-timeout`)), IMAGE_DOWNLOAD_TIMEOUT_MS)
     const forward = () => controller.abort(signal?.reason)
     if (signal !== undefined && signal !== null) signal.addEventListener('abort', forward, { once: true })
+    /*
+     * 交给 fetchResilient 的是"下载超时 + 调用方取消"的**合并信号**，而不是两条分开的参数。
+     * 这样它的重试路径也只能拿到这个合并信号，不可能出现"重试丢掉了超时"的旧缺陷。
+     */
+    const downloadSignal = AbortSignal.any([controller.signal, ...(signal === undefined || signal === null ? [] : [signal])])
     try {
-      const response = await fetchResilient(item.url, { signal: controller.signal }, controller.signal)
-      if (!response.ok) throw new Error(`下载生成的图片失败：${response.status} ${response.statusText}`)
-      const declared = Number(response.headers.get('content-length'))
-      if (Number.isFinite(declared) && declared > IMAGE_DOWNLOAD_MAX_BYTES) {
-        throw new Error(`下载生成的图片失败：响应声明 ${declared} 字节，超过 ${IMAGE_DOWNLOAD_MAX_BYTES} 字节上限`)
-      }
-      // 分块读取并在累计超限时立刻中止：只信 content-length 挡不住不报长度的服务端。
-      const reader = response.body?.getReader()
-      if (reader === undefined) return new Uint8Array(await response.arrayBuffer())
-      const chunks = []
-      let total = 0
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done === true) break
-        total += value.length
-        if (total > IMAGE_DOWNLOAD_MAX_BYTES) {
-          await reader.cancel().catch(() => {})
-          throw new Error(`下载生成的图片失败：响应超过 ${IMAGE_DOWNLOAD_MAX_BYTES} 字节上限`)
-        }
-        chunks.push(value)
-      }
-      const merged = new Uint8Array(total)
-      let offset = 0
-      for (const chunk of chunks) {
-        merged.set(chunk, offset)
-        offset += chunk.length
-      }
-      return merged
+      return await fetchImageWithinGuard(item.url, downloadSignal)
     } finally {
       clearTimeout(timer)
       if (signal !== undefined && signal !== null) signal.removeEventListener('abort', forward)
     }
   }
   return undefined
+}
+
+/** 跟随重定向的最大跳数：正常图床 0–1 跳，给到 3 已经宽松。 */
+const MAX_IMAGE_DOWNLOAD_HOPS = 3
+
+/**
+ * 取一个「服务商给的」图片地址，**每一跳都复检 SSRF 守卫**。
+ *
+ * 为什么不能直接 `fetch`：`fetch` 默认 `redirect: 'follow'`，而守卫只看了第一个 URL 字符串。
+ * 于是一个合法公网地址 302 到 `http://169.254.169.254/…` 或 `http://127.0.0.1:…` 就能绕过
+ * 全部检查（实测可绕过，且响应体会被当图片存进附件库与工作区）。这里改成**手动词跳**：
+ * 每一跳的 `Location` 都重新过 `imageUrlRejection`，并限制跳数、逐跳限时限长。
+ *
+ * 另外两点：
+ * - 跨主机重定向**不转发任何凭据**：这里本来就没有 Authorization（`init` 只有 signal），
+ *   也不加——图片地址是对方给的，不该带我们的密钥去别的主机。
+ * - 正文用 `readCappedBytes` 边读边计数：只信 `content-length` 挡不住不报长度、或谎报长度的服务端。
+ */
+async function fetchImageWithinGuard(url, signal) {
+  let target = url
+  for (let hop = 0; ; hop += 1) {
+    const response = await fetchResilient(target, { signal, redirect: 'manual' }, signal)
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location')
+      if (location === null || location === '') {
+        throw new Error(`下载生成的图片失败：${response.status} 重定向没有给出 Location（${truncate(target)}）`)
+      }
+      let next
+      try {
+        next = new URL(location, target).toString()
+      } catch {
+        throw new Error(`下载生成的图片失败：重定向地址不合法（${truncate(location)}）`)
+      }
+      const rejection = imageUrlRejection(next)
+      if (rejection !== undefined) {
+        throw new Error(`下载生成的图片失败：重定向目标${rejection}，已拒绝跟随（${truncate(next)}）`)
+      }
+      if (hop >= MAX_IMAGE_DOWNLOAD_HOPS) {
+        throw new Error(`下载生成的图片失败：重定向超过 ${MAX_IMAGE_DOWNLOAD_HOPS} 跳（${truncate(target)}）`)
+      }
+      target = next
+      continue
+    }
+    if (!response.ok) throw new Error(`下载生成的图片失败：${response.status} ${response.statusText}`)
+    const declared = Number(response.headers.get('content-length'))
+    if (Number.isFinite(declared) && declared > IMAGE_DOWNLOAD_MAX_BYTES) {
+      throw new Error(`下载生成的图片失败：响应声明 ${declared} 字节，超过 ${IMAGE_DOWNLOAD_MAX_BYTES} 字节上限`)
+    }
+    return await readCappedBytes(response, { limitBytes: IMAGE_DOWNLOAD_MAX_BYTES, signal })
+  }
 }
 
 /**
@@ -915,13 +1083,33 @@ class NoImageError extends Error {
   name = 'NoImageError'
 }
 
+/**
+ * 一次回包里最多采纳几张图。
+ *
+ * 请求只发 `n: 1`，但**回包内容完全由服务商决定**：实测一个 32 MiB 的分块回包能塞进
+ * 成百上千个微小条目，而每一张都会 `attachments.saveImage` + 在工作区落一个文件
+ * （实测 500 张 → 500 个附件 + 500 个文件，17ms 内完成）。所以这里硬性截断，
+ * 并把"截断了"如实告诉用户，而不是静默丢掉。
+ */
+const MAX_IMAGES_PER_RESPONSE = 4
+
+/**
+ * 把回包里的条目转成图片列表；**带上限**，被截断时返回一句可展示的说明。
+ *
+ * @returns {{ images: Array<{bytes, mediaType, revisedPrompt?}>, truncatedNote?: string }}
+ */
 async function collectImages(payload, signal) {
   const data = Array.isArray(payload?.data) ? payload.data : undefined
   if (data === undefined) {
     throw new NoImageError(`图片接口返回里没有 data 数组：${truncate(JSON.stringify(payload ?? null))}`)
   }
   const out = []
+  let truncated = false
   for (const item of data) {
+    if (out.length >= MAX_IMAGES_PER_RESPONSE) {
+      truncated = true
+      break
+    }
     if (item === null || typeof item !== 'object') continue
     const bytes = await bytesOfItem(item, signal)
     if (bytes === undefined || bytes.length === 0) continue
@@ -933,7 +1121,9 @@ async function collectImages(payload, signal) {
     })
   }
   if (out.length === 0) throw new NoImageError('图片接口没有返回任何可用的图片数据')
-  return out
+  return truncated
+    ? { images: out, truncatedNote: `服务商一次返回了 ${data.length} 个条目，只采纳了前 ${out.length} 张（上限 ${MAX_IMAGES_PER_RESPONSE}），其余未保存。` }
+    : { images: out }
 }
 
 /** 生成的文件名：时间戳 + 提示词片段，便于用户在工作区里认出来。 */
@@ -1036,13 +1226,37 @@ function envelopeOf(value) {
 }
 
 /**
+ * 从一段要给用户/模型看的文本里抹掉密钥。
+ *
+ * 为什么需要：服务商的错误回包是**原样转发**给模型与设置页的（"Incorrect API key provided: …"
+ * 这类文案真的会把密钥回显出来），而我们自己也会把请求 URL 写进错误文案；用户把密钥拼在
+ * baseUrl 的 query 里时，那条 URL 同样带密钥。README 承诺"密钥不回传浏览器、不写进日志"，
+ * 所以凡是把外部文本或 URL 拼进错误的地方，都要先过这里。
+ *
+ * 只抹已知的密钥本身（连 URL 编码形式一起抹），不做泛化模式匹配——避免把正常内容误伤成 `***`。
+ */
+function redactSecrets(text, ...secrets) {
+  let out = typeof text === 'string' ? text : String(text)
+  for (const secret of secrets) {
+    if (typeof secret !== 'string' || secret.length < 6) continue
+    for (const form of [secret, encodeURIComponent(secret)]) {
+      if (form !== '') out = out.split(form).join('***')
+    }
+  }
+  return out
+}
+
+/**
  * 展开 fetch 的失败原因。
  *
  * undici 对网络层失败只抛一句 `fetch failed`，真正的原因（DNS、TLS、连接被拒、
  * 代理、超时…）藏在 `error.cause` 链里。不展开的话，用户和排查者都只能看到一个
  * 无从下手的错误。
+ *
+ * URL 与原因链都会过一遍 `redactSecrets`：两条路径都可能带上密钥（query 里拼了 key
+ * 的 baseUrl、或把 key 写进 URL 的代理）。
  */
-function describeFetchFailure(error, url) {
+function describeFetchFailure(error, url, ...secrets) {
   const parts = []
   let current = error
   while (current !== undefined && current !== null && parts.length < 5) {
@@ -1053,15 +1267,15 @@ function describeFetchFailure(error, url) {
     if (!parts.includes(detail)) parts.push(detail)
     current = current.cause
   }
-  return `请求 ${url} 失败：${parts.join('  ←  ')}`
+  return `请求 ${redactSecrets(url, ...secrets)} 失败：${redactSecrets(parts.join('  ←  '), ...secrets)}`
 }
 
 /** 带根因展开的 fetch 包装。 */
-async function fetchOrExplain(url, init) {
+async function fetchOrExplain(url, init, ...secrets) {
   try {
     return await fetch(url, init)
   } catch (error) {
-    throw new Error(describeFetchFailure(error, url))
+    throw new Error(describeFetchFailure(error, url, ...secrets))
   }
 }
 
@@ -1082,23 +1296,31 @@ function describeSignal(signal) {
  * 兜底：**仅在调用方没有要求中止时**（信号未中止）去掉信号重试一次——此时放弃信号
  * 不违背取消语义，因为没有任何人要求停止。若信号已中止则直接报错，绝不继续发请求。
  */
+/** 从请求头里取出 Bearer 令牌，供错误文案脱敏使用（拿不到就是空串）。 */
+function bearerOf(init) {
+  const value = init?.headers?.authorization
+  if (typeof value !== 'string') return ''
+  const match = /^Bearer\s+(.+)$/iu.exec(value.trim())
+  return match === null ? '' : match[1]
+}
+
 async function fetchResilient(url, init, signal) {
+  const secret = bearerOf(init)
   try {
     // 首次**带上**调用方的信号：不然取消/超时根本传不到网络层，这里只会打印一句"已中止"。
     return await fetch(url, signal === undefined || signal === null ? init : { ...init, signal })
   } catch (error) {
-    const first = describeFetchFailure(error, url)
+    const first = describeFetchFailure(error, url, secret)
     const state = describeSignal(signal)
     if (signal !== undefined && signal !== null && signal.aborted === true) {
       throw new Error(`${first}（exec.signal ${state}）`)
     }
-    // 只有在"没人要求中止"时才去掉信号重试一次；此时放弃信号不违背取消语义。
-    const retryInit = { ...init }
-    delete retryInit.signal
+    // 只有在"没人要求中止"时才重试一次；信号照旧带上（见上）。
+    const retryInit = signal === undefined || signal === null ? init : { ...init, signal }
     try {
       return await fetch(url, retryInit)
     } catch (retryError) {
-      throw new Error(`${first}（exec.signal ${state}）；去掉信号重试仍失败：${describeFetchFailure(retryError, url)}`)
+      throw new Error(`${first}（exec.signal ${state}）；重试一次仍失败：${describeFetchFailure(retryError, url, secret)}`)
     }
   }
 }
@@ -1150,6 +1372,17 @@ export function lastRequestSentMoment() {
 /** 只读诊断：最近一次预算判定的原始数值，用来解释"为什么判成了连接阶段"。 */
 export function lastBudgetVerdict() {
   return lastBudgetVerdictValue
+}
+
+/**
+ * 只读诊断：SSRF 守卫本体，供验收**逐形态**核对（映射写法、IPv6 私网、合法域名不误判）。
+ *
+ * 为什么要导出：这些绕过形态只能靠"一个地址一个地址地喂进去"来钉住，
+ * 而验收脚本没法从插件外部拿到这个函数——否则就得起真实网络去复现每一种写法，
+ * 徒增不稳定。它**不改任何状态**，只是一个纯函数的引用。
+ */
+export function __testImageUrlRejection(url) {
+  return imageUrlRejection(url)
 }
 
 let lastBudgetVerdictValue = null
@@ -1298,12 +1531,13 @@ async function requestImagesOnce({ endpoint, kind, prompt, size, model, n, file,
   if (attempt.kind !== 'response') return attempt
   let payload
   try {
-    payload = await readJsonResponse(attempt.response, signal)
+    payload = await readJsonResponse(attempt.response, signal, endpoint.apiKey)
   } catch (error) {
     return { kind: 'failed', error: error instanceof Error ? error : new Error(String(error)) }
   }
   try {
-    return { kind: 'images', images: await collectImages(payload, signal) }
+    const collected = await collectImages(payload, signal)
+    return { kind: 'images', images: collected.images, ...(collected.truncatedNote === undefined ? {} : { truncatedNote: collected.truncatedNote }) }
   } catch (error) {
     if (error instanceof NoImageError) return { kind: 'failed', error }
     throw error
@@ -1338,7 +1572,9 @@ async function requestImagesWithFallback({ plan, label, kind, prompt, size, n, f
   } else {
     primaryLabel = `「${primary.model}」`
     first = await requestImagesOnce({ endpoint: primary, kind, prompt, size, model: primary.model, n, file, signal, connectTimeoutMs: primaryConnectMs })
-    if (first.kind === 'images') return { ...first, endpoint: primary }
+    if (first.kind === 'images') {
+      return { ...first, endpoint: primary, ...(first.truncatedNote === undefined ? {} : { warning: first.truncatedNote }) }
+    }
     if (first.kind === 'cancelled') throw first.error
   }
   if (plan.fallback === undefined) {
@@ -1354,12 +1590,13 @@ async function requestImagesWithFallback({ plan, label, kind, prompt, size, n, f
      * 主用是构造期失败（路由失效/缺地址/缺凭据）时，文案里不能写"模型「undefined」失败"——
      * 那种半截话正是这次真机事故里最误导人的地方。直接用失败原因本身。
      */
+    const swapWarning = primary === undefined
+      ? `${label}：${first.error.message}，已改用备用模型「${fallback.model}」。`
+      : `${label}${primaryLabel}未能成功（${first.error.message}），已改用备用模型「${fallback.model}」。`
     return {
       ...second,
       endpoint: fallback,
-      warning: primary === undefined
-        ? `${label}：${first.error.message}，已改用备用模型「${fallback.model}」。`
-        : `${label}${primaryLabel}未能成功（${first.error.message}），已改用备用模型「${fallback.model}」。`,
+      warning: second.truncatedNote === undefined ? swapWarning : `${swapWarning} ${second.truncatedNote}`,
     }
   }
   if (second.kind === 'cancelled') throw second.error
@@ -1555,12 +1792,12 @@ async function probeConnection({ baseUrl, apiKey, keyRef }) {
     })
     if (response.ok) return { ok: true, message: `连接成功：GET ${url} → ${response.status}`, models: modelsOrEmpty(response, text) }
     if (response.status === 401 || response.status === 403) {
-      return { ok: false, message: `密钥被拒绝（HTTP ${response.status}）：${truncate(text, 200)}`, models: [] }
+      return { ok: false, message: redactSecrets(`密钥被拒绝（HTTP ${response.status}）：${truncate(text, 200)}`, apiKey), models: [] }
     }
     if (response.status === 404) return { ok: true, message: `接口可达：GET ${url} → 404，该服务可能不提供模型列表，这不影响生图。`, models: [] }
-    return { ok: false, message: `接口返回 HTTP ${response.status}：${truncate(text, 200)}`, models: [] }
+    return { ok: false, message: redactSecrets(`接口返回 HTTP ${response.status}：${truncate(text, 200)}`, apiKey), models: [] }
   } catch (error) {
-    return { ok: false, message: `无法连接 ${url}：${error instanceof Error ? error.message : String(error)}`, models: [] }
+    return { ok: false, message: redactSecrets(`无法连接 ${url}：${error instanceof Error ? error.message : String(error)}`, apiKey), models: [] }
   }
 }
 
@@ -1613,7 +1850,7 @@ async function fetchModelsPayload({ baseUrl, apiKey, timeoutMessage }) {
       text = await readCappedText(response, { signal: controller.signal, limitBytes: JSON_RESPONSE_MAX_BYTES })
     } catch (error) {
       if (controller.signal.aborted) throw new Error(timeoutMessage(url))
-      throw new Error(`读取模型列表响应失败：${error instanceof Error ? error.message : String(error)}`)
+      throw new Error(redactSecrets(`读取模型列表响应失败：${error instanceof Error ? error.message : String(error)}`, apiKey))
     }
     return { url, response, text }
   } finally {
@@ -1628,19 +1865,19 @@ async function fetchModelsPayload({ baseUrl, apiKey, timeoutMessage }) {
  * 非 JSON、没有 data 数组都抛错——由调用方决定那是"失败"（models RPC）还是
  * "这家服务不提供列表"（test 的可达性另算）。
  */
-function modelsFromResponse(response, text) {
+function modelsFromResponse(response, text, ...secrets) {
   if (!response.ok) {
     const selfReported = providerErrorMessage(text)
-    throw new Error(`接口返回 HTTP ${response.status} ${response.statusText}${selfReported === '' ? '' : `：${selfReported}`}`)
+    throw new Error(redactSecrets(`接口返回 HTTP ${response.status} ${response.statusText}${selfReported === '' ? '' : `：${selfReported}`}`, ...secrets))
   }
   let payload
   try {
     payload = JSON.parse(text)
   } catch {
-    throw new Error(`接口返回的不是 JSON：${truncate(text) || '(空响应)'}`)
+    throw new Error(redactSecrets(`接口返回的不是 JSON：${truncate(text) || '(空响应)'}`, ...secrets))
   }
   const data = Array.isArray(payload?.data) ? payload.data : undefined
-  if (data === undefined) throw new Error(`接口返回里没有 data 数组：${truncate(JSON.stringify(payload ?? null))}`)
+  if (data === undefined) throw new Error(redactSecrets(`接口返回里没有 data 数组：${truncate(JSON.stringify(payload ?? null))}`, ...secrets))
   return data.map((item) => (typeof item?.id === 'string' ? item.id.trim() : '')).filter((id) => id !== '')
 }
 
@@ -1661,9 +1898,9 @@ async function listModels({ baseUrl, apiKey, keyRef }) {
     timeoutMessage: (url) => `获取模型列表超时（${MODELS_TIMEOUT_MS / 1000} 秒）：${url}`,
   })
   try {
-    return modelsFromResponse(response, text)
+    return modelsFromResponse(response, text, apiKey)
   } catch (error) {
-    throw new Error(`获取模型列表失败：${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(redactSecrets(`获取模型列表失败：${error instanceof Error ? error.message : String(error)}`, apiKey))
   }
 }
 
@@ -1848,7 +2085,7 @@ export function apply(ctx, config) {
       parameters: {
         prompt: { type: 'string', required: true, description: '要如何修改这张图，例如「把背景换成夜晚的街道」。' },
         image_path: { type: 'string', required: true, description: '待修改图片的路径，由文件系统后端解析。' },
-        size: { type: 'string', description: `输出尺寸，默认沿用原图或配置里的 ${resolved.size}。` },
+        size: { type: 'string', description: `输出尺寸，留空用设置里配置的尺寸（默认 ${resolved.size}）。` },
         model: { type: 'string', description: '覆盖默认改图模型（用当前生效服务商的地址与密钥）；留空时按设置页里的模型路由选择，主用失败会自动改用备用。' },
       },
       output: OUTPUT,

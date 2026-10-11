@@ -241,6 +241,7 @@ window.__ModuleLoader__.load({
         'fetching': '获取中…',
         'modelsFetched': '已获取模型：',
         'modelsEmpty': '接口没有返回可用模型，请直接填写模型名',
+        'modelsEmptyKept': '接口没有返回可用模型；已保留原有模型列表（没有被清空）',
         'noModelsHint': '没取到模型列表，可点「获取可用模型」，或直接填写模型名',
         'availableModels': '可用模型',
         'showAll': '显示全部模型',
@@ -357,6 +358,7 @@ window.__ModuleLoader__.load({
         'fetching': 'Fetching…',
         'modelsFetched': 'Models fetched:',
         'modelsEmpty': 'The endpoint returned no models; type a model name instead.',
+        'modelsEmptyKept': 'The endpoint returned no models; your saved model list was kept (not cleared).',
         'noModelsHint': 'No model list was returned; use "Fetch models", or type a model name.',
         'availableModels': 'Available models',
         'showAll': 'Show all models',
@@ -899,6 +901,16 @@ window.__ModuleLoader__.load({
     const KEY_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u
 
     /**
+     * 凭据名还必须落在**本插件的命名空间**里：Host 半只认 `DSH_IMAGE_BRIDGE_API_KEY`
+     * 与 `DSH_IMAGE_BRIDGE_KEY_*`（理由见 Host 的 CREDENTIAL_REF_IN_NAMESPACE——否则
+     * 一个凭据名控件就能读宿主任意环境变量并外发）。
+     *
+     * 客户端必须用同一条规则，否则会出现"界面存得下、Host 读不到"的假成功：
+     * 用户填了 `MY_KEY`，保存后界面显示已配置，而工具一直报"没有可用的 API Key"。
+     */
+    const KEY_REF_NAMESPACE = /^(?:DSH_IMAGE_BRIDGE_API_KEY|DSH_IMAGE_BRIDGE_KEY_[A-Za-z0-9_]+)$/u
+
+    /**
      * 校验一个凭据引用名；不合法就按"没有引用"处理并回报一条 warn。
      *
      * 非法值（例如手改 profile 塞进来的）发给 Host 只会被它忽略，界面却会一直显示
@@ -907,8 +919,8 @@ window.__ModuleLoader__.load({
      */
     function safeKeyRef(value) {
       if (typeof value !== 'string' || value === '') return ''
-      if (KEY_REF_PATTERN.test(value)) return value
-      report('warn', '凭据引用名不合法，按未配置处理', JSON.stringify({
+      if (KEY_REF_PATTERN.test(value) && KEY_REF_NAMESPACE.test(value)) return value
+      report('warn', '凭据引用名不合法或不在本插件命名空间内，按未配置处理', JSON.stringify({
         length: value.length,
         // 只记形状，不把整条值抄进日志（引用名不该承载密钥，但手改的配置里什么都可能有）。
         sample: value.slice(0, 6).replace(/[^A-Za-z0-9_]/gu, '?'),
@@ -1728,10 +1740,21 @@ window.__ModuleLoader__.load({
             // 只记"有没有填"，不记长度（见上面「测试连接」那处的说明）。
             keyProvided: state.keyDraft.length > 0,
           }))
+          /*
+           * 空结果**不覆盖已有列表**。
+           *
+           * 服务商回 `{data: []}`、或这家根本不提供 /models、或回包被过滤空了——都表现为
+           * "这次没拿到模型"。旧实现无条件 `patch({ models })`，于是列表被清空，用户再点一次
+           * 「保存」就把清空结果写进了那家服务商的记录：四个模型下拉随之全部变灰，而且
+           * 界面上没有任何一句话说明是这一步把列表抹掉的（实测可复现的数据丢失）。
+           * 现在：拿到非空列表才替换；拿到空结果只提示、保留原列表。
+           */
           patch({
             phase: 'idle',
-            models,
-            status: models.length === 0 ? tr('modelsEmpty') : `${tr('modelsFetched')} ${models.length}`,
+            ...(models.length === 0 ? {} : { models }),
+            status: models.length === 0
+              ? (state.models.length === 0 ? tr('modelsEmpty') : tr('modelsEmptyKept'))
+              : `${tr('modelsFetched')} ${models.length}`,
             statusKind: models.length === 0 ? 'error' : 'ok',
           })
         } catch (error) {
@@ -2911,7 +2934,15 @@ window.__ModuleLoader__.load({
           entries: routeEntries(id),
           value: entry,
           disabled: disabled || !hasConnected,
-          ariaLabel: fallbackSlot ? tr(`route.${id}`) : '',
+          /*
+           * **每个槽位都要有 ariaLabel**，不能只给备用槽位。
+           *
+           * 触发器渲染出来是 `<button>`，而主用槽位上方的可见标签是 `<label htmlFor>`；
+           * `<button>` 不是可被 label 关联的元素（ARIA 的 labelable 集合里没有它），
+           * 所以那条可见标签**给不出可访问名**——主用模型下拉在读屏里就是个没有名字的按钮。
+           * 备用槽位本来就有这个属性（因为它的可见标签被删了），主用槽位漏了。
+           */
+          ariaLabel: tr(`route.${id}`),
           ariaDescribedBy: `${selectId}-hint`,
           triggerData: { 'data-dib-route': id },
           onPick: (picked) => {
@@ -3123,6 +3154,12 @@ window.__ModuleLoader__.load({
               dropdownKey: 'dropdown:size',
               id: 'dib-size',
               triggerText: sizeIsCustom ? tr('size.custom') : sizeTriggerLabel,
+              /*
+               * 与模型槽位同理：可见标签是 `<label htmlFor>`，而触发器是 `<button>`，
+               * 关联不上——触发器必须自带 aria-label，否则这个尺寸控件没有可访问名。
+               * （`menuLabel` 只标菜单本身，管不到折叠状态下的触发器。）
+               */
+              ariaLabel: tr('size'),
               entries: [
                 ...SIZE_PRESETS.map((preset) => {
                   const key = `size.preset.${preset}`
@@ -3257,6 +3294,14 @@ window.__ModuleLoader__.load({
                 name: 'tool.call.toolview',
                 key,
                 locale: NS,
+                /*
+                 * 与下面的 `settings.section` 同一个理由：keyed 插槽**同 key 同优先级会抛错**
+                 * （框架原话："already has an entry for key … register at a different priority
+                 * to shadow it"）。热重载时上一代模块的注册还没释放，于是重新注册直接 fatal，
+                 * 两个生图卡片一起退回通用卡片——这个 fatal 在本机日志里已经出现过三次。
+                 * 用 -1 遮住上一代（优先级更低者渲染），既不再抛错，界面上也只有一份。
+                 */
+                priority: -1,
                 /*
                  * 这里**不能**声明 `tool.call.images` 子插槽：内置的 read_image 卡片
                  * （read-image-toolview）已经声明了它，而一个子插槽只允许有一个声明者，
