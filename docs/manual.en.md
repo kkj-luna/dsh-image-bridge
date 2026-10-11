@@ -10,19 +10,17 @@ Give **models that cannot draw** a connection to an external image model. Config
 
 ## Installation
 
-**From GitHub (the only working remote install right now — one command):**
+**From npm (recommended — one command):**
 
 ```sh
-dsh plugin --profile web add github:kkj-luna/dsh-image-bridge
+dsh plugin --profile web add kkj-luna-dsh-image-bridge
 ```
 
-> **This package is not published to npm yet.** `kkj-luna-dsh-image-bridge` returns 404 on
-> `registry.npmjs.org`, so `dsh plugin --profile web add kkj-luna-dsh-image-bridge` fails today.
-> Once it ships, this section goes back to the npm one-liner.
+**To track the latest commits** (when npm lags behind): `dsh plugin --profile web add github:kkj-luna/dsh-image-bridge`
 
-Either way (`github:` or a local directory, below), the plugin row is inserted into the profile's config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). **Restart `dsh web` afterwards**, then open **Settings → Image Bridge**.
+Either remote install inserts the plugin row into the profile's config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). **Restart `dsh web` afterwards**, then open **Settings → Image Bridge**.
 
-Package name `kkj-luna-dsh-image-bridge`, version `0.4.0`. The author prefix keeps it unique on npm (the plain name `dsh-image-bridge` was already taken); the settings-page badge shows only the repository name, `dsh-image-bridge`.
+Package name `kkj-luna-dsh-image-bridge`, version `0.4.1`. The author prefix keeps it unique on npm (the plain name `dsh-image-bridge` was already taken); the settings-page badge shows only the repository name, `dsh-image-bridge`.
 
 ### Developing this plugin
 

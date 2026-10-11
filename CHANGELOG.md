@@ -2,13 +2,29 @@
 
 版本号在仓库根的 `package.json`，同时会显示在设置页页头徽标上（`client.js` 的 `PACKAGE_VERSION` 必须与它逐字一致，验收有断言盯着）。
 
-## v0.4.0 — 2026-10-11
+## v0.4.1 — 2026-10-11
 
-**加入 npm 安装**：包名从 `@local/dsh-image-bridge` 改为 **`kkj-luna-dsh-image-bridge`**，并发布到 npm。
+**发布到 npm。** `kkj-luna-dsh-image-bridge@0.4.1` 上了 npm，安装从此是一条命令：
 
-> **更正（发布状态）**：这个包**至今没有真正发布到 npm** —— `registry.npmjs.org/kkj-luna-dsh-image-bridge`
-> 返回 404，`kkj520-dsh-image-bridge` 同样是 404。所以本节描述的目标装法尚未可用，
-> 四份文档的安装节已改为以 `github:kkj-luna/dsh-image-bridge` 为主。发布之后再把文档改回 npm 一条命令。
+```sh
+dsh plugin --profile web add kkj-luna-dsh-image-bridge
+```
+
+v0.4.0 做完了"能发布"的全部准备（改名、包清单、发布前断言），但**它自己没发出去**——所以第一个真正出现在 npm 上的版本是 v0.4.1。四份文档的安装节也随之把 npm 改回主推、`github:` 降为"想跟最新提交"的备选。
+
+**修掉一个打包缺陷（发布前体检抓到的）**：`files` 白名单里显式列着 `docs/logo.png`、`docs/settings-zh.png`、`docs/settings-en.png`，于是它们**绕过了 `.npmignore` 的排除规则**跟着进了包——tarball 从 149 KB 涨到 537 KB，安装后 node_modules 里多出三张运行时用不到的图（那三张只在 README 里当插图）。`.npmignore` 说"排除 `docs/*.png`"、`files` 说"包含这三张"，两边打架时以白名单为准；这个矛盾本身就是隐患。现在包是 **13 个文件 / 149 KB**。
+
+**这就是"发布前体检"存在的意义**：如果直接 `npm publish`，这三张图会永久留在 v0.4.1 的 tarball 里——npm 不允许重发同一个版本号，只能再发一版。
+
+**2FA**：npm 现在强制要求发布时提供一次性验证码（`npm publish --otp=123456`），绕过 2FA 的旧式令牌正在被逐步禁用。
+
+## v0.4.0 — 2026-10-11（未发布到 npm）
+
+**为发布 npm 做的改造**：包名从 `@local/dsh-image-bridge` 改为 **`kkj-luna-dsh-image-bridge`**。
+
+> **这个版本没有发布到 npm。** v0.4.0 完成了改名与包清单准备，但发布时 npm 要求 2FA 验证码，
+> 当时没有走完那一步，于是 `registry.npmjs.org/kkj-luna-dsh-image-bridge` 一直是 404，
+> 安装只能用 `github:` 或本地目录。**第一个真正发布的版本是 v0.4.1**，npm 上不会有 v0.4.0。
 
 ```sh
 dsh plugin --profile web add kkj-luna-dsh-image-bridge

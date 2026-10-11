@@ -10,18 +10,17 @@
 
 ## 安装
 
-**从 GitHub 装（当前唯一能用的远程装法，一条命令）：**
+**从 npm 装（推荐，一条命令）：**
 
 ```sh
-dsh plugin --profile web add github:kkj-luna/dsh-image-bridge
+dsh plugin --profile web add kkj-luna-dsh-image-bridge
 ```
 
-> **这个包还没发布到 npm。** `kkj-luna-dsh-image-bridge` 在 `registry.npmjs.org` 上查不到（404），
-> 所以 `dsh plugin --profile web add kkj-luna-dsh-image-bridge` 现在会失败。发布之后这里会改回 npm 一条命令。
+**想跟最新提交**（npm 上还没发到那一版时）：`dsh plugin --profile web add github:kkj-luna/dsh-image-bridge`
 
-两种装法（`github:` 与下面的本地目录）都会把插件行插入 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。**装完重启 `dsh web`**，再打开「设置 → 生图桥」。
+两种远程装法都会把插件行插入 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。**装完重启 `dsh web`**，再打开「设置 → 生图桥」。
 
-包名 `kkj-luna-dsh-image-bridge`，版本 `0.4.0`。名字带作者前缀是为了在 npm 上唯一（`dsh-image-bridge` 已被他人占用）；设置页徽标只显示仓库名 `dsh-image-bridge`。
+包名 `kkj-luna-dsh-image-bridge`，版本 `0.4.1`。名字带作者前缀是为了在 npm 上唯一（`dsh-image-bridge` 已被他人占用）；设置页徽标只显示仓库名 `dsh-image-bridge`。
 
 ### 开发本插件
 
