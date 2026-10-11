@@ -9,13 +9,8 @@ probe.txt
 # 依赖
 node_modules/
 
-# 历史副本：已被 plugins/dsh-image-bridge-v4 取代，只在本机保留、不纳入版本控制
-# （本机 Harness profile 里可能还有指向这些目录的 link 依赖，删磁盘文件会弄坏正在跑的插件）
-dsh-image-bridge/
-image-bridge/
-plugins/dsh-image-bridge/
-plugins/dsh-image-bridge-live/
-plugins/dsh-image-bridge-v3/
+# 验收运行时的临时目录（工作区内，便于受限沙箱也能 mkdtemp）
+.dib-tmp*/
 
 # 编辑器 / 系统
 .DS_Store

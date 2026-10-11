@@ -135,14 +135,14 @@ dsh plugin --profile web remove kkj-luna-dsh-image-bridge
 
 ```sh
 node .dib-verify/verify-manifest.mjs   # 47   清单与跨文件一致性
-node .dib-verify/verify-client.mjs     # 180  客户端注册与组件渲染
+node .dib-verify/verify-client.mjs     # 183  客户端注册与组件渲染
 node .dib-verify/verify-host.mjs       # 147  Host 端到端
-node .dib-verify/verify-security.mjs   # 19   安全边界（SSRF 拒收、回包上限）
+node .dib-verify/verify-security.mjs   # 34   安全边界（SSRF 逐跳拒收、回包上限、条目封顶）
 node .dib-verify/verify-resolve.mjs    # 8    依赖解析健壮性
 node .dib-verify/verify-upgrade.mjs    # 24   升级后用户配置是否保留
 ```
 
-共 **425 条断言**，无需联网、无需真实密钥。跨进程端到端另需先起一个本地模拟接口：
+共 **443 条断言**，无需联网、无需真实密钥。跨进程端到端另需先起一个本地模拟接口：
 
 ```sh
 node .dib-verify/mock-image-api.mjs 8799   # 另开一个终端
@@ -168,13 +168,10 @@ generated-images/                   生图输出（已忽略，不入库）
 
 `.npmignore` 把 `.dib-verify/`、截图与本地缓存挡在包外——插件装到用户机器上时只有跑起来需要的东西。
 
-`dsh-image-bridge/`、`image-bridge/`、`plugins/dsh-image-bridge{,-live,-v3}/` 是历史副本，已被本包取代且不入库，请勿在此改动。
-
 ## 已知限制
 
 - **改了插件代码要重启 DSH**：Node 缓存已加载模块，热重载忽略 `node_modules`（配置热更新是另一条通道，不受影响）
 - **导航栏图标是权宜方案**：外壳按 section id 硬编码图标，第三方插件一律是齿轮。本插件挂载后「认领自己那一行」换成自己的标记；等官方 `settings.section` 支持 `icon` 后应改回官方能力
-- **历史副本不入库**：`dsh-image-bridge/`、`image-bridge/`、`plugins/dsh-image-bridge{,-live,-v3}/` 只在本地保留
 
 ## 文档
 
