@@ -7,20 +7,11 @@
  *  3. 跨文件一致性 —— 补丁行 id 必须等于设置页写入的命名空间，Host 注册的工具名
  *     必须等于客户端注册的卡片键。这类不一致不会报错，只会静默失效。
  */
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { PLUGIN_DIR, resolveDshBin } from './dsh-paths.mjs'
+import { PLUGIN_DIR } from './dsh-paths.mjs'
 
 const ROOT = PLUGIN_DIR
-/*
- * 必须在**第一次 import index.js 之前**把 CLI 入口指向 dsh 本体：插件用 `loadOptional` 在
- * **模块作用域**解析 `@deepseek-ai/dsh-tools`，解析不到就**不注册任何工具**（宁可少给，也不给
- * 一个参数 schema 静默失效的工具）。所以这条赋值放在最前面，晚一行都太晚——那会让下面
- * "真的 apply 一遍并捕获注册"的断言全部落空（踩过）。verify-host / verify-cross 同样处理。
- */
-process.argv[1] = resolveDshBin()
 const results = []
 function check(name, condition, detail) {
   results.push({ name, ok: Boolean(condition) })
@@ -33,13 +24,6 @@ const host = await readFile(join(ROOT, 'index.js'), 'utf8')
 const client = await readFile(join(ROOT, 'client.js'), 'utf8')
 const localeZh = JSON.parse(await readFile(join(ROOT, 'locale/zh.json'), 'utf8'))
 const localeEn = JSON.parse(await readFile(join(ROOT, 'locale/en.json'), 'utf8'))
-/*
- * **真的把 Host 半载进来执行**，而不是 grep 源码。
- *
- * 这正是"看起来在验、其实没人验"的解药：`OUTPUT` 被导出就是为了这个（见 index.js 里那段
- * 注释）；断言直接调 `OUTPUT.render(...)`，块的内容与顺序都是真跑出来的。
- */
-const { OUTPUT } = await import(pathToFileURL(join(ROOT, 'index.js')).href)
 
 /* ---------------------------------------------- client-modules 的发现条件 */
 
@@ -193,141 +177,6 @@ check(
     && !/^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])/iu.test(topLevelBaseUrlDefault)
     && !/^https?:\/\/(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/u.test(topLevelBaseUrlDefault),
   `default=${topLevelBaseUrlDefault || '(未找到)'}`,
-)
-
-/* ---------------------------------------------- 工具结果的 content 结构（真执行 render） */
-
-/*
- * 为什么这行字必须写在 `content` 里（写给以后来问"为什么不放界面"的人）：
- *   对话稳定后平台手上只剩 `content`（= `OUTPUT.render` 的返回值）与 `meta`（只有本插件注册的
- *   keyed toolview 会读）。而 keyed toolview 稳定后被包进一个高度为 0 的滚动容器、屏幕上看不见；
- *   稳定可见的是**平台按 content 渲染的原生卡片**（用户看到的图片与文件行就是它）。
- *   证据：`dsh-tools/lib/types/index.js` 的 `createSuccessResult()`（`content =
- *   snapshotProjection(name, 'render', rendered)`）、`dsh-tool-fs/lib/index.js` 的
- *   "The canonical value never crosses the wire — only the model-facing render text and this
- *   JSON `meta`"、客户端派发点 `dsh-client-ui-tool` 的 `renderCall`/`renderSlot("tool.call.toolview")`。
- *
- * 代价：这是**模型可见**输出，模型会多读到一行。所以文案刻意语言中立（`model: <名字>`），
- * 值必须是 `value.model`（真正产出这张图的模型），绝不能用 `args.model`（用户请求的模型）。
- */
-const renderValue = {
-  model: 'gpt-image-2.5',
-  prompt: '一只猫',
-  images: [{ attachmentId: 'sha256:x', mediaType: 'image/png', bytes: 10, width: 1, height: 1, name: 'a.png' }],
-  savedPaths: ['E:\\w\\generated-images\\a.png'],
-  imageCapable: true,
-}
-const renderBlocks = OUTPUT.render({ prompt: '一只猫', model: 'requested-model-ignored' }, renderValue)
-const modelBlocks = renderBlocks.filter((block) => block.type === 'text' && typeof block.text === 'string' && block.text.startsWith('model: '))
-check(
-  '① render 末尾追加 `model: <真实值>`，且取 value.model 而不是 args.model',
-  modelBlocks.length === 1
-    && modelBlocks[0].text === 'model: gpt-image-2.5'
-    && !renderBlocks.some((block) => typeof block.text === 'string' && block.text.includes('requested-model-ignored')),
-  JSON.stringify(renderBlocks.map((block) => (block.type === 'text' ? block.text.slice(0, 40) : block.type))).slice(0, 200),
-)
-check(
-  '② 该文本块在**所有** image 块之后（原生卡片按序渲染 → 落在图片下方）',
-  renderBlocks[renderBlocks.length - 1] === modelBlocks[0]
-    && renderBlocks.filter((block) => block.type === 'image').length === 1
-    && renderBlocks.findIndex((block) => block === modelBlocks[0]) > renderBlocks.findIndex((block) => block.type === 'image'),
-  renderBlocks.map((block) => block.type).join(','),
-)
-check(
-  '③ value.model 为空 / 非字符串 / 只有空白时**一个块都不追加**（不会出现空的 `model: `）',
-  ['', '   ', undefined, null, 42].every((model) => {
-    const blocks = OUTPUT.render({}, { ...renderValue, model })
-    return blocks.length === 2 && blocks.every((block) => block.type !== 'text' || !block.text.startsWith('model: '))
-  }),
-  JSON.stringify(['', '   ', undefined, null, 42].map((model) => OUTPUT.render({}, { ...renderValue, model }).length)),
-)
-
-/* ---------------------------------------------- 面向模型的说明（system prompt 段落） */
-
-/*
- * 用户最终选的方案是"由模型在对话里说明这张图是谁生成的"。机制有两半，缺一不可：
- *   ① Host 在结果 content 末尾带一行 `model: <实际使用的模型名>`（上面①②③已钉住）；
- *   ② **有一段面向模型的说明告诉模型去做这件事**——没被告知的模型不会主动转述。
- *
- * ② 的承载通道按 `agent-experience` 的判断选了 **system prompt 段落**（`systemPrompt.section`），
- * 而不是把工具 description 写长：description 回答"这个工具做什么"，而"每次用完都要转述"是
- * 跨调用的会话级要求；同一件事只说一次，两个工具的 schema 因此每轮少 102 字符。
- *
- * 下面**真的调用 apply**（导出 `apply` / `MODEL_ATTRIBUTION_NOTE` 就是为了这个），用最小 ctx
- * 捕获 `systemPrompt.section(...)` 与 `tools.register(...)`：捕获到什么就断言什么，不 grep 源码。
- * 注意两点必要性（踩过）：① 必须像 verify-host/verify-cross 那样把 `process.argv[1]` 指向
- * dsh 本体，否则 `defineTool` 解析不到、工具与说明段都不会注册；② 把 `DSH_HOME` 指到临时目录，
- * 免得 apply 往真实 home 写启动自述。
- */
-const { apply, MODEL_ATTRIBUTION_NOTE } = await import(pathToFileURL(join(ROOT, 'index.js')).href)
-const previousDshHome = process.env.DSH_HOME
-const sectionDshHome = await mkdtemp(join(tmpdir(), 'dib-manifest-'))
-process.env.DSH_HOME = sectionDshHome
-const capturedSections = []
-const capturedTools = []
-let applyFailure = null
-try {
-  const captureCtx = {
-    get(key) {
-      if (key === 'systemPrompt') {
-        return { section(section) { capturedSections.push(section); return () => {} } }
-      }
-      if (key === 'tools') {
-        return { register(definition) { capturedTools.push(definition); return () => {} } }
-      }
-      return undefined
-    },
-    inject: () => () => {},
-    effect: (fn) => {
-      try {
-        const disposer = fn()
-        return typeof disposer === 'function' ? disposer : () => {}
-      } catch {
-        return () => {}
-      }
-    },
-    on: () => () => {},
-    emit: () => {},
-  }
-  await apply(captureCtx, { baseUrl: 'http://127.0.0.1:9/v1', model: 'manifest-probe', size: '512x512' })
-} catch (error) {
-  applyFailure = error
-} finally {
-  if (previousDshHome === undefined) delete process.env.DSH_HOME
-  else process.env.DSH_HOME = previousDshHome
-  await rm(sectionDshHome, { recursive: true, force: true }).catch(() => {})
-}
-
-const attributionSection = capturedSections.find((section) => section.name === 'dsh-image-bridge/model-attribution')
-check(
-  '① 说明文案含三层要求：结果里有 `model:` 行 + **每次**都要在回复里说明所用模型 + 备用接管时说明',
-  MODEL_ATTRIBUTION_NOTE.includes('model: <实际使用的模型名>')
-    && MODEL_ATTRIBUTION_NOTE.includes('每次')
-    && MODEL_ATTRIBUTION_NOTE.includes('请在回复里说明')
-    && MODEL_ATTRIBUTION_NOTE.includes('备用'),
-  MODEL_ATTRIBUTION_NOTE,
-)
-check(
-  '② apply 时真的注册了这段 system prompt 段落（名字/顺序/关闭插值/文案逐字一致）',
-  applyFailure === null
-    && attributionSection !== undefined
-    && attributionSection.order === 3050
-    && attributionSection.interpolate === false
-    && attributionSection.text === MODEL_ATTRIBUTION_NOTE,
-  `apply=${applyFailure === null ? 'ok' : String(applyFailure?.message)} sections=[${capturedSections.map((s) => s.name).join(',')}]`,
-)
-check(
-  '③ 两个工具都注册了，且**编译后**的参数契约未变（名字 + 参数字段名集合）',
-  capturedTools.map((tool) => tool.name).sort().join(',') === 'image_edit,image_generate'
-    && Object.keys(capturedTools.find((tool) => tool.name === 'image_generate')?.parameters?.properties ?? {}).join(',') === 'prompt,size,model'
-    && Object.keys(capturedTools.find((tool) => tool.name === 'image_edit')?.parameters?.properties ?? {}).join(',') === 'prompt,image_path,size,model',
-  JSON.stringify(capturedTools.map((tool) => `${tool.name}:${Object.keys(tool.parameters?.properties ?? {}).join('|')}`)),
-)
-check(
-  '④ 同一事实只说一次：说明文案**没有**被塞进两个工具的 description',
-  capturedTools.length === 2
-    && capturedTools.every((tool) => typeof tool.description === 'string' && !tool.description.includes('model: <实际使用的模型名>')),
-  JSON.stringify(capturedTools.map((tool) => tool.description?.slice(0, 30))),
 )
 
 /* ---------------------------------------------- 跨文件一致性 */

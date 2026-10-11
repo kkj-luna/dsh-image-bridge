@@ -516,27 +516,6 @@ const settledBlock = (meta, extra) => ({
 }
 
 /* ------------------------------------------------------------------ *
- * B. 署名行已放弃（方案改为"由模型在对话里说明"）
- *
- * 留一条**源码级守卫**：客户端里不许再出现署名行的类名/词典键/去重函数。真机上那行字
- * 曾经"渲染了却看不到"（宿主在对话稳定后把卡片折叠/隐藏），排查成本很高；既然改走
- * Host content 那一行 + 模型在回复里说明，就别让它悄悄回流。
- * ------------------------------------------------------------------ */
-check(
-  '⑤ 署名行已彻底移除（源码级守卫：不得再出现 dib-byline / byline.model / 去重函数）',
-  !clientSource.includes('dib-byline')
-    && !clientSource.includes('byline.model')
-    && !clientSource.includes('contentHasModelLine')
-    // 计时是这一轮新增的东西，顺手确认它没被守卫误伤
-    && clientSource.includes('running.elapsed'),
-  JSON.stringify({
-    dibByline: clientSource.includes('dib-byline'),
-    bylineKey: clientSource.includes('byline.model'),
-    dedup: clientSource.includes('contentHasModelLine'),
-  }),
-)
-
-/* ------------------------------------------------------------------ *
  * 图片状态文案与「未知错误」不能硬编码（A11）
  *
  * 卡片里有三处文案曾经写死：图片加载中 / 图片加载失败 / 未知错误（还有 img 的 alt）。

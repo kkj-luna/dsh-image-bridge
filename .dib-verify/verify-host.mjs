@@ -486,21 +486,7 @@ if (Array.isArray(value.savedPaths) && value.savedPaths.length === 1) {
 }
 
 const blocks = generate.output.render({ prompt: 'x' }, value)
-/*
- * 稳定后的可见性全靠 content：平台手上只剩 `content`（本函数的返回值）与 `meta`，
- * 而工具行的 keyed toolview 在对话稳定后被包进高度为 0 的容器里、屏幕上看不见。
- * 所以信封 + 图片之后还有**第三块**——末尾那行 `model: <真正产出这张图的模型>`。
- * （这就是"为什么这行字要写在 content 里"的答案，别把它当多余块删掉。）
- */
-check(
-  'render 产出「信封文本 + image + 末尾 model 行」三块（顺序固定）',
-  blocks.length === 3
-    && blocks[0].type === 'text'
-    && blocks[1].type === 'image'
-    && blocks[2].type === 'text'
-    && blocks[2].text === `model: ${value.model}`,
-  blocks.map((b) => (b.type === 'text' ? b.text.slice(0, 32) : b.type)).join(','),
-)
+check('render 产出 text + image 两块', blocks.length === 2 && blocks[0].type === 'text' && blocks[1].type === 'image', blocks.map((b) => b.type).join(','))
 check('image 块携带 attachmentId', typeof blocks[1]?.attachment?.attachmentId === 'string', JSON.stringify(blocks[1]?.attachment))
 check('文本信封含文件路径', blocks[0].text.includes('generated-images'), '')
 

@@ -1463,14 +1463,8 @@ async function settleImages(args) {
   }
 }
 
-/**
- * 两个工具共用的输出声明：模型面按视觉能力分叉，界面面恒久化图片引用。
- *
- * **导出是为了让验收能真的执行它**（verify-manifest 直接调 `OUTPUT.render(...)` 断言内容与
- * 块顺序），而不是去 grep 源码——"看起来在验、其实没人验"是本项目踩过的坑。平台只读
- * `name` / `inject` / `Config` / `apply`，多一个导出对它没有任何影响，**请不要删掉这个 export**。
- */
-export const OUTPUT = {
+/** 两个工具共用的输出声明：模型面按视觉能力分叉，界面面恒久化图片引用。 */
+const OUTPUT = {
   schema: OUTPUT_SCHEMA,
   render: (_args, value) => {
     const blocks = [{ type: 'text', text: envelopeOf(value) }]
@@ -1489,32 +1483,6 @@ export const OUTPUT = {
         })
       }
     }
-    /*
-     * 末尾补一行"这张图是谁生成的"。
-     *
-     * 为什么非写进 content 不可：对话稳定后，平台手上只剩结果的两样东西——`content`
-     * （**就是本函数的返回值**：`dsh-tools/lib/types/index.js` 的 `createSuccessResult()` 里
-     * `rendered = tool.output.render(...)` 紧接着 `content = snapshotProjection(name, 'render',
-     * rendered)`）与 `meta`（`presentationMeta` 的产出，且只在 `exec.parent === undefined` 时
-     * 生成，只有本插件注册的 keyed toolview 会读）。而那个 keyed toolview 在稳定后被包进一个
-     * 高度为 0 的滚动容器里、屏幕上看不见；能稳定显示的是**平台按 content 渲染的原生卡片**
-     * （用户看到的图片与文件行就是它）。所以想让这行字在任何渲染路径下都在，只能放进 content。
-     * 相关证据：`dsh-tool-fs/lib/index.js` 的注释 "The canonical value never crosses the wire —
-     * only the model-facing render text and this JSON `meta`"；客户端派发点在
-     * `dsh-client-ui-tool/lib/client.js` 的 `ToolCall`：`renderSlot("tool.call.toolview", owner,
-     * { entryKey: toolName, hookContext, fallback: GenericToolCard })`。
-     *
-     * 取舍：`content` 是**模型可见**输出，模型会多读到这一行。因此刻意写成语言中立、非命令式的
-     * `model: <名字>`——Host 不参与界面本地化，写成中文句子在英文界面下会突兀，这种形式两边都
-     * 读得通、也不会被误当成指令。值取 `value.model`（**真正产出这张图的模型**，主用失败改用
-     * 备用时就是备用那个），**不取 `args.model`**（那是用户请求的模型，可能根本没产出这张图）。
-     * 为空或非字符串时**一个块都不加**，绝不出现空的 `model: `。
-     *
-     * 位置固定在**最后一个块**：原生卡片按顺序渲染，于是它落在图片下方。
-     */
-    if (typeof value.model === 'string' && value.model.trim() !== '') {
-      blocks.push({ type: 'text', text: `model: ${value.model.trim()}` })
-    }
     return blocks
   },
   presentationMeta: (_args, value) => ({
@@ -1525,21 +1493,6 @@ export const OUTPUT = {
     imageCapable: value.imageCapable,
   }),
 }
-
-/**
- * 面向模型的一条说明：**每次**用完生图/修图工具，都要在给用户的回复里说明这张图由哪个模型生成。
- *
- * 它作为 **system prompt 的一个独立段落**注册（见 `apply` 里的 `systemPrompt.section(...)`），
- * **不**写进工具 description：
- *   · description 回答"这个工具做什么"；"用完要转述"是跨调用的会话级要求，属于系统提示段；
- *   · 同一件事只说一次——工具描述里不再重复这句，两个工具的 schema 少 102 字符/轮。
- * 导出是为了让验收**真的读这条文案**（`verify-manifest` 断言它的三层要求），而不是 grep 源码
- * ——"看起来在验、其实没人验"是本项目踩过的坑。**请不要删掉这个 export**。
- *
- * 措辞按 `agent-experience` 的边界写：事实性、非命令式长句、只讲"结果里有什么 + 期望你做什么"，
- * 不讲内部机制（为什么这么设计、界面怎么渲染，那些在代码注释与 README 里）。
- */
-export const MODEL_ATTRIBUTION_NOTE = '生图/修图结果里带一行 `model: <实际使用的模型名>`：每次用完后，请在回复里说明这张图由哪个模型生成；若这次是备用模型接管，也请说明。'
 
 /**
  * 探测接口可达性与密钥有效性。
@@ -1799,35 +1752,6 @@ export function apply(ctx, config) {
      */
     const tools = ctx.get('tools')
     if (tools === undefined) throw new Error('tools 服务未挂载，无法注册工具')
-    /*
-     * 让模型**每次都把所用模型说出来**的说明，放在 **system prompt 的独立段落**里，
-     * 而不是把工具描述写长。
-     *
-     * 判断依据（`agent-experience` 技能：面向模型的工具定义该怎么写）：
-     *   · 工具 description 讲的是"这个工具做什么"；而"每次用完都要向用户转述模型名"是**跨调用的
-     *     会话级行为要求**，属于系统提示段，塞进 description 只会让两个工具的 schema 每轮都变长；
-     *   · "同一件事只说一次"：这条要求只在这里出现一次，工具描述里不再重复；
-     *   · `systemPrompt.section()` 的契约（Host 的 systemPrompt 服务）：`{ name, order, text }`，
-     *     注册与销毁会发出 `system-prompt/change`，返回的正是 Cordis effect 的 disposer——
-     *     所以放进 `ctx.effect` 里，插件卸载即撤销。
-     *
-     * 顺序取 3050：仓库的 `SECTION_ORDERS` 里工具类说明占 1000–3000（TOOL_BASH…TOOL_COMPUTER_USE），
-     * MCP 在 3100；我们的两个工具属于"外部工具说明"，落在 3000 与 3100 之间最自然。
-     */
-    const MODEL_ATTRIBUTION_ORDER = 3050
-    const systemPrompt = ctx.get('systemPrompt')
-    if (systemPrompt !== undefined && typeof systemPrompt.section === 'function') {
-      ctx.effect(() => systemPrompt.section({
-        name: 'dsh-image-bridge/model-attribution',
-        order: MODEL_ATTRIBUTION_ORDER,
-        // 文本里没有 `{var}` 占位符，关掉插值免得将来有人写进花括号被误解析
-        interpolate: false,
-        text: MODEL_ATTRIBUTION_NOTE,
-      }), 'image-bridge: model attribution section')
-    } else {
-      // 没有 systemPrompt 服务（桩环境或精简组装）时只记一笔，绝不影响工具注册
-      note('systemPrompt 服务不可用：未注册"说明所用模型"的提示段，模型可能不会主动转述')
-    }
     tools.register(defineTool({
       name: 'image_generate',
       description: '用外部生图模型按提示词生成图片，并把结果保存为可查看的图片。当用户要求画图、生成插画/图标/海报，或需要任何图像产物时使用；本工具不依赖当前模型自身的绘图能力。',
