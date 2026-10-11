@@ -591,6 +591,9 @@ window.__ModuleLoader__.load({
       return {}
     }
 
+    /** 临时诊断去重表（见 ImageResultRow 里的说明；取证后连同诊断一起删除）。 */
+    const probeLogged = new Set()
+
     /**
      * 一张已生成图片。
      *
@@ -646,6 +649,45 @@ window.__ModuleLoader__.load({
       const args = argsOf(block)
       const prompt = typeof meta?.prompt === 'string' ? meta.prompt : typeof args.prompt === 'string' ? args.prompt : ''
       const model = typeof meta?.model === 'string' ? meta.model : typeof args.model === 'string' ? args.model : ''
+
+      /*
+       * 临时诊断（**取证用，确认后删除**）：客户端到底有没有被用来渲染这张卡片、
+       * 以及它实际收到的 meta 长什么样。
+       *
+       * 背景：真机上图片卡片显示的是平台原生的文件行（`文件： … — 1024×1536` / `2.75 MB.`），
+       * 看不到本插件的卡片标题与底部署名行。桩测试全绿却真机不显示，只有两种可能：
+       *   ① 本组件根本没被调用（toolview 没被平台选中）→ 日志里不会有这一行；
+       *   ② 组件被调用了，但 meta.model 没到 → 日志里会有这一行、且 model 为 null。
+       * 每条唯一组合只记一次，避免刷屏。
+       */
+      try {
+        const probeKey = `${String(props.toolName)}|${String(props.phase)}|${settled ? 'settled' : 'pending'}`
+        if (!probeLogged.has(probeKey)) {
+          probeLogged.add(probeKey)
+          report('info', '卡片渲染诊断', JSON.stringify({
+            // 平台给我们的入参形状（真机上到底长什么样，这一步就是答案）
+            propKeys: Object.keys(props ?? {}).sort(),
+            toolName: props.toolName ?? null,
+            phase: props.phase ?? null,
+            hasLoadImage: typeof props.loadImage === 'function',
+            // block 形状
+            blockType: block === null ? 'null' : typeof block,
+            blockKeys: block !== null && typeof block === 'object' ? Object.keys(block).sort() : null,
+            blockKind: settled ? block.kind : null,
+            blockCallName: block !== null && typeof block === 'object' && block.call !== null && typeof block.call === 'object' ? block.call.name ?? null : null,
+            // meta 形状：三种可能分别对应不同的修法
+            hasMetaProp: block !== null && typeof block === 'object' && 'meta' in block,
+            metaType: block !== null && typeof block === 'object' ? typeof block.meta : null,
+            metaKeys: meta === null ? null : Object.keys(meta),
+            typeofModel: typeof meta?.model,
+            model: typeof meta?.model === 'string' ? meta.model : null,
+            typeofArgsModel: typeof args?.model,
+            argsModel: typeof args?.model === 'string' ? args.model : null,
+          }))
+        }
+      } catch {
+        // 诊断绝不能影响渲染
+      }
 
       if (!settled) {
         return h('div', { className: 'dib-row' }, [

@@ -163,6 +163,8 @@ Three-level fallback, and tool calls use **the same rule**:
 
 The UI no longer offers a switch, but the field is still saved and still drives the fallback. A provider with no base URL fails immediately, naming the provider.
 
+**A level-two fallback tells you so.** When the provider named by `activeProviderId` has been renamed or deleted, the tool still produces an image (using the first entry) but the result carries a warning naming both what you had picked and what was actually used. That is **billing-relevant**: you think provider A was used while the request went to provider B with B's key and quota, and that should not be known only from `level: first` in the startup report. Conversely, if you **never picked one** (empty field), using the first entry is the expected behaviour and no warning is emitted.
+
 ### When the fallback takes over
 
 Model resolution order: an explicit `model` argument on the tool call → the **primary model** from the Models section (with its own providerId's base URL and credential) → the effective provider's `imageModel`/`editModel` → the legacy `baseUrl`/`model`. The fallback **only** comes from the Models section; unset, or pointing at an unusable provider, means there is no fallback.
@@ -268,12 +270,12 @@ dsh-image-bridge-v4/
 └── icon.svg            Plugin icon
 ```
 
-The regression suites live in `.dib-verify/` at the repository root. They need **no network and no real key**, and total 381 assertions:
+The regression suites live in `.dib-verify/` at the repository root. They need **no network and no real key**, and total 385 assertions:
 
 ```bash
 node .dib-verify/verify-manifest.mjs   # 41
 node .dib-verify/verify-client.mjs     # 157
-node .dib-verify/verify-host.mjs       # 139
+node .dib-verify/verify-host.mjs       # 143
 node .dib-verify/verify-security.mjs   # 12
 node .dib-verify/verify-resolve.mjs    # 8
 node .dib-verify/verify-upgrade.mjs    # 24

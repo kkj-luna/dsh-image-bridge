@@ -172,6 +172,8 @@ DSH_IMAGE_BRIDGE_KEY_<ID>     ID = provider.id 转大写、非字母数字一律
 
 界面上不再有切换入口，但字段照旧保存与回退。服务商没填接口地址时直接报错，并指出是哪一家。
 
+**二级回退会明确告诉你。** `activeProviderId` 指向的那家被改名或删除后，工具照常出图（用的是列表第一个），但结果里会多一条警告，点名"原本选的是哪个、这次实际用的是哪个"。这是**计费相关**的事实：你以为在用 A 家，请求其实打到了 B 家、走 B 家的密钥与额度，不该只有启动自述里的 `level: first` 知道。反过来，如果你**从没选过**（字段为空），用列表第一个本就是预期行为，不会有这条警告。
+
 ### 什么时候换备用
 
 模型解析顺序：工具调用里显式给的 `model` 参数 → 「模型」区块配的**主用模型**（用它自己 providerId 的地址与凭据）→ 当前生效服务商的 `imageModel`/`editModel` → 旧的 `baseUrl`/`model`。备用**只来自**「模型」区块配的备用模型；没配、或它指向的服务商不可用，就等于没有备用。
@@ -286,12 +288,12 @@ dsh-image-bridge-v4/
 └── icon.svg            插件图标
 ```
 
-回归测试在仓库根目录的 `.dib-verify/`，**无需联网、无需真实密钥**，共 381 条断言：
+回归测试在仓库根目录的 `.dib-verify/`，**无需联网、无需真实密钥**，共 385 条断言：
 
 ```bash
 node .dib-verify/verify-manifest.mjs   # 41
 node .dib-verify/verify-client.mjs     # 157
-node .dib-verify/verify-host.mjs       # 139
+node .dib-verify/verify-host.mjs       # 143
 node .dib-verify/verify-security.mjs   # 12
 node .dib-verify/verify-resolve.mjs    # 8
 node .dib-verify/verify-upgrade.mjs    # 24

@@ -1068,6 +1068,40 @@ await providerGenerate.execute({ prompt: 'level three' }, exec)
 check('providers 为空时请求真的打到旧 baseUrl/model', String(lastLegacyGenerateBody).includes('legacy-model'), String(lastLegacyGenerateBody))
 check('三级回退用旧的 DSH_IMAGE_BRIDGE_API_KEY', legacyAuth === 'Bearer key-for-DSH_IMAGE_BRIDGE_API_KEY', legacyAuth)
 
+/*
+ * 二级回退（选中的服务商不在了 → 用列表第一个）是必要的容错，但同时是**计费风险**：
+ * 用户以为在用 A 家，请求实际打到 B 家、走 B 家的密钥与额度。此前这件事只写在启动自述的
+ * `level: first` 里，工具路径从不告诉用户。这里钉住"工具结果必须带一条点名警告"，
+ * 同时钉住两个"不该打扰"的场景，避免把正常情况也报成异常。
+ */
+providerConfigValue = { ...providerConfigValue, providers: providerList, activeProviderId: 'missing-provider' }
+const swapped = await providerGenerate.execute({ prompt: 'active provider was deleted' }, exec)
+const swappedWarnings = (Array.isArray(swapped.warnings) ? swapped.warnings : [swapped.warnings]).filter((entry) => typeof entry === 'string')
+check(
+  '二级回退时工具结果里有一条点名警告（用户知道这次是谁出的图）',
+  // 点名两件事：原本选的是哪个（id），实际用的是哪个（**给人看的名字**，不是内部 id）。
+  swappedWarnings.some((entry) => entry.includes('missing-provider') && entry.includes('Vendor One')),
+  JSON.stringify(swapped.warnings ?? null),
+)
+
+providerConfigValue = { ...providerConfigValue, activeProviderId: 'vendor-one' }
+const notSwapped = await providerGenerate.execute({ prompt: 'active provider still there' }, exec)
+const notSwappedWarnings = (Array.isArray(notSwapped.warnings) ? notSwapped.warnings : [notSwapped.warnings]).filter((entry) => typeof entry === 'string')
+check(
+  '正常命中 activeProviderId 时不出这条警告（不打扰）',
+  !notSwappedWarnings.some((entry) => entry.includes('已不在列表里')),
+  JSON.stringify(notSwapped.warnings ?? null),
+)
+
+providerConfigValue = { ...providerConfigValue, activeProviderId: '' }
+const neverPicked = await providerGenerate.execute({ prompt: 'no provider ever picked' }, exec)
+const neverPickedWarnings = (Array.isArray(neverPicked.warnings) ? neverPicked.warnings : [neverPicked.warnings]).filter((entry) => typeof entry === 'string')
+check(
+  '从未选过服务商（activeProviderId 为空）时不出这条警告（用列表第一个是预期行为）',
+  !neverPickedWarnings.some((entry) => entry.includes('已不在列表里')),
+  JSON.stringify(neverPicked.warnings ?? null),
+)
+
 /* ------------------------------------------------------------------ *
  * 跨服务商模型路由 + 主/备用模型与"响应头预算"
  *
@@ -1528,6 +1562,29 @@ check(
   '⑦d-2 探活也失败时：说"当前不可达，不只是这次慢"',
   probeDeadError.includes('超时后探活') && probeDeadError.includes('不可达'),
   probeDeadError,
+)
+
+/*
+ * ⑦d-6 「调用超时」必须**按调用时重读的配置**生效。
+ *
+ * 旧实现把它当工具注册期的快照（`timeoutMs: resolved.timeoutMs`），而 README 承诺这些字段
+ * 可以在线改写——于是用户在设置页把超时从 180 秒改成 1 秒，实际毫无变化。这条用一个
+ * 20 秒都不回的服务商 + 1 秒预算来钉住：小预算必须真的把整次调用掐断，并说清超了多久。
+ */
+const timeoutBefore = providerConfigValue.timeoutMs
+providerConfigValue = { ...providerConfigValue, timeoutMs: 1000 }
+setRoutes({ primary: { providerId: 'very-slow-vendor', model: 'very-slow-image' }, fallback: emptyRole() }, emptyRole(), 9000)
+let callTimeoutError = ''
+try {
+  await providerGenerate.execute({ prompt: 'call budget should fire' }, exec)
+} catch (error) {
+  callTimeoutError = error instanceof Error ? error.message : String(error)
+}
+providerConfigValue = { ...providerConfigValue, timeoutMs: timeoutBefore }
+check(
+  '⑦d-6 「调用超时」按调用时重读的配置生效（改成 1 秒就真的 1 秒掐断）',
+  callTimeoutError.includes('整次调用超过 1000ms'),
+  callTimeoutError || '(没有报错)',
 )
 
 /* ⑦d-4 探活只加提示、不改变"换备用"这个决定。 */

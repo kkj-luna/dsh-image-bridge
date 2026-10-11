@@ -1384,6 +1384,61 @@ async function requestImagesWithFallback({ plan, label, kind, prompt, size, n, f
 }
 
 /**
+ * 生效服务商被**静默替换**时给用户的一句警告。
+ *
+ * 三级回退里第二级（`activeProviderId` 没命中 → 取列表第一项）是必要的容错：卡片被改名或
+ * 删除后，硬报错会让用户连图都画不了。但它同时是**计费风险**——用户以为在用 A 家，实际
+ * 请求打到了 B 家、用的是 B 家的密钥与额度，而这件事此前只写进启动自述（`level: first`），
+ * 工具路径从不告诉用户。所以这里把它作为一条普通警告随结果一起返回：
+ * 图照出，但用户知道"刚才那一次是谁出的"。
+ *
+ * 只在**用户明确选过、而那个选择失效了**时才提示（`requested` 非空且不命中）。
+ * `requested` 为空是正常的"没选过"，那时用列表第一项是预期行为，不该打扰。
+ */
+function activeProviderSwapWarning(config) {
+  if (providerLevelOf(config) !== 'first') return undefined
+  const requested = typeof config?.activeProviderId === 'string' ? config.activeProviderId.trim() : ''
+  if (requested === '') return undefined
+  const actual = activeProviderOf(config)
+  if (actual === undefined) return undefined
+  return `原本选中的服务商「${requested}」已不在列表里（可能改过名字或已删除），这次改用列表第一个「${actual.label}」（${actual.baseUrl}）。请在「设置 → 生图桥」的「模型」区块重新选一次模型。`
+}
+
+/**
+ * 按**本次重读到的**配置给出"整次调用"的中止信号。
+ *
+ * 为什么不能只靠工具注册期的 `timeoutMs`：那是**挂载时算出来的快照**，用户在设置页改
+ * 「调用超时」之后它不会变，而 README 承诺这些字段"可以在线改写、无需重启"——两者矛盾，
+ * 实际表现就是"改了没反应"。所以真正的约束放在这里：每次调用重读 `live.timeoutMs` 并起一个
+ * 中止计时器，与 `exec.signal`（调用方取消）合并。注册期那个值仍然保留，当作一道宽上限
+ * （框架层如果更早掐断，也是中止，行为一致）。
+ *
+ * 顺便把"为什么中止"记下来：`AbortSignal.timeout()` 触发的错误只有一句 `TimeoutError`，
+ * 直接抛给用户等于没说清发生了什么。
+ */
+function callBudgetSignal(exec, timeoutMs) {
+  const budget = Math.max(1000, Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 180000)
+  const timer = AbortSignal.timeout(budget)
+  const timeoutError = new Error(`整次调用超过 ${budget}ms 未完成（配置里的「调用超时」，可在设置页调大）`)
+  const signal = exec?.signal === undefined || exec.signal === null
+    ? timer
+    : AbortSignal.any([exec.signal, timer])
+  return { signal, timeoutError }
+}
+
+/**
+ * 把"整次调用中止"翻译成人能读懂的错误。
+ *
+ * 两种情况必须分开：**调用方取消**（用户主动停，不是错误，原样抛出即可）与
+ * **自己的预算到期**（要说清是超了多久、以及去哪儿调大）。
+ */
+function callFailureOf(error, exec, budget) {
+  if (exec?.signal !== undefined && exec.signal !== null && exec.signal.aborted === true) return error
+  if (budget.signal.aborted === true) return budget.timeoutError
+  return error
+}
+
+/**
  * 落实一次生图结果：存附件、写工作区文件、组装工具值。
  *
  * `extraWarnings` 用来把"这次其实是备用模型出的图"之类的运行时事实带给模型和用户——
@@ -1748,16 +1803,22 @@ export function apply(ctx, config) {
         const requestedModel = typeof args.model === 'string' ? args.model.trim() : ''
         const plan = await imageAttemptPlan({ ctx, config: live, role: 'generate', requestedModel })
         const size = typeof args.size === 'string' && args.size.trim() !== '' ? args.size.trim() : live.size
-        const result = await requestImagesWithFallback({
-          plan,
-          label: '生图模型',
-          kind: 'generate',
-          prompt,
-          size,
-          n: 1,
-          signal: exec.signal,
-          budgetMs: live.fallbackAfterMs,
-        })
+        const budget = callBudgetSignal(exec, live.timeoutMs)
+        let result
+        try {
+          result = await requestImagesWithFallback({
+            plan,
+            label: '生图模型',
+            kind: 'generate',
+            prompt,
+            size,
+            n: 1,
+            signal: budget.signal,
+            budgetMs: live.fallbackAfterMs,
+          })
+        } catch (error) {
+          throw callFailureOf(error, exec, budget)
+        }
         return await settleImages({
           ctx,
           exec,
@@ -1766,7 +1827,7 @@ export function apply(ctx, config) {
           size,
           model: result.endpoint.model,
           images: result.images,
-          extraWarnings: result.warning === undefined ? [] : [result.warning],
+          extraWarnings: [result.warning, activeProviderSwapWarning(live)].filter((entry) => entry !== undefined),
         })
       },
     }))
@@ -1803,16 +1864,22 @@ export function apply(ctx, config) {
         const plan = await imageAttemptPlan({ ctx, config: live, role: 'edit', requestedModel })
         const size = typeof args.size === 'string' && args.size.trim() !== '' ? args.size.trim() : live.size
         const name = imagePath.split(/[\\/]/u).pop() ?? 'source.png'
-        const result = await requestImagesWithFallback({
-          plan,
-          label: '改图模型',
-          kind: 'edit',
-          prompt,
-          size,
-          file: { bytes, mediaType, name },
-          signal: exec.signal,
-          budgetMs: live.fallbackAfterMs,
-        })
+        const budget = callBudgetSignal(exec, live.timeoutMs)
+        let result
+        try {
+          result = await requestImagesWithFallback({
+            plan,
+            label: '改图模型',
+            kind: 'edit',
+            prompt,
+            size,
+            file: { bytes, mediaType, name },
+            signal: budget.signal,
+            budgetMs: live.fallbackAfterMs,
+          })
+        } catch (error) {
+          throw callFailureOf(error, exec, budget)
+        }
         return await settleImages({
           ctx,
           exec,
@@ -1821,7 +1888,7 @@ export function apply(ctx, config) {
           size,
           model: result.endpoint.model,
           images: result.images,
-          extraWarnings: result.warning === undefined ? [] : [result.warning],
+          extraWarnings: [result.warning, activeProviderSwapWarning(live)].filter((entry) => entry !== undefined),
         })
       },
     }))
