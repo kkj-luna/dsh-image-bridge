@@ -11,7 +11,7 @@
 
 给 [DeepSeek Harness](https://github.com/deepseek-ai) 里**没有作图能力的模型**接上外部生图服务：装一个插件，模型就多出 `image_generate`（生图）与 `image_edit`（改图）两个工具，图片作为持久附件出现在对话里，同时另存到会话工作区 `generated-images/`。
 
-> 📷 截图待补：在「设置 → 生图桥」截一张放进 `docs/settings-zh.png`。
+![生图桥设置页](docs/settings-zh.png)
 
 ## 安装
 
@@ -75,14 +75,14 @@ dsh plugin --profile web add <本仓库绝对路径>/plugins/dsh-image-bridge-v4
 
 ```sh
 node .dib-verify/verify-manifest.mjs   # 41   清单与跨文件一致性
-node .dib-verify/verify-client.mjs     # 157  客户端注册与组件渲染
+node .dib-verify/verify-client.mjs     # 162  客户端注册与组件渲染
 node .dib-verify/verify-host.mjs       # 143  Host 端到端
 node .dib-verify/verify-security.mjs   # 12   安全边界（SSRF 拒收、回包上限）
 node .dib-verify/verify-resolve.mjs    # 8    依赖解析健壮性
 node .dib-verify/verify-upgrade.mjs    # 24   升级后用户配置是否保留
 ```
 
-共 **385 条断言**，无需联网、无需真实密钥。跨进程端到端另需先起一个本地模拟接口：
+共 **390 条断言**，无需联网、无需真实密钥。跨进程端到端另需先起一个本地模拟接口：
 
 ```sh
 node .dib-verify/mock-image-api.mjs 8799   # 另开一个终端

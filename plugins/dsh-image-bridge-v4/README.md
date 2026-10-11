@@ -73,7 +73,7 @@ plugin_manager  action: install_bundle
 
 卡片上**没有**「设为当前」按钮：主用/备用已经按角色指定了服务商（`{ providerId, model }`），「当前生效服务商」对用户没有意义。
 
-列表底部是虚线边框的「＋ 添加模型提供商」。点它、或点卡片「编辑」，会打开一个居中浮层（半透明遮罩 + 面板，层级 `z-index: 1200`，压在宿主浮层之上）。**关闭有四条路**：右上角 ×、取消、点遮罩、Esc。
+列表底部是虚线边框的「＋ 添加模型提供商」。点它、或点卡片「编辑」，会打开一个居中浮层（半透明遮罩 + 面板，层级 `z-index: 1200`，压在宿主浮层之上）。**关闭有四条路**：右上角 ×、取消、点遮罩、Esc。打开时焦点会落进浮层、**Tab 不会跑到浮层背后**，关闭后回到原来那个元素；未保存的 Key 草稿也不会因为误按 Esc 丢掉（菜单展开时 Esc 先收菜单，不连带关浮层）。
 
 ### 编辑浮层
 
@@ -288,11 +288,11 @@ dsh-image-bridge-v4/
 └── icon.svg            插件图标
 ```
 
-回归测试在仓库根目录的 `.dib-verify/`，**无需联网、无需真实密钥**，共 385 条断言：
+回归测试在仓库根目录的 `.dib-verify/`，**无需联网、无需真实密钥**，共 390 条断言：
 
 ```bash
 node .dib-verify/verify-manifest.mjs   # 41
-node .dib-verify/verify-client.mjs     # 157
+node .dib-verify/verify-client.mjs     # 162
 node .dib-verify/verify-host.mjs       # 143
 node .dib-verify/verify-security.mjs   # 12
 node .dib-verify/verify-resolve.mjs    # 8

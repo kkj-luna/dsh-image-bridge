@@ -23,10 +23,26 @@ let hookState = []
 /** 桩 ref / DOM 调用的记录：断言"焦点回到触发器""当前项滚入视野"靠它。 */
 const domCalls = { focus: [], scrollIntoView: [], listeners: new Map(), outsideTarget: null }
 const makeRefStub = (type) => ({
-  focus() { domCalls.focus.push(String(type)) },
+  focus() { domCalls.focus.push(String(type)); navDom.document.activeElement = this },
   scrollIntoView(options) { domCalls.scrollIntoView.push({ type: String(type), options }) },
   // 默认"点在容器内部"；外部点击测试把 domCalls.outsideTarget 设成一个哨兵对象。
   contains(target) { return target !== domCalls.outsideTarget },
+  /*
+   * 浮层表单的 `querySelectorAll`：真实浏览器返回浮层内的可聚焦控件，焦点陷阱靠它算 Tab 的
+   * 落点。桩 DOM 没有真实节点树，这里给一个**固定的两项列表**（等价于"浮层里有两个可聚焦
+   * 控件"），让循环逻辑（末项 Tab 回第一项、首项 Shift+Tab 回末项）可以被真验，
+   * 而不是只断言"代码写了"。
+   */
+  ...(String(type) === 'form'
+    ? {
+        querySelectorAll() {
+          return [
+            { focus() { domCalls.focus.push('dialog-item-1'); navDom.document.activeElement = this } },
+            { focus() { domCalls.focus.push('dialog-item-2'); navDom.document.activeElement = this } },
+          ]
+        },
+      }
+    : {}),
 })
 function createElement(type, props, ...children) {
   if (props !== null && props !== undefined && typeof props.ref === 'object' && props.ref !== null) {
@@ -137,6 +153,29 @@ const navDom = (() => {
     createElement: (tagName) => element(tagName),
     head: { appendChild: (node) => { styles.push(node); return node } },
     body: element('body'),
+    /*
+     * 焦点管理：真实浏览器里 `activeElement` 与 `focus()` 是一对，浮层的"进来先聚焦、
+     * 关掉回到原处"全靠它。桩里给一个可写的当前焦点，测试据此断言焦点去了哪。
+     */
+    activeElement: null,
+    /** 测试用来把焦点放到某个桩节点上（模拟"打开浮层前焦点在这里"）。 */
+    focusOn(node) { documentStub.activeElement = node },
+    /**
+     * 浮层节点的兜底查询：真实浏览器返回那个 `<form data-dib-editor="dialog">`。
+     * 桩里返回一个等价的假节点（有 focus 与两项可聚焦子节点），让焦点管理可被真验。
+     */
+    querySelector(selector) {
+      if (selector !== '[data-dib-editor="dialog"]') return null
+      return {
+        focus() { domCalls.focus.push('form'); documentStub.activeElement = this },
+        querySelectorAll() {
+          return [
+            { focus() { domCalls.focus.push('dialog-item-1'); documentStub.activeElement = this } },
+            { focus() { domCalls.focus.push('dialog-item-2'); documentStub.activeElement = this } },
+          ]
+        },
+      }
+    },
     querySelectorAll(selector) {
       selectorCalls.push(selector)
       if (state.brokenSelector || selector !== '[role="dialog"] nav button') return []
@@ -381,6 +420,28 @@ const withModel = renderCard(settledBlock({
   images: [{ attachmentId: 'sha256:x', mediaType: 'image/png', bytes: 10, width: 1, height: 1 }],
 }))
 const withModelRow = bylineRowOf(withModel)
+/*
+ * 上游 locale 失灵时的兜底：真机上 `t` 来自插槽，热重载后可能返回空串/键名/不含占位符的串。
+ * 那种情况下 `.replace('{model}', …)` 会产出一行**空文本的行**——行在、字没了，最难查。
+ * 所以：模板里没有 `{model}` 就退回内置中文模板，绝不能渲染出空行。
+ */
+check(
+  '①b 词典模板不含 {model} 占位符时退回内置中文模板（绝不渲染空文本的行）',
+  (() => {
+    hookState = []
+    const brokenTemplate = invoke(ImageResultRow, {
+      t: (key) => (key === 'byline.model' ? '' : key),
+      toolName: 'image_generate',
+      loadImage: () => Promise.resolve('data:image/png;base64,AAAA'),
+      phase: 'result',
+      block: settledBlock({ model: 'gpt-image-2.5', prompt: 'x', imageCapable: true, images: [] }),
+    }).element
+    const row = bylineRowOf(brokenTemplate)
+    const text = row === undefined ? '' : textOfElement(row).trim()
+    return row !== undefined && text === '由 gpt-image-2.5 生成' && text !== ''
+  })(),
+  JSON.stringify({ zh: zhDict['byline.model'] }).slice(0, 160),
+)
 check(
   '① 有 meta.model 时卡片底部渲染「由 <模型名> 生成」，文案与词典逐字一致',
   withModelRow !== undefined
@@ -1663,6 +1724,62 @@ check(
   !hasClass(cardTree, 'dib-overlay') && hasClass(cardTree, 'dib-card') && hasClass(cardTree, 'dib-add-btn'),
   cardTree.classes.join(' | ').slice(0, 180),
 )
+
+/* ------------------------------------------------------------------ *
+ * 无障碍：浮层的焦点管理（A2）
+ *
+ * 三件事都要成立，缺一件都是"能用鼠标、键盘用户被困或迷路"：
+ *   进来先聚焦浮层、Tab 不出浮层、关掉回到原来那个元素。
+ * 桩 DOM 没有真实节点树，但 ref 桩会记录 `focus()`、并给浮层表单一个固定的两项可聚焦
+ * 列表——足够把"循环逻辑"真验出来，而不是只断言"代码里写了 focus"。
+ * ------------------------------------------------------------------ */
+{
+  const a11yBundle = sectionWithRecording({ size: '1024x1024' })
+  const a11ySession = createSession(a11yBundle.component, {
+    t: undefined,
+    close: () => {},
+    __initial: {
+      phase: 'idle',
+      providers: [providerRecord],
+      activeProviderId: 'zhipu',
+      editor: { mode: 'edit', initial: editorInitialFor(['cogview-4']) },
+    },
+  })
+  /** 打开浮层前焦点所在的元素（真实场景里是那张卡片的「编辑」按钮）。 */
+  const triggerElement = { focus() { navDom.document.activeElement = this; domCalls.focus.push('trigger') } }
+  navDom.document.activeElement = triggerElement
+  const focusBefore = domCalls.focus.length
+  const listenersBefore = navDom.listenerCount('keydown')
+  a11ySession.tree()
+  const focusedOnOpen = domCalls.focus.slice(focusBefore)
+  check(
+    '浮层打开时把焦点收进浮层（不是留在背后的页面上）',
+    focusedOnOpen.includes('form'),
+    JSON.stringify({ focusedOnOpen, keydownListeners: `${listenersBefore} → ${navDom.listenerCount('keydown')}`, refCurrent: typeof a11ySession.element?.props?.children?.[1]?.props?.ref?.current }),
+  )
+
+  navDom.document.focusOn({ focus() {}, tag: 'inside' })
+  navDom.dispatch('keydown', { key: 'Tab', shiftKey: false, preventDefault() {} })
+  navDom.document.focusOn({ focus() {}, tag: 'inside' })
+  navDom.dispatch('keydown', { key: 'Tab', shiftKey: false, preventDefault() {} })
+  navDom.document.focusOn({ focus() {}, tag: 'inside' })
+  navDom.dispatch('keydown', { key: 'Tab', shiftKey: true, preventDefault() {} })
+  const focusDuringTrap = domCalls.focus.slice(focusBefore + focusedOnOpen.length)
+  check(
+    'Tab / Shift+Tab 的落点都被浮层接管（焦点不会跑到背后的页面）',
+    focusDuringTrap.filter((entry) => entry.startsWith('dialog-item-')).length >= 3,
+    JSON.stringify(focusDuringTrap),
+  )
+
+  /* 点「取消」把浮层真正关掉（组件卸载 → effect 清理跑）→ 焦点必须回到打开它的那个元素。 */
+  /*
+   * 第三条（关闭后焦点回到打开它的元素）**在这里观察不到**：清理函数存在会话的 effect store 里，
+   * 子组件从树里消失时这套桩渲染器不会调用它（真实 React 会）。所以这里不断言它，只在
+   * README 的「未覆盖范围」里标注"真实焦点回流需真机确认"——把一条永远红的断言留在套件里，
+   * 比不写更糟：它会训练人忽略红色。
+   */
+  navDom.document.activeElement = null
+}
 /* 配置行不可写时不能把关不掉的浮层盖在设置页上 */
 const readOnlyTree = pageWith(cardBundle, {
   writable: false,
@@ -2283,6 +2400,33 @@ check(
   dropdownById(sizeLiveTree, SIZE_SELECT)?.props.value === CUSTOM_SIZE_VALUE_FOR_TEST && sizeCustomInput !== undefined,
   JSON.stringify({ value: dropdownById(sizeLiveTree, SIZE_SELECT)?.props.value ?? null, input: sizeCustomInput !== undefined }),
 )
+/*
+ * 无障碍：这个文本框只在选了「自定义…」时出现，视觉上靠上方下拉说明自己是什么；
+ * 但读屏读到一个**没有任何名字**的文本框等于不可用。这里同时钉住两点：
+ * 名称来自语言包（中文界面出中文、英文界面出英文），而不是硬编码中文。
+ */
+check(
+  '自定义尺寸文本框带可访问名称（来自语言包，不是无名字的输入框）',
+  sizeCustomInput?.props?.['aria-label'] === '图片尺寸（自定义）',
+  JSON.stringify(sizeCustomInput?.props?.['aria-label'] ?? null),
+)
+{
+  const enSizeBundle = sectionWithRecording({ size: '1024x1024' })
+  const enSizeSession = createSession(enSizeBundle.component, {
+    t: (key) => enDict[key] ?? key,
+    close: () => {},
+    __initial: { phase: 'idle', providers: [zhipuFull], activeProviderId: 'zhipu', size: '1024x1024' },
+  })
+  let enTree = openDropdownTree(enSizeSession, SIZE_SELECT)
+  enSizeSession.click(menuItemByValueOf(menuOf(enTree, SIZE_SELECT), CUSTOM_SIZE_VALUE_FOR_TEST))
+  enTree = enSizeSession.tree()
+  const enLabel = inputById(enTree, SIZE_CUSTOM_INPUT)?.props?.['aria-label'] ?? null
+  check(
+    '英文环境下该名称也是英文（硬编码中文会在这里红）',
+    enLabel === 'Image size (custom)',
+    JSON.stringify(enLabel),
+  )
+}
 sizeSession.change(sizeCustomInput, '1280*720')
 sizeLiveTree = sizeSession.tree()
 sizeSession.click(sizeLiveTree.nodes.find((node) => node.type === 'button' && textOfElement(node).trim() === '保存尺寸'))

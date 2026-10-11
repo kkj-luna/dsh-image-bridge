@@ -254,6 +254,7 @@ window.__ModuleLoader__.load({
         'size.preset.512x512': '512x512（1:1 小图）',
         'size.preset.1792x1024': '1792x1024（16:9 横版）',
         'size.preset.1024x1792': '1024x1792（9:16 竖版）',
+        'size.customLabel': '图片尺寸（自定义）',
         'saveSize': '保存尺寸',
         'routes.title': '模型',
         'routes.hint': '生图与修图各有一个主模型和一个备用模型：选项来自所有已获取过模型列表的服务商（按服务商分组）。备用模型在主模型超时或连接失败时自动接管',
@@ -363,6 +364,7 @@ window.__ModuleLoader__.load({
         'size.preset.512x512': '512x512 (1:1 small)',
         'size.preset.1792x1024': '1792x1024 (16:9 wide)',
         'size.preset.1024x1792': '1024x1792 (9:16 tall)',
+        'size.customLabel': 'Image size (custom)',
         'saveSize': 'Save size',
         'routes.title': 'Models',
         'routes.hint': 'Generation and editing each have a primary and a fallback model. Options come from every provider whose model list has been fetched, grouped by provider; the fallback takes over when the primary times out or fails to connect.',
@@ -407,8 +409,12 @@ window.__ModuleLoader__.load({
        * 卡片底部那行"由 X 生成"：比正文小一号、弱化色，不抢内容。
        * 模型名可能很长（`vendor/very-long-model-name-v2.1-preview`），所以允许在任意位置断行，
        * 不让它把卡片撑破；单行放得下时不换行。
+       *
+       * `flex:0 0 auto` + `min-height` 是**可见性保险**：宿主把工具卡片包在 flex 列里，外层一旦
+       * 允许收缩或给固定高度，最后一行最容易被压成 0 高或裁掉——它正好是整张卡片的最后一行，
+       * 必须钉住自己的高度。
        */
-      '.dib-byline{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);overflow-wrap:anywhere;word-break:break-word}',
+      '.dib-byline{flex:0 0 auto;min-height:16px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);overflow-wrap:anywhere;word-break:break-word}',
       '.dib-count{color:var(--dsw-alias-label-secondary)}',
       '.dib-gallery{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start}',
       '.dib-image{max-width:100%;max-height:320px;border-radius:var(--dsw-radius-md);border:0.5px solid var(--dsw-alias-border-l2);display:block}',
@@ -748,17 +754,47 @@ window.__ModuleLoader__.load({
        * 请求的模型"，旧结果里恰好有它、没有 meta.model，兜底会显示出一个没产出这张图的名字。
        * 结果里没有结构化字段标记"走了备用"，所以这里也不显示「（备用）」——不解析自然语言。
        * `meta.model` 缺失（旧结果）时**整行不渲染**，不留空行、不留占位。
+       *
+       * 文案取值有两道保险：词典给的模板必须**含 `{model}` 占位符**才算数，否则退回内置中文
+       * 模板——上游 locale 在热重载后可能返回空串/键名，那种情况下 `.replace` 会产出一行
+       * **空文本的行**（行在、字没了，最难查）。
        */
       const generatedBy = typeof meta?.model === 'string' ? meta.model.trim() : ''
       if (generatedBy !== '') {
-        rows.push(h('div', {
+        const template = tr('byline.model')
+        const bylineText = typeof template === 'string' && template.includes('{model}')
+          ? template.replace('{model}', generatedBy)
+          : `由 ${generatedBy} 生成`
+        const bylineRow = h('div', {
           key: 'byline',
           className: 'dib-byline',
           title: generatedBy,
-        }, tr('byline.model').replace('{model}', generatedBy)))
+          // 临时诊断（取证用）：把这一行染成醒目的黄色，用来区分"没渲染"与"渲染了但被折叠/裁掉"。
+          style: { background: '#ffeb3b', color: '#000000' },
+        }, bylineText)
+        rows.push(bylineRow)
       }
 
-      return h('div', { className: 'dib-row' }, rows)
+      const element = h('div', { className: 'dib-row' }, rows)
+      /*
+       * 临时诊断（取证用）：把**真正返回出去的树**记下来——只看"入参有没有 model"不够，
+       * 还要确认署名行确实在返回的元素里、且带着文案。确认显示后连同上面那行醒目样式一起删。
+       */
+      try {
+        const flat = rows.map((row) => ({
+          className: row?.props?.className ?? null,
+          text: typeof row?.props?.children === 'string' ? row.props.children.slice(0, 60) : null,
+        }))
+        const bylineInTree = rows.some((row) => String(row?.props?.className ?? '') === 'dib-byline')
+        const probeKey = `tree|${String(props.toolName)}|${bylineInTree}`
+        if (!probeLogged.has(probeKey)) {
+          probeLogged.add(probeKey)
+          report('info', '署名行渲染诊断', JSON.stringify({ bylineInTree, rows: flat }))
+        }
+      } catch {
+        // 诊断绝不能影响渲染
+      }
+      return element
     }
 
     /* ------------------------------------------------------------------ */
@@ -1524,6 +1560,98 @@ window.__ModuleLoader__.load({
         }
       }, [close])
 
+      /**
+       * 浮层打开时的焦点管理：进来先落到第一个控件，Tab 不跑到浮层背后，关掉回到原处。
+       *
+       * 三件事缺一不可，缺了都是"看起来能用、键盘用户被困住或彻底迷路"：
+       *   1. **初始焦点**：不给的话焦点还留在背后的页面上，读屏用户不知道浮层开了；
+       *   2. **焦点陷阱**：`aria-modal="true"` 只是声明，浏览器不会照着做——不拦住 Tab
+       *      就会走进背景那棵树，用户在"看不见的地方"操作；
+       *   3. **关闭回焦**：不回焦的话焦点掉到 `<body>`，键盘用户要从头 Tab 一遍才能回到
+       *      刚才那张卡片的按钮上。
+       *
+       * 真实 DOM 才有焦点概念；桩环境（进程外验证）没有，所以每一步都做能力探测并整体
+       * try/catch——**绝不能因为焦点管理失败把设置页那棵树带崩**（宿主对渲染期抛错的插槽
+       * 条目会永久弃用）。
+       */
+      const dialogRef = React.useRef(null)
+      React.useEffect(() => {
+        try {
+          const doc = typeof document === 'undefined' ? undefined : document
+          if (doc === undefined || typeof doc.addEventListener !== 'function') return undefined
+          const previous = doc.activeElement !== undefined && doc.activeElement !== null && typeof doc.activeElement.focus === 'function'
+            ? doc.activeElement
+            : null
+          /*
+           * 浮层节点的获取**惰性 + 兜底**：ref 在真实 React 里先于 effect 赋值，但"先赋值"
+           * 这件事不该是焦点管理的前提（桩渲染器、将来的并发渲染都可能不同步）。
+           * 拿不到 ref 就按稳定标记重新查一次，两条件都失败才放弃——放弃只意味着没有焦点
+           * 管理，绝不能因此抛错。
+           */
+          const dialogOf = () => {
+            if (dialogRef.current !== null && dialogRef.current !== undefined) return dialogRef.current
+            try {
+              if (typeof doc.querySelector === 'function') return doc.querySelector('[data-dib-editor="dialog"]')
+            } catch {
+              /* 选择器不支持时当作找不到 */
+            }
+            return null
+          }
+          const focusablesOf = () => {
+            const dialog = dialogOf()
+            if (dialog === null || dialog === undefined || typeof dialog.querySelectorAll !== 'function') return []
+            return [...dialog.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[href],[tabindex]:not([tabindex="-1"])')]
+              .filter((node) => node !== null && typeof node.focus === 'function')
+          }
+          const list = focusablesOf()
+          const dialog = dialogOf()
+          const first = (dialog !== null && dialog !== undefined && typeof dialog.focus === 'function' ? dialog : list[0])
+          if (first !== undefined && first !== null) {
+            try {
+              first.focus()
+            } catch {
+              /* 焦点落到不支持 focus 的节点上时忽略 */
+            }
+          }
+          const onKeyDown = (event) => {
+            if (event === null || typeof event !== 'object' || event.key !== 'Tab') return
+            const items = focusablesOf()
+            if (items.length === 0) return
+            const active = doc.activeElement
+            const index = items.indexOf(active)
+            // 焦点已经不在浮层里（或停在容器上）：下一个 Tab 直接拉回边界，别放它去背景。
+            const next = event.shiftKey === true
+              ? (index <= 0 ? items[items.length - 1] : items[index - 1])
+              : (index === -1 || index === items.length - 1 ? items[0] : items[index + 1])
+            if (next === undefined || next === null) return
+            if (typeof event.preventDefault === 'function') event.preventDefault()
+            try {
+              next.focus()
+            } catch {
+              /* 同上 */
+            }
+          }
+          doc.addEventListener('keydown', onKeyDown)
+          return () => {
+            try {
+              doc.removeEventListener('keydown', onKeyDown)
+            } catch {
+              /* 卸载期失败无所谓 */
+            }
+            // 关闭后把焦点还回打开它的那个元素——没有它，键盘用户等于被丢回页面开头。
+            if (previous !== null) {
+              try {
+                previous.focus()
+              } catch {
+                /* 原元素可能已经不在树上了 */
+              }
+            }
+          }
+        } catch {
+          return undefined
+        }
+      }, [])
+
       /*
        * 这条记录自己的凭据引用名（形状校验见 safeKeyRef）。
        *
@@ -1760,7 +1888,10 @@ window.__ModuleLoader__.load({
         h('div', { key: 'mask', className: 'dib-overlay-mask', onClick: close }),
         h('form', {
           key: 'dialog',
+          ref: dialogRef,
           className: 'dib-editor',
+          // 稳定标记：ref 之外的第二条路，焦点管理靠它重新找到浮层（见上面的 effect）。
+          'data-dib-editor': 'dialog',
           role: 'dialog',
           'aria-modal': 'true',
           'aria-labelledby': titleId,
@@ -2844,6 +2975,12 @@ window.__ModuleLoader__.load({
               disabled: disabled || busy,
               spellCheck: false,
               autoComplete: 'off',
+              /*
+               * 这个框只在选「自定义…」时出现，视觉上靠上方那个下拉说明自己是什么；
+               * 但读屏读到一个没有任何名字的文本框等于不可用，所以补一个等价名称
+               * （与手填模型框同一套做法：视觉删、语义留）。
+               */
+              'aria-label': tr('size.customLabel'),
               onChange: (event) => patch({ size: event.target.value }),
             }) : null,
             h('button', {

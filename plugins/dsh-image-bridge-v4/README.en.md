@@ -64,7 +64,7 @@ Green survives a page refresh: with no test result in this session, the card tre
 
 There is **no** "Set as current" button: primary and fallback already bind models to providers by role (`{ providerId, model }`), so "which provider is current" means nothing to the user.
 
-At the bottom of the list is the dashed **"＋ Add model provider"**. Clicking it — or **Edit** on a card — opens a centred dialog (translucent mask plus panel, `z-index: 1200`, above every host overlay). **Four ways to close it**: the × in the top-right corner, Cancel, clicking the mask, or Esc.
+At the bottom of the list is the dashed **"＋ Add model provider"**. Clicking it — or **Edit** on a card — opens a centred dialog (translucent mask plus panel, `z-index: 1200`, above every host overlay). **Four ways to close it**: the × in the top-right corner, Cancel, clicking the mask, or Esc. On open, focus moves into the dialog and **Tab cannot escape to the page behind it**; closing returns focus to the element that opened it. An unsaved key draft is not lost to a stray Esc either (while a dropdown is open, Esc closes only the dropdown).
 
 ### Edit dialog
 
@@ -270,11 +270,11 @@ dsh-image-bridge-v4/
 └── icon.svg            Plugin icon
 ```
 
-The regression suites live in `.dib-verify/` at the repository root. They need **no network and no real key**, and total 385 assertions:
+The regression suites live in `.dib-verify/` at the repository root. They need **no network and no real key**, and total 390 assertions:
 
 ```bash
 node .dib-verify/verify-manifest.mjs   # 41
-node .dib-verify/verify-client.mjs     # 157
+node .dib-verify/verify-client.mjs     # 162
 node .dib-verify/verify-host.mjs       # 143
 node .dib-verify/verify-security.mjs   # 12
 node .dib-verify/verify-resolve.mjs    # 8

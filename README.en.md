@@ -11,7 +11,7 @@ English | [中文](README.md)
 
 Give a [DeepSeek Harness](https://github.com/deepseek-ai) model that **cannot draw** access to an external image service: install one plugin and the model gains two tools — `image_generate` and `image_edit` — with each result shown in the conversation as a persistent image attachment and saved to `generated-images/` in the session workspace.
 
-> 📷 Screenshot pending: take one on **Settings → Image Bridge** and drop it at `docs/settings-en.png`.
+![Image Bridge settings page](docs/settings-en.png)
 
 ## Install
 
@@ -75,14 +75,14 @@ Three self-diagnostics land in `$DSH_HOME/`:
 
 ```sh
 node .dib-verify/verify-manifest.mjs   # 41   manifest and cross-file consistency
-node .dib-verify/verify-client.mjs     # 157  client registration and component rendering
+node .dib-verify/verify-client.mjs     # 162  client registration and component rendering
 node .dib-verify/verify-host.mjs       # 143  host end to end
 node .dib-verify/verify-security.mjs   # 12   security boundaries (SSRF refusal, response cap)
 node .dib-verify/verify-resolve.mjs    # 8    dependency resolution robustness
 node .dib-verify/verify-upgrade.mjs    # 24   user config survives an upgrade
 ```
 
-**385 assertions**, no network and no real API key needed. The cross-process end-to-end run additionally needs the local mock service:
+**390 assertions**, no network and no real API key needed. The cross-process end-to-end run additionally needs the local mock service:
 
 ```sh
 node .dib-verify/mock-image-api.mjs 8799   # in a second terminal
