@@ -21,7 +21,7 @@ plugin_manager  action: install_bundle
 
 Installation writes a `link:` dependency into the profile and inserts the plugin row into the profile's config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). **Restart `dsh web` afterwards**, then open **Settings → Image Bridge**.
 
-Package name `@local/dsh-image-bridge` (the `@local/` prefix is DSH convention for a locally authored plugin that is not published to npm), version `0.2.1`.
+Package name `@local/dsh-image-bridge` (the `@local/` prefix is DSH convention for a locally authored plugin that is not published to npm), version `0.2.2`.
 
 ### The three installation situations
 
@@ -87,7 +87,7 @@ The entry point is **Settings → Image Bridge**. Top to bottom the page is: pag
 
 ### Page header
 
-`[icon] Image Bridge  dsh-image-bridge  v0.2.1`, with one subtitle line below. The badge links to the GitHub repository (opens in a new tab) and shows only the repository name — no `@local/` prefix. The icon follows the theme colour.
+`[icon] Image Bridge  dsh-image-bridge  v0.2.2`, with one subtitle line below. The badge links to the GitHub repository (opens in a new tab) and shows only the repository name — no `@local/` prefix. The icon follows the theme colour.
 
 ### The icon has two sources (do not edit the wrong one)
 
@@ -112,13 +112,13 @@ Each card is a **single row**: a status light, the name (with a lighter status l
 
 | Element | Meaning |
 | --- | --- |
-| Status light | Green = this provider works; red = a test or model fetch failed in **this session**; grey = never succeeded and never tested (hover for text) |
+| Status light | Green = this provider works (**two sources**, see below); red = a test or model fetch failed in **this session**; grey = never succeeded and never tested (hover for text) |
 | Name | Whatever you typed when creating the card; the derived id when blank |
-| Status line | Same source as the light: green says "Connected", red says "Connection failed", grey says "Not tested" |
+| Status line | Same source as the light, **four states**: tested in this session → "Connected"; green without a test this session → "Worked before (model list saved; not tested this session)"; red → "Connection failed"; grey → "Not tested" |
 | Failure reason | An extra line only on failure; **reasons belong to one provider**, so a failure at A never shows up on B |
 | Buttons | Test / Edit / Delete (delete is two-step: "Delete", then "Confirm delete") |
 
-Green survives a page refresh: with no test result in this session, the card treats "this provider has a saved model list" as a **persistent signal**. Failure state stays in memory only and is never written to config. Base URL, models, and key status all live inside the **Edit** dialog.
+Green survives a page refresh: with no test result in this session, the card treats "this provider has a saved model list" as a **persistent signal** — but the UI now **says so**, reading "Worked before", instead of claiming "Connected". That is deliberate: the signal only proves it worked at some point, the key may since have been revoked, and the UI does not re-verify. Calling both situations "Connected" would be **over-promising**. Failure state stays in memory only and is never written to config. Base URL, models, and key status all live inside the **Edit** dialog.
 
 There is **no** "Set as current" button: primary and fallback already bind models to providers by role (`{ providerId, model }`), so "which provider is current" means nothing to the user.
 
@@ -364,11 +364,11 @@ For maintainers, one line each:
 
 ## Tests
 
-The regression suites live in `.dib-verify/` at the repository root. They need **no network and no real key**, and the six of them total **414 assertions** (measured):
+The regression suites live in `.dib-verify/` at the repository root. They need **no network and no real key**, and the six of them total **425 assertions** (measured):
 
 ```bash
 node .dib-verify/verify-manifest.mjs   # 47
-node .dib-verify/verify-client.mjs     # 169
+node .dib-verify/verify-client.mjs     # 180
 node .dib-verify/verify-host.mjs       # 147
 node .dib-verify/verify-security.mjs   # 19
 node .dib-verify/verify-resolve.mjs    # 8

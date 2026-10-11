@@ -42,7 +42,7 @@ dsh plugin --profile web add <克隆下来的仓库绝对路径>/plugins/dsh-ima
 
 ### 关于名字与重启
 
-- 包名 `@local/dsh-image-bridge`，版本 **0.2.1**。`@local/` 是 DSH 给本地自作插件的官方命名约定（作用是不与 npm 上的真包撞名），**不发布到 npm**；设置页徽标只显示 `dsh-image-bridge`，不显示这个前缀。
+- 包名 `@local/dsh-image-bridge`，版本 **0.2.2**。`@local/` 是 DSH 给本地自作插件的官方命名约定（作用是不与 npm 上的真包撞名），**不发布到 npm**；设置页徽标只显示 `dsh-image-bridge`，不显示这个前缀。
 - 安装会把插件行加进 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。目录名与行 id 里那个 `-v4` 是**内部重写版本号**，只用于避免与本机旧副本冲突，对使用没有影响。
 - **装完必须重启 `dsh web`**：插件代码不会被热重载，重启前设置页不会出现。
 
@@ -125,14 +125,14 @@ dsh plugin --profile web remove @local/dsh-image-bridge
 
 ```sh
 node .dib-verify/verify-manifest.mjs   # 47   清单与跨文件一致性
-node .dib-verify/verify-client.mjs     # 169  客户端注册与组件渲染
+node .dib-verify/verify-client.mjs     # 180  客户端注册与组件渲染
 node .dib-verify/verify-host.mjs       # 147  Host 端到端
 node .dib-verify/verify-security.mjs   # 19   安全边界（SSRF 拒收、回包上限）
 node .dib-verify/verify-resolve.mjs    # 8    依赖解析健壮性
 node .dib-verify/verify-upgrade.mjs    # 24   升级后用户配置是否保留
 ```
 
-共 **414 条断言**，无需联网、无需真实密钥。跨进程端到端另需先起一个本地模拟接口：
+共 **425 条断言**，无需联网、无需真实密钥。跨进程端到端另需先起一个本地模拟接口：
 
 ```sh
 node .dib-verify/mock-image-api.mjs 8799   # 另开一个终端
@@ -164,7 +164,7 @@ generated-images/              生图输出（已忽略，不入库）
 | 文档 | 内容 |
 | --- | --- |
 | [插件完整说明](plugins/dsh-image-bridge-v4/README.md) | 配置项、行为细节、排查、实现要点 |
-| [变更记录](CHANGELOG.md) | 每个版本改了什么（当前 **v0.2.1**） |
+| [变更记录](CHANGELOG.md) | 每个版本改了什么（当前 **v0.2.2**） |
 | [验证报告](.dib-verify/verify-report.md) · [第二轮](.dib-verify/verify-report-2.md) | 独立验证结论（含未覆盖范围） |
 
 ## 反馈

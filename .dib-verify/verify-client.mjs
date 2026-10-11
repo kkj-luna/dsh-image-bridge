@@ -556,6 +556,47 @@ const settledBlock = (meta, extra) => ({
     JSON.stringify(textOfElement(renderWith(zhDict)).slice(0, 120)),
   )
 
+  /*
+   * 图片在**浏览器层面**加载失败也要收（A4）。
+   *
+   * 上面那条 promise 只覆盖"拿地址"：`loadImage` 成功返回一个地址，不代表这个地址真能取到图
+   * （附件被清理、地址过期、文件被删）。没有 `onError` 时卡片会留下一个**裂图占位**——用户看到
+   * 半张图加一个系统破图图标，而不是一句能看懂的话。
+   *
+   * 做法：用 `peek` 让地址**同步**可用（首帧就渲染出 `img`），触发它的 `onError`，
+   * 再渲染一次——桩 React 的 hook 状态是共享的，所以第二次渲染能看到 `failed` 已置位。
+   */
+  {
+    const url = 'data:image/png;base64,AAAA'
+    const peekLoader = Object.assign(() => Promise.resolve(url), { peek: () => url })
+    /*
+     * 必须用 `createSession`：一次性渲染里 `setState` 是空函数（见上面那段说明），
+     * 触发 onError 之后界面不会变。会话把 hook 状态按组件实例持久化，重渲染才看得到结果。
+     */
+    const imgSession = createSession(ImageResultRow, {
+      t: (key) => zhDict[key] ?? key,
+      toolName: 'image_generate',
+      loadImage: peekLoader,
+      phase: 'result',
+      block: pendingBlock,
+    })
+    let imgTree = imgSession.tree()
+    const imgNode = imgTree.nodes.find((node) => node.type === 'img' && node.props?.className === 'dib-image')
+    check(
+      '图片元素挂了 onError（否则浏览器层加载失败会留一个裂图）',
+      imgNode !== undefined && typeof imgNode.props?.onError === 'function',
+      JSON.stringify({ found: imgNode !== undefined, hasOnError: typeof imgNode?.props?.onError }),
+    )
+    imgSession.fire(imgNode?.props?.onError)
+    imgTree = imgSession.tree()
+    check(
+      'onError 之后换成可读文案，且不再渲染那个 img（不留裂图占位）',
+      imgTree.text.includes(zhDict['image.loadFailed'])
+        && imgTree.nodes.every((node) => node.props?.className !== 'dib-image'),
+      JSON.stringify({ text: imgTree.text.slice(0, 90) }),
+    )
+  }
+
   /* 失败且没有正文时，不能出现那句写死的 'unknown error'。 */
   const failedBlock = settledBlock(undefined, {
     kind: 'tool-result',
@@ -798,8 +839,9 @@ const openDropdownTree = (session, id) => {
   if (menuOf(before, id) === undefined) session.click(triggerById(before, id))
   return session.tree()
 }
-const keyDownOn = (session, node, key) => {
-  session.fire(node?.props?.onKeyDown, { key, preventDefault() {} })
+const keyDownOn = (session, node, key, extra) => {
+  // `extra` 用来带修饰键（type-ahead 必须忽略 Ctrl/Meta/Alt 组合，好据此验证）。
+  session.fire(node?.props?.onKeyDown, { key, preventDefault() {}, ...(extra ?? {}) })
 }
 
 globalThis.fetch = async (url, init) => {
@@ -1087,10 +1129,18 @@ function sectionWithRecording(settingsValue, options) {
   const updates = []
   const credentialSets = []
   const describedRefs = []
+  /*
+   * `gateUpdates`：让 `update` 一直挂着，直到测试手动放行。
+   * 用途是验证"第一次保存还没回来时又提交一次"——用立刻返回的桩根本测不到那个窗口，
+   * 而那正是重复落盘（写两遍配置、必要时写两遍密钥）发生的地方。
+   */
+  let releaseGate
+  const gate = opts.gateUpdates === true ? new Promise((resolve) => { releaseGate = resolve }) : null
   const settings = {
     describe: async () => ({ ok: true, value: { writable: true, namespaces: [{ ns: 'image-bridge-v4', value: settingsValue, revision: 1 }] } }),
     update: async (ns, patch, revision) => {
       updates.push({ ns, patch, revision })
+      if (gate !== null) await gate
       // `updateFails` 用来验证"失败提示仍然显示"（成功提示已经不渲染了）。
       return opts.updateFails === true
         ? { ok: false, error: { code: 'write-rejected', message: opts.updateError ?? '保存失败：配置不可写' } }
@@ -1113,7 +1163,7 @@ function sectionWithRecording(settingsValue, options) {
       return undefined
     },
   })
-  return { component, updates, credentialSets, describedRefs }
+  return { component, updates, credentialSets, describedRefs, releaseGate: () => releaseGate?.() }
 }
 
 const providerRecord = {
@@ -1252,15 +1302,23 @@ const cardStatusTextOf = (tree) => {
 }
 const cardStatusClassOf = (tree) => tree.nodes.find((entry) => entry.props?.className === 'dib-card-status')?.props?.className ?? ''
 check(
-  '卡片名称下方是状态小字：已连接 / 连接失败 / 未测试（灰点也有解释）',
+  /*
+   * A6：绿灯有**两种来源**，小字必须跟着分。
+   *   - 本次会话真测过（`cardTree`）→「已连接」
+   *   - 只是"保存过模型列表"这个**持久信号**（`persistedTree`）→「以前可用…」
+   * 都写「已连接」就是过承诺：密钥可能早已被吊销，而界面并不会去重新验证。
+   * 这条以前把"两种来源同一句话"当成正确行为，现在按更精确的口径钉住。
+   */
+  '卡片名称下方是状态小字：已连接 / 连接失败 / 未测试，且"以前能用"与"本次测过"分得清',
   cardStatusTextOf(cardTree) === '已连接'
     && cardStatusTextOf(failTree) === '连接失败'
     && cardStatusTextOf(idleTree) === '未测试'
-    && cardStatusTextOf(persistedTree) === '已连接',
-  JSON.stringify({ ok: cardStatusTextOf(cardTree), fail: cardStatusTextOf(failTree), idle: cardStatusTextOf(idleTree) }).slice(0, 200),
+    && cardStatusTextOf(persistedTree) === zhDict['provider.status.worked']
+    && cardStatusTextOf(persistedTree) !== cardStatusTextOf(cardTree),
+  JSON.stringify({ ok: cardStatusTextOf(cardTree), fail: cardStatusTextOf(failTree), idle: cardStatusTextOf(idleTree), persisted: cardStatusTextOf(persistedTree) }).slice(0, 240),
 )
 check(
-  '状态小字是独立的弱化类（与名称不同类），且 zh/en 词典都有这三条文案',
+  '状态小字是独立的弱化类（与名称不同类），且 zh/en 词典四条文案齐备、两两不同',
   cardStatusClassOf(cardTree) === 'dib-card-status'
     && cardStatusClassOf(cardTree) !== 'dib-card-name'
     && zhDict['provider.status.ok'] === '已连接'
@@ -1268,8 +1326,13 @@ check(
     && zhDict['provider.status.untested'] === '未测试'
     && enDict['provider.status.ok'] === 'Connected'
     && enDict['provider.status.fail'] === 'Connection failed'
-    && enDict['provider.status.untested'] === 'Not tested',
-  JSON.stringify({ cls: cardStatusClassOf(cardTree), zh: zhDict['provider.status.ok'], en: enDict['provider.status.ok'] }).slice(0, 200),
+    && enDict['provider.status.untested'] === 'Not tested'
+    // 第四档（以前可用）中英都要有，且与「已连接」不是同一句话
+    && typeof zhDict['provider.status.worked'] === 'string' && zhDict['provider.status.worked'] !== ''
+    && typeof enDict['provider.status.worked'] === 'string' && enDict['provider.status.worked'] !== ''
+    && zhDict['provider.status.worked'] !== zhDict['provider.status.ok']
+    && enDict['provider.status.worked'] !== enDict['provider.status.ok'],
+  JSON.stringify({ cls: cardStatusClassOf(cardTree), zh: zhDict['provider.status.worked'], en: enDict['provider.status.worked'] }).slice(0, 240),
 )
 check(
   '状态小字与状态灯同源：四种情形下点色与文案一一对应，不会出现「绿点写着连接失败」',
@@ -1278,14 +1341,14 @@ check(
       [cardTree, 'dib-dot dib-dot-ok', '已连接'],
       [failTree, 'dib-dot dib-dot-fail', '连接失败'],
       [idleTree, 'dib-dot', '未测试'],
-      [persistedTree, 'dib-dot dib-dot-ok', '已连接'],
+      [persistedTree, 'dib-dot dib-dot-ok', zhDict['provider.status.worked']],
     ]
     return pairs.every(([tree, dot, text]) => dotClassOf(tree) === dot && cardStatusTextOf(tree) === text)
       // 反向也钉一下：红灯不能写"已连接"、绿灯不能写"连接失败"。
       && cardStatusTextOf(failTree) !== '已连接'
       && cardStatusTextOf(cardTree) !== '连接失败'
   })(),
-  JSON.stringify({ ok: `${dotClassOf(cardTree)}/${cardStatusTextOf(cardTree)}`, fail: `${dotClassOf(failTree)}/${cardStatusTextOf(failTree)}`, idle: `${dotClassOf(idleTree)}/${cardStatusTextOf(idleTree)}` }).slice(0, 220),
+  JSON.stringify({ ok: `${dotClassOf(cardTree)}/${cardStatusTextOf(cardTree)}`, fail: `${dotClassOf(failTree)}/${cardStatusTextOf(failTree)}`, idle: `${dotClassOf(idleTree)}/${cardStatusTextOf(idleTree)}`, persisted: `${dotClassOf(persistedTree)}/${cardStatusTextOf(persistedTree)}` }).slice(0, 260),
 )
 check(
   '状态小字就在名称下方（同一个 identity 列里、紧随名称之后）',
@@ -1356,20 +1419,21 @@ const reasonDebug = {
   methods: rpcCalls.map((call) => call.method).slice(-3),
 }
 check(
-  '测试失败的原因只出现在这一张卡片上（另一家仍是已连接、没有那一行）',
+  '测试失败的原因只出现在这一张卡片上（另一家仍扛着绿灯、没有那一行）',
   firstCardTest !== undefined
     && reasonTextOf(afterFirstTree, '智谱') === '连接失败：401 密钥被拒绝'
     && reasonTextOf(afterFirstTree, 'OpenAI') === ''
-    && reasonStatusClassOf(afterFirstTree).join(',') === '连接失败,已连接',
+    // 另一家本次没测过（绿灯来自"保存过模型列表"），所以小字是「以前可用…」而不是「已连接」。
+    && reasonStatusClassOf(afterFirstTree).join(',') === `连接失败,${zhDict['provider.status.worked']}`,
   JSON.stringify({ ...reasonDebug, zhipu: reasonTextOf(afterFirstTree, '智谱'), openai: reasonTextOf(afterFirstTree, 'OpenAI'), statuses: reasonStatusClassOf(afterFirstTree) }).slice(0, 320),
 )
 check(
-  '卡片状态小字仍保留三态且与状态灯同源（本次改动没有破坏它）',
-  reasonStatusClassOf(afterFirstTree).join(',') === '连接失败,已连接'
+  '卡片状态小字与状态灯同源（本次改动没有破坏它）：失败的那家写「连接失败」，另一家是绿灯',
+  reasonStatusClassOf(afterFirstTree).join(',') === `连接失败,${zhDict['provider.status.worked']}`
     && dotClassOf(afterFirstTree) === 'dib-dot dib-dot-fail'
     && cardStatusTextOf(cardTree) === '已连接'
     && cardStatusTextOf(idleTree) === '未测试',
-  JSON.stringify({ statuses: reasonStatusClassOf(afterFirstTree), dot: dotClassOf(afterFirstTree) }).slice(0, 160),
+  JSON.stringify({ statuses: reasonStatusClassOf(afterFirstTree), dot: dotClassOf(afterFirstTree) }).slice(0, 200),
 )
 check(
   '成功时不出现失败原因那一行（状态小字「已连接」已经说清了）',
@@ -1428,6 +1492,17 @@ check(
     row: statusRowsOf(okStatusTree).map((node) => textOfElement(node).trim()),
     cls: statusRowsOf(okStatusTree).map((node) => node.props?.className),
   }).slice(0, 220),
+)
+/*
+ * A10：这一行是**单行省略**的（`.dib-status-inline` 带 text-overflow:ellipsis），而服务商的报错
+ * 经常很长（带 URL、状态码、响应正文片段）。没有 `title` 时用户只能看到半句话——"看不全错误"
+ * 等于"没法排查"。断言把它钉住：文案是什么，悬停就该读到什么，一个字都不能少。
+ */
+check(
+  '状态行带 title = 完整文案（单行省略时悬停能看全，否则错误会被截断成半句话）',
+  statusRowsOf(okStatusTree)[0]?.props?.title === textOfElement(statusRowsOf(okStatusTree)[0]).trim()
+    && statusRowsOf(okStatusTree)[0]?.props?.title === '已保存',
+  JSON.stringify({ title: statusRowsOf(okStatusTree)[0]?.props?.title ?? null }).slice(0, 120),
 )
 
 const failStatusBundle = sectionWithRecording({ size: '1024x1024' }, { updateFails: true, updateError: '保存失败：配置不可写' })
@@ -1508,6 +1583,25 @@ check(
     // 悬停要有可点击的视觉反馈，且只用主题令牌
     && /\.dib-page-badge:hover\{[^}]*var\(--dsw-/u.test(styles.map((style) => style.textContent).join('')),
   JSON.stringify({ badge: badgeText, title: badgeNode?.props?.title ?? null }).slice(0, 220),
+)
+/*
+ * A12：徽标的可访问名称必须走语言包。它是页头唯一的链接，硬编码中文会在英文界面里让读屏
+ * 读出中文——"半个界面是外语"这种问题没人会专门提 issue，但它是实打实的缺陷。
+ */
+check(
+  '③b 徽标 aria-label 走语言包（中英各一条、占位符都替换、两版文案不同）',
+  (() => {
+    const zhLabel = zhDict['badge.label']
+    const enLabel = enDict['badge.label']
+    const aria = badgeNode?.props?.['aria-label'] ?? ''
+    return typeof zhLabel === 'string' && typeof enLabel === 'string' && zhLabel !== enLabel
+      && zhLabel.includes('{repo}') && zhLabel.includes('{version}') && zhLabel.includes('{url}')
+      && enLabel.includes('{repo}') && enLabel.includes('{version}') && enLabel.includes('{url}')
+      // 中文界面下渲染出来的不该含未替换的占位符，也不该出现英文模板
+      && !aria.includes('{') && aria.includes(repoName) && aria.includes(manifestJson.version)
+      && aria.includes(repoUrl)
+  })(),
+  JSON.stringify({ zh: zhDict['badge.label'], en: enDict['badge.label'], aria: badgeNode?.props?.['aria-label'] ?? null }).slice(0, 240),
 )
 const iconSvgText = await readFile(`${ROOT}/icon.svg`, 'utf8')
 /* 只比对几何数据（stub React 会把 key 留在 props 里，真实 React 不会）。 */
@@ -2695,6 +2789,118 @@ check(
 )
 
 /*
+ * A7 / A8：重复提交。
+ *
+ * 保存是异步的，而 `state.phase` 要等一次渲染才变成 `saving`。**回车连按两下**（或"回车 +
+ * 紧接着点保存"）正好落在这个窗口里：没有同步闸门时会发出两次 `onSubmit`，于是写两遍配置、
+ * 必要时还会写两遍密钥。这里让第一次 `update` 一直挂住，模拟那个窗口。
+ */
+{
+  const gateBundle = sectionWithRecording({ size: '1024x1024' }, { gateUpdates: true })
+  const gateSession = createSession(gateBundle.component, {
+    t: undefined,
+    close: () => {},
+    __initial: {
+      phase: 'idle',
+      providers: [],
+      activeProviderId: '',
+      editor: {
+        mode: 'add',
+        initial: {
+          label: 'Gate Provider',
+          baseUrl: 'https://api.example.com/v1',
+          keyRef: '',
+          models: ['m-alpha'],
+          imageModel: 'm-alpha',
+          editModel: '',
+          keyDraft: 'sk-gate-secret',
+        },
+      },
+    },
+  })
+  let gateTree = gateSession.tree()
+  const form = gateTree.forms[0]
+  /* 连续两次提交，中间**不**等待：第二次必须在同步闸门处被挡住。 */
+  form.props.onSubmit({ preventDefault() {} })
+  form.props.onSubmit({ preventDefault() {} })
+  await sleep(30)
+  const duringGate = gateBundle.updates.length
+  /*
+   * 只断言"配置只落一次"。密钥写入发生在 update **之后**（这一步此刻正被挂着），
+   * 所以现在 credentialSets 必然是 0——那是闸门在起作用，不是缺陷。
+   */
+  check(
+    'A7/A8 第一次保存还没回来时再提交一次，只落一次盘（不会写两遍配置）',
+    duringGate === 1,
+    JSON.stringify({ updates: duringGate, credentialSets: gateBundle.credentialSets.length }),
+  )
+  /* 放行第一次，闸门必须复位——否则用户第二次点保存会被**无声吞掉**。 */
+  gateBundle.releaseGate()
+  await sleep(40)
+  /*
+   * 复位用**页面级的「保存尺寸」按钮**来验：上面那次保存成功后浮层会正常关闭（这是对的行为），
+   * 没有浮层就没有表单可提交。保存尺寸走的是同一把闸门（`pendingRef`），
+   * 所以它能证明"提交结束后锁被释放了"——这正是这里要钉住的。
+   */
+  gateTree = gateSession.tree()
+  const sizeSaveOf = (tree) => tree.nodes.find((node) => node.type === 'button' && node.props?.['data-dib-action'] === 'save-size')
+    ?? tree.buttons.find((button) => textOfElement(button).trim() === '保存尺寸')
+  gateSession.click(sizeSaveOf(gateTree))
+  await sleep(40)
+  /*
+   * 期望 2 而不是 1：这条断言要证明的是"锁被释放了"（所以第二次点击真的落盘了）。
+   * 桩把**每一次** update 都挂住，所以这次点击本身也停在挂起状态——不影响结论。
+   */
+  check(
+    'A7/A8 一次提交结束后闸门复位（保存成功后仍能再次保存）',
+    gateBundle.updates.length === 2,
+    JSON.stringify({ updates: gateBundle.updates.length, clicked: sizeSaveOf(gateTree) !== undefined }),
+  )
+  gateBundle.releaseGate()
+  await sleep(30)
+}
+
+/*
+ * A7/A8 的第二半：**四条保存路径共用同一把锁**。
+ *
+ * A19 之后它们写的是同一套完整字段，两个保存并发时后落盘的那个会把前一个的结果整片覆盖
+ * （各自读的是自己那份快照，谁后写谁赢）。所以"尺寸保存"与"提供商保存"必须互斥——
+ * 这条断言在缺口存在时会红（实测：补锁之前 `saveSize` 与 `saveRoutes` 都没走闸门）。
+ */
+{
+  const mixBundle = sectionWithRecording({ size: '1024x1024' }, { gateUpdates: true })
+  const mixSession = createSession(mixBundle.component, {
+    t: undefined,
+    close: () => {},
+    __initial: {
+      phase: 'idle',
+      providers: [],
+      activeProviderId: '',
+      editor: {
+        mode: 'add',
+        initial: { label: 'Mix Provider', baseUrl: 'https://api.example.com/v1', keyRef: '', models: ['m-alpha'], imageModel: 'm-alpha', editModel: '' },
+      },
+    },
+  })
+  let mixTree = mixSession.tree()
+  // 提供商保存先挂住，然后立刻点「保存尺寸」——它必须被同一把锁挡住。
+  mixTree.forms[0].props.onSubmit({ preventDefault() {} })
+  await sleep(20)
+  const afterSubmit = mixBundle.updates.length
+  const sizeButton = mixTree.nodes.find((node) => node.type === 'button' && node.props?.['data-dib-action'] === 'save-size')
+    ?? mixTree.buttons.find((button) => textOfElement(button).trim() === '保存尺寸')
+  mixSession.click(sizeButton)
+  await sleep(30)
+  check(
+    'A7/A8 提供商保存进行中时，保存尺寸被同一把锁挡住（两条路写同一套字段，并发会互相覆盖）',
+    afterSubmit === 1 && mixBundle.updates.length === 1,
+    JSON.stringify({ afterSubmit, total: mixBundle.updates.length }),
+  )
+  mixBundle.releaseGate()
+  await sleep(40)
+}
+
+/*
  * A19 的回归防线：这一页有四处保存（删除提供商 / 保存提供商 / 保存模型设置 / 保存尺寸），
  * 它们写的是**同一行配置**。只要有一条路径只写自己那部分，就会出现「甲写一半、乙写另一半」
  * 的窗口——用户在 A 处的改动可能被 B 处的保存留在旧值上。
@@ -3194,9 +3400,80 @@ check(
   })(),
   JSON.stringify({ scrollCalls: domCalls.scrollIntoView.length, last: domCalls.scrollIntoView[domCalls.scrollIntoView.length - 1] ?? null }).slice(0, 200),
 )
+
+/* ------------------------------------------------------------------ *
+ * ⑥ 输入跳转（type-ahead）
+ *
+ * 模型下拉在真实配置里能有 176 项（实测某服务商 `/models`），只能靠上下键一格格翻；
+ * 用户知道模型名，键盘却帮不上忙。这三条分别钉住：能跳、重复字符会轮换、修饰键不参与搜索。
+ * ------------------------------------------------------------------ */
+{
+  const activeValue = () => menuItemsOf(menuOf(menuTree, PRIMARY))
+    .find((item) => String(item.props.className).includes('is-active'))?.props['data-value'] ?? null
+  menuTree = openDropdownTree(menuSession, PRIMARY)
+  // 打开时高亮在"当前选中项"上，先记下来，好证明输入真的把高亮挪到了别处。
+  const atOpenTyped = activeValue()
+  keyDownOn(menuSession, triggerById(menuTree, PRIMARY), 'z')
+  menuTree = menuSession.tree()
+  const afterZ = activeValue()
+  check(
+    '⑥ 输入单个字符跳到第一个匹配项（176 项也不必靠上下键翻）',
+    afterZ !== null && afterZ.endsWith('::z-image-turbo') && afterZ !== atOpenTyped,
+    JSON.stringify({ atOpen: atOpenTyped, afterZ }),
+  )
+
+  // 重复同一个字符 → 轮换到下一个同前缀项（标准 type-ahead 行为，否则"第三个 w 开头"没法跳）。
+  // 先关再开：搜索缓冲按设计只在"这一次打开"内有效，这样也顺带让本用例不依赖上一条的残留。
+  keyDownOn(menuSession, triggerById(menuTree, PRIMARY), 'Escape')
+  menuTree = menuSession.tree()
+  menuTree = openDropdownTree(menuSession, PRIMARY)
+  keyDownOn(menuSession, triggerById(menuTree, PRIMARY), 'w')
+  menuTree = menuSession.tree()
+  const firstW = activeValue()
+  keyDownOn(menuSession, triggerById(menuTree, PRIMARY), 'w')
+  menuTree = menuSession.tree()
+  const secondW = activeValue()
+  check(
+    '⑥ 连续重复同一字符会轮换到下一个同前缀项',
+    firstW !== null && secondW !== null && firstW !== secondW
+      && firstW.includes('::w') && secondW.includes('::w'),
+    JSON.stringify({ firstW, secondW }),
+  )
+
+  /*
+   * 搜索缓冲**不跨交互存活**：上次搜过 `z`、关掉再打开按 `w`，必须按"新的搜索"处理，
+   * 而不是拼成 `zw`（那样匹配不到任何项，表现为输入跳转静默失灵——这是实测踩到的）。
+   */
+  keyDownOn(menuSession, triggerById(menuTree, PRIMARY), 'Escape')
+  menuTree = menuSession.tree()
+  menuTree = openDropdownTree(menuSession, PRIMARY)
+  keyDownOn(menuSession, triggerById(menuTree, PRIMARY), 'z')
+  menuTree = menuSession.tree()
+  const zHit = activeValue()
+  keyDownOn(menuSession, triggerById(menuTree, PRIMARY), 'Escape')
+  menuTree = menuSession.tree()
+  menuTree = openDropdownTree(menuSession, PRIMARY)
+  keyDownOn(menuSession, triggerById(menuTree, PRIMARY), 'w')
+  menuTree = menuSession.tree()
+  const wAfterReopen = activeValue()
+  check(
+    '⑥ 搜索缓冲不跨交互存活（关掉再打开按新字符，不会拼成上一次的词）',
+    String(zHit).includes('::z-') && String(wAfterReopen).includes('::w'),
+    JSON.stringify({ zHit, wAfterReopen }),
+  )
+
+  // 带修饰键的组合不是输入（否则 Ctrl+A、Cmd+F 会被当成搜索词）。
+  const beforeModifier = activeValue()
+  keyDownOn(menuSession, triggerById(menuTree, PRIMARY), 'a', { ctrlKey: true })
+  menuTree = menuSession.tree()
+  check(
+    '⑥ 带 Ctrl / Meta / Alt 的按键不当作输入（不会把快捷键吃成搜索词）',
+    activeValue() === beforeModifier,
+    JSON.stringify({ before: beforeModifier, after: activeValue() }),
+  )
+}
 check(
-  '⑥ 分组是**不可点**的小标题（role=presentation、没有点击处理），并沿用「— 名称 —」大写标记',
-  (() => {
+  '⑥ 分组是**不可点**的小标题（role=presentation、没有点击处理），并沿用「— 名称 —」大写标记',  (() => {
     menuTree = openDropdownTree(menuSession, PRIMARY)
     const groups = menuGroupsOf(menuOf(menuTree, PRIMARY))
     return groups.length === 3

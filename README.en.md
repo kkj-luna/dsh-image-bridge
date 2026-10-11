@@ -42,7 +42,7 @@ dsh plugin --profile web add <absolute path to the cloned repo>/plugins/dsh-imag
 
 ### About the names, and the restart
 
-- Package name `@local/dsh-image-bridge`, version **0.2.1**. The `@local/` prefix is DSH's official convention for locally authored plugins — it exists so a local plugin never collides with a real npm package — and the plugin is **not published to npm**. The settings-page badge shows only `dsh-image-bridge`, without that prefix.
+- Package name `@local/dsh-image-bridge`, version **0.2.2**. The `@local/` prefix is DSH's official convention for locally authored plugins — it exists so a local plugin never collides with a real npm package — and the plugin is **not published to npm**. The settings-page badge shows only `dsh-image-bridge`, without that prefix.
 - Installation adds the plugin row to the profile config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). The `-v4` in that directory name and row id is an **internal rewrite counter**, there only to avoid colliding with older copies on the same machine; it means nothing for day-to-day use.
 - **Restart `dsh web` afterwards** — plugin code is not hot-reloaded, and the settings page will not appear before the restart.
 
@@ -125,14 +125,14 @@ Start with the **status light** and the failure reason on the card — most answ
 
 ```sh
 node .dib-verify/verify-manifest.mjs   # 47   manifest and cross-file consistency
-node .dib-verify/verify-client.mjs     # 169  client registration and component rendering
+node .dib-verify/verify-client.mjs     # 180  client registration and component rendering
 node .dib-verify/verify-host.mjs       # 147  host end to end
 node .dib-verify/verify-security.mjs   # 19   security boundaries (SSRF refusal, response cap)
 node .dib-verify/verify-resolve.mjs    # 8    dependency resolution robustness
 node .dib-verify/verify-upgrade.mjs    # 24   user config survives an upgrade
 ```
 
-**414 assertions**, no network and no real API key needed. The cross-process end-to-end run additionally needs the local mock service:
+**425 assertions**, no network and no real API key needed. The cross-process end-to-end run additionally needs the local mock service:
 
 ```sh
 node .dib-verify/mock-image-api.mjs 8799   # in a second terminal
@@ -164,7 +164,7 @@ generated-images/              generated output (ignored, not committed)
 | Document | Contents |
 | --- | --- |
 | [Full plugin guide](plugins/dsh-image-bridge-v4/README.md) (Chinese) | configuration, behaviour details, troubleshooting, implementation notes |
-| [Changelog](CHANGELOG.md) | what changed in each version (currently **v0.2.1**) |
+| [Changelog](CHANGELOG.md) | what changed in each version (currently **v0.2.2**) |
 | [Verification report](.dib-verify/verify-report.md) · [second round](.dib-verify/verify-report-2.md) | independent verification results, including what was not covered |
 
 ## Feedback

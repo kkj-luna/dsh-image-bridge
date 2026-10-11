@@ -186,6 +186,13 @@ window.__ModuleLoader__.load({
         'label.model': '模型',
         'label.file': '文件',
         'nav': '生图桥',
+        /*
+         * 页头徽标的可访问名称。`{repo}` / `{version}` 由界面替换。
+         *
+         * 走语言包而不是写死在 JSX 里：徽标是页头唯一的链接，读屏用户听到的应当和界面语言一致，
+         * 硬编码中文会在英文界面里读出中文（这类"半个界面是外语"的问题没人会专门提 issue）。
+         */
+        'badge.label': '生图桥 仓库 {repo}，版本 {version}（在新标签页打开 {url}）',
         'intro': '为你的 DeepSeek Harness 接上外部生图模型',
         'loading': '正在载入当前配置…',
         'unavailable': '配置界面暂时不可用（未能连上 Host 的配置服务）',
@@ -207,6 +214,14 @@ window.__ModuleLoader__.load({
         'dot.fail': '最近一次测试连接失败',
         'dot.untested': '尚未测试连接',
         'dot.connected': '已获取到可用模型列表',
+        /*
+         * 状态小字的第四档：绿灯但**本次没测过**。
+         *
+         * 这时绿灯的来源是"这家保存过模型列表"这个**持久信号**，只能说"以前能用"，不能说
+         * "现在能用"——密钥可能已经被吊销，而界面并不会去重新验证。以前这一档借用「已连接」，
+         * 小字比悬停说明更"过承诺"；悬停里本来就分得清（`dot.ok` vs `dot.connected`）。
+         */
+        'provider.status.worked': '以前可用（已保存模型列表，本次未测试）',
         'provider.status.ok': '已连接',
         'provider.status.fail': '连接失败',
         'provider.status.untested': '未测试',
@@ -300,6 +315,7 @@ window.__ModuleLoader__.load({
         'label.model': 'Model',
         'label.file': 'File',
         'nav': 'Image Bridge',
+        'badge.label': 'Image Bridge repository {repo}, version {version} (opens {url} in a new tab)',
         'intro': 'Connect external image models to your DeepSeek Harness',
         'loading': 'Loading current settings…',
         'unavailable': 'Configuration is unavailable (the Host configuration service is not reachable).',
@@ -321,6 +337,7 @@ window.__ModuleLoader__.load({
         'dot.fail': 'The last connection test failed',
         'dot.untested': 'Not tested yet',
         'dot.connected': 'Model list already fetched',
+        'provider.status.worked': 'Worked before (model list saved; not tested this session)',
         'provider.status.ok': 'Connected',
         'provider.status.fail': 'Connection failed',
         'provider.status.untested': 'Not tested',
@@ -645,6 +662,15 @@ window.__ModuleLoader__.load({
         src: url,
         alt: typeof attachment?.name === 'string' ? attachment.name : text('image.alt', '生成的图片'),
         loading: 'lazy',
+        /*
+         * 浏览器层面的加载失败也要收。
+         *
+         * 上面那条 promise 只覆盖"拿地址"这一步：`loadImage` 成功返回了一个地址，不代表这个地址
+         * 真能取到图（附件被清理、地址过期、磁盘上的文件被删都可能）。没有这个 `onError` 时，
+         * 卡片会留下一个**裂图占位**——用户看到的是半张图加一个系统破图图标，而不是一句能看懂的
+         * 话。收进 `failed` 之后走的是同一条"图片加载失败"提示，与地址都拿不到时的表现一致。
+         */
+        onError: () => { setFailed(true) },
       })
     }
 
@@ -1074,9 +1100,19 @@ window.__ModuleLoader__.load({
      * 状态灯对应的文案键。
      *
      * 与 `providerSignalOf` 一一对应：点是什么颜色、小字就说什么——两者同源，不会出现
-     * "绿点却写着连接失败"。
+     * "绿点却写着连接失败"。绿灯有**两种来源**，小字也必须跟着分：本次真测过 →「已连接」；
+     * 只是"这家保存过模型列表"这个持久信号 →「以前可用…」。后者写「已连接」就是**过承诺**：
+     * 密钥可能早已被吊销，而界面并不会去重新验证（悬停说明本来就是这个口径，小字现在跟它一致）。
+     *
+     * @param signal - `providerSignalOf` 的结果。
+     * @param testedThisSession - 本次会话是否真的测过这一家。
+     * @returns 语言包里的文案键。
      */
-    const PROVIDER_STATUS_KEYS = { ok: 'provider.status.ok', fail: 'provider.status.fail', idle: 'provider.status.untested' }
+    const statusKeyOf = (signal, testedThisSession) => {
+      if (signal === 'fail') return 'provider.status.fail'
+      if (signal === 'ok') return testedThisSession ? 'provider.status.ok' : 'provider.status.worked'
+      return 'provider.status.untested'
+    }
 
     /**
      * 分组标题（optgroup label）。
@@ -1122,7 +1158,7 @@ window.__ModuleLoader__.load({
      * - 仓库地址也只留这一个常量，不在别处散落硬编码。
      */
     const PACKAGE_NAME = '@local/dsh-image-bridge'
-    const PACKAGE_VERSION = '0.2.1'
+    const PACKAGE_VERSION = '0.2.2'
     /** 徽标上显示的仓库名（去掉 scope 前缀）。 */
     const REPO_NAME = 'dsh-image-bridge'
     /** 徽标点击后打开的仓库地址。 */
@@ -1711,6 +1747,12 @@ window.__ModuleLoader__.load({
       const submit = (event) => {
         if (event !== null && event !== undefined && typeof event.preventDefault === 'function') event.preventDefault()
         if (locked) return
+        /*
+         * 重复提交的闸门由**父组件**持有（`props.canSubmit`）：写操作是父组件发起的，
+         * 用同一把锁才能同时管住"回车连按两次"与"测试与保存互斥"。
+         * 这里只负责问一句"现在能提交吗"。
+         */
+        if (typeof props.canSubmit === 'function' && !props.canSubmit()) return
         const baseUrl = state.baseUrl.trim()
         if (baseUrl === '') {
           patch({ status: tr('needBaseUrl'), statusKind: 'error' })
@@ -1944,6 +1986,16 @@ window.__ModuleLoader__.load({
        */
       const remotes = React.useRef(null)
 
+      /**
+       * "整页正在提交/测试"的同步闸门。
+       *
+       * 放在父组件而不是浮层里：写操作由父组件发起（`submitProvider` / `removeProvider`），
+       * 浮层只是提出请求。放在这里，"回车连按两次"与"测试与保存互斥"两件事用**同一把锁**，
+       * 不会出现两处各判断一半的情况。理由是 state 要等渲染才可见，而重复提交恰好发生在那
+       * 个窗口里——只有 ref 能在赋值那一刻就生效。
+       */
+      const pendingRef = React.useRef(false)
+
       React.useEffect(() => {
         let live = true
         ;(async () => {
@@ -2114,16 +2166,19 @@ window.__ModuleLoader__.load({
 
       /** 删除提供商：从列表里移除并落盘；密钥留在凭据服务里（不替用户做破坏性清理）。 */
       const removeProvider = React.useCallback(async (provider) => {
+        // 与保存共用同一把闸门：保存进行中点删除，会让两次 update 互相覆盖。
+        if (pendingRef.current) return
+        pendingRef.current = true
         const current = remotes.current
         const settings = current === null || current === undefined ? undefined : current.settings
         const next = state.providers.filter((item) => item.id !== provider.id).map(plainProvider)
         const activeProviderId = state.activeProviderId === provider.id ? (next.length > 0 ? next[0].id : '') : state.activeProviderId
-        if (settings === undefined) {
-          patch({ confirmDelete: '' })
-          return
-        }
-        patch({ phase: 'saving', status: '', statusKind: 'info' })
         try {
+          if (settings === undefined) {
+            patch({ confirmDelete: '' })
+            return
+          }
+          patch({ phase: 'saving', status: '', statusKind: 'info' })
           const written = await settings.update(SETTINGS_NS, snapshotPatch({ providers: next, activeProviderId }), undefined)
           const failure = failureOf(written)
           if (failure !== null) throw new Error(failure)
@@ -2132,6 +2187,8 @@ window.__ModuleLoader__.load({
         } catch (error) {
           report('error', '删除提供商失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
           patch({ phase: 'idle', confirmDelete: '', status: messageOf(error), statusKind: 'error', statusScope: 'provider' })
+        } finally {
+          pendingRef.current = false
         }
       }, [state.providers, state.activeProviderId, patch])
 
@@ -2143,15 +2200,21 @@ window.__ModuleLoader__.load({
        * 绝不进 settings patch。
        */
       const submitProvider = React.useCallback(async (draft, keyDraft) => {
+        /*
+         * 同步闸门：连按两次回车、或"回车 + 点保存"都只会有一次真正落盘。
+         * 必须在**第一个 await 之前**置位并立刻复查——`state.phase` 那时还没变成 saving。
+         */
+        if (pendingRef.current) return
+        pendingRef.current = true
         const current = remotes.current
         const settings = current === null || current === undefined ? undefined : current.settings
         const credentials = current === null || current === undefined ? undefined : current.credentials
-        if (settings === undefined) {
-          patch({ editor: null, status: trRef.current('unavailable'), statusKind: 'error', statusScope: 'provider' })
-          return
-        }
-        patch({ phase: 'saving', status: '', statusKind: 'info' })
         try {
+          if (settings === undefined) {
+            patch({ editor: null, status: trRef.current('unavailable'), statusKind: 'error', statusScope: 'provider' })
+            return
+          }
+          patch({ phase: 'saving', status: '', statusKind: 'info' })
           const taken = state.providers.filter((item) => item.id !== draft.id).map((item) => item.id)
           const seed = slugify(draft.label) !== '' ? slugify(draft.label) : hostSlugOf(draft.baseUrl)
           const id = draft.id !== '' ? draft.id : uniqueId(seed, taken)
@@ -2230,6 +2293,12 @@ window.__ModuleLoader__.load({
         } catch (error) {
           report('error', '提供商保存失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
           patch({ phase: 'idle', status: messageOf(error), statusKind: 'error', statusScope: 'provider' })
+        } finally {
+          /*
+           * 无论成败都必须复位：漏掉的话用户第二次点保存会被**无声吞掉**——
+           * 那比重复提交更难查，因为它看起来像"按钮坏了"。
+           */
+          pendingRef.current = false
         }
       }, [state.providers, state.activeProviderId, state.keyConfigured, state.routes, state.connectTimeoutDraft, patch])
 
@@ -2240,15 +2309,22 @@ window.__ModuleLoader__.load({
        * 默认值（DEFAULT_CONNECT_TIMEOUT_S）写。
        */
       const saveRoutes = React.useCallback(async () => {
+        /*
+         * 与保存提供商 / 删除共用同一把闸门。这不只是"防连点"：A19 之后三条路径写的是
+         * **同一套完整字段**，两个保存并发时后落盘的那个会把前一个的结果整片覆盖
+         * （各自读到的是自己那份快照，谁后写谁赢）。同一把锁是这里唯一正确的做法。
+         */
+        if (pendingRef.current) return
         const current = remotes.current
         const settings = current === null || current === undefined ? undefined : current.settings
-        if (settings === undefined) return
         const connectTimeoutSeconds = parseConnectTimeoutSeconds(state.connectTimeoutDraft)
+        if (settings === undefined) return
         if (connectTimeoutSeconds === undefined) {
           patch({ status: trRef.current('connectTimeoutInvalid'), statusKind: 'error', statusScope: 'routes' })
           report('warn', '模型设置未保存：连接超时不是正整数秒', JSON.stringify({ length: state.connectTimeoutDraft.length }))
           return
         }
+        pendingRef.current = true
         patch({ phase: 'saving', status: '', statusKind: 'info' })
         try {
           const modelRoutes = modelRoutesOf(state.routes, state.activeProviderId)
@@ -2265,14 +2341,19 @@ window.__ModuleLoader__.load({
         } catch (error) {
           report('error', '模型设置保存失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
           patch({ phase: 'idle', status: messageOf(error), statusKind: 'error', statusScope: 'routes' })
+        } finally {
+          pendingRef.current = false
         }
       }, [state.routes, state.connectTimeoutDraft, state.providers, state.activeProviderId, patch])
 
       /** 全局默认尺寸：对所有提供商生效，单独保存。 */
       const saveSize = React.useCallback(async () => {
+        // 同一把闸门：它写的也是完整快照，与另外三条并发会互相整片覆盖。
+        if (pendingRef.current) return
         const current = remotes.current
         const settings = current === null || current === undefined ? undefined : current.settings
         if (settings === undefined) return
+        pendingRef.current = true
         patch({ phase: 'saving', status: '', statusKind: 'info' })
         try {
           /*
@@ -2289,6 +2370,8 @@ window.__ModuleLoader__.load({
         } catch (error) {
           report('error', '默认尺寸保存失败', error instanceof Error ? `${error.message} | ${error.stack}` : String(error))
           patch({ phase: 'idle', status: messageOf(error), statusKind: 'error', statusScope: 'size' })
+        } finally {
+          pendingRef.current = false
         }
       }, [state.size, patch])
 
@@ -2349,8 +2432,18 @@ window.__ModuleLoader__.load({
        * 页面底部不再有状态行：保存模型设置 / 保存尺寸的反馈分别落在各自按钮那一行，
        * 提供商保存/删除的反馈落在卡片列表下方——"说了什么"紧挨着"做了什么"。
        */
+      /*
+       * `title` 不是装饰：这一行是**单行省略**的（长错误文案会被截断成 `…`），而服务商的报错
+       * 恰恰经常很长（带 URL、状态码、响应正文片段）。没有它，用户只能看到半句话，而"看不全
+       * 错误"等于"没法排查"。悬停可读全文，同时读屏也能把它当描述读出来。
+       */
       const statusNodeFor = (scope) => (state.status !== '' && state.statusScope === scope
-        ? h('p', { key: 'status', className: `${statusClassOf(state.statusKind)} dib-status-inline`, role: 'status' }, state.status)
+        ? h('p', {
+            key: 'status',
+            className: `${statusClassOf(state.statusKind)} dib-status-inline`,
+            role: 'status',
+            title: state.status,
+          }, state.status)
         : null)
 
       const disabled = state.writable === false
@@ -2367,8 +2460,10 @@ window.__ModuleLoader__.load({
         const signal = providerSignalOf(provider, state.testState)
         const reason = typeof state.providerErrors[provider.id] === 'string' ? state.providerErrors[provider.id].trim() : ''
         const dotClass = signal === 'ok' ? 'dib-dot dib-dot-ok' : signal === 'fail' ? 'dib-dot dib-dot-fail' : 'dib-dot'
+        // 本次有没有真的测过这一家：绿灯的两种来源靠它区分，悬停说明与状态小字都用它。
+        const testedThisSession = state.testState[provider.id] === 'ok'
         const dotTitle = signal === 'ok'
-          ? state.testState[provider.id] === 'ok' ? tr('dot.ok') : tr('dot.connected')
+          ? testedThisSession ? tr('dot.ok') : tr('dot.connected')
           : signal === 'fail' ? tr('dot.fail') : tr('dot.untested')
         const confirming = state.confirmDelete === provider.id
         const name = provider.label !== '' ? provider.label : provider.legacy === true ? tr('legacyProviderName') : provider.id
@@ -2378,7 +2473,7 @@ window.__ModuleLoader__.load({
             // 名称 + 下方那行状态小字（弱化样式，与点同源）；整体仍是一行卡片。
             h('div', { key: 'identity', className: 'dib-card-identity' }, [
               h('span', { key: 'name', className: 'dib-card-name', title: provider.id }, name),
-              h('span', { key: 'status', className: 'dib-card-status' }, tr(PROVIDER_STATUS_KEYS[signal])),
+              h('span', { key: 'status', className: 'dib-card-status' }, tr(statusKeyOf(signal, testedThisSession))),
               // 只有"这家失败"时才多一行原因；成功不需要（状态小字已经说了）。
               signal === 'fail' && reason !== ''
                 ? h('span', { key: 'reason', className: 'dib-card-reason', title: reason }, `${tr('provider.failReason')}${reason}`)
@@ -2515,12 +2610,18 @@ window.__ModuleLoader__.load({
       }
       const close = (refocus) => {
         setOpen(false)
-        setActiveIndex(-1)
+        setActive(-1)
+        /*
+         * 清空搜索缓冲：它属于"这一次打开菜单"的输入，不该跨交互存活。
+         * 不清的话，用户上次搜过 `z`、关掉再打开按 `w`，会被当成"在输入更长的词"拼成 `zw`——
+         * 匹配不到任何项，表现为**输入跳转静默失灵**（实测踩到过）。
+         */
+        typedRef.current = { text: '', at: 0 }
         if (refocus === true) focusTrigger()
       }
       const openWith = (index) => {
         setOpen(true)
-        setActiveIndex(index >= 0 ? index : (optionIndexes.length > 0 ? optionIndexes[0] : -1))
+        setActive(index >= 0 ? index : (optionIndexes.length > 0 ? optionIndexes[0] : -1))
       }
       const commit = (entry) => {
         close(true)
@@ -2531,7 +2632,7 @@ window.__ModuleLoader__.load({
         const next = current < 0
           ? (delta > 0 ? 0 : optionIndexes.length - 1)
           : Math.min(optionIndexes.length - 1, Math.max(0, current + delta))
-        if (optionIndexes.length > 0) setActiveIndex(optionIndexes[next])
+        if (optionIndexes.length > 0) setActive(optionIndexes[next])
       }
 
       /*
@@ -2562,8 +2663,75 @@ window.__ModuleLoader__.load({
         if (node !== null && node !== undefined && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'nearest' })
       }, [isOpen, activeEntryIndex])
 
+      /**
+       * 输入跳转（type-ahead）的缓冲。
+       *
+       * 为什么需要：模型下拉在真实配置里能有 **176 项**（实测某服务商的 `/models`），只能靠
+       * 上下键一格格翻；用户知道模型名（例如 `gpt-image-2.5`），键盘却帮不上忙。WAI-ARIA 的
+       * 组合框模式把"连续输入几个字符跳到匹配项"列为标准行为。
+       *
+       * 用 ref 而不是 state：输入发生在两次按键之间，必须**同步**读到上一个字符；state 要等渲染。
+       */
+      const typedRef = React.useRef({ text: '', at: 0 })
+      /** 单个可打印字符才算输入（修饰键与功能键不参与，否则 Ctrl+A 之类会被当成搜索）。 */
+      const typedCharOf = (event) => {
+        if (typeof event !== 'object' || event === null) return ''
+        if (event.ctrlKey === true || event.metaKey === true || event.altKey === true) return ''
+        const key = typeof event.key === 'string' ? event.key : ''
+        return key.length === 1 ? key : ''
+      }
+      /** 在当前可见项里找第一个以 buffer 开头的（大小写不敏感）；找不到就返回 -1。 */
+      const findTypedMatch = (buffer, fromIndex) => {
+        const needle = buffer.toLowerCase()
+        const candidates = optionIndexes.filter((index) => index > fromIndex)
+        const ordered = [...candidates, ...optionIndexes.filter((index) => index <= fromIndex)]
+        const hit = ordered.find((index) => String(entries[index]?.label ?? '').toLowerCase().startsWith(needle))
+        return hit === undefined ? -1 : hit
+      }
+
+      /**
+       * 当前高亮项的**实时**索引。
+       *
+       * type-ahead 必须读它，不能读渲染闭包里的 `activeEntryIndex`：连续两次按键之间不会重新渲染，
+       * 第二次按键用的仍是上一次渲染创建的处理器，读到的位置已经过期——表现就是"重复字符不轮换"
+       * （实测踩到过：连按两次 `w` 都停在同一个 `z-` 项上）。
+       */
+      const activeIndexRef = React.useRef(-1)
+      const setActive = (index) => {
+        activeIndexRef.current = index
+        setActiveIndex(index)
+      }
+
       const onTriggerKeyDown = (event) => {
         const key = event === null || event === undefined ? '' : event.key
+        /*
+         * 输入跳转放在最前面：它只在**单个可打印字符**上生效，不会与下面的功能键分支抢事件。
+         * 连续字符在 1 秒内视为同一个搜索词；重复同一个字符（`aaa`）按标准行为**轮换**到下一个
+         * 同前缀项——否则"想找第三个 a 开头的模型"只能靠上下键，type-ahead 就白加了。
+         */
+        const typed = typedCharOf(event)
+        if (typed !== '' && optionIndexes.length > 0) {
+          const now = Date.now()
+          const previous = typedRef.current.text
+          const fresh = now - typedRef.current.at <= 1000 && previous !== ''
+          /*
+           * "重复同一字符"只看**前一个字符是否相同**，不再要求"整个 buffer 都是同一个字符"。
+           *
+           * 后者是错的：先按 `z` 再连按 `w`，`previous` 已经变成 `w`，此时再按 `w` 才算重复——
+           * 而按"整串都是 w"判断时，`w`（上一次）与 `w`（这一次）之间夹着按 `w` 之前的状态，
+           * 判定会落到"拼接"分支上，于是 buffer 变成 `zw`/`zww`，永远匹配不到、也就永远不轮换。
+           * 语义上更简单：与上一个字符相同 = 用户在重复；不同 = 用户在输入更长的词。
+           */
+          const repeated = fresh && previous.slice(-1).toLowerCase() === typed.toLowerCase()
+          const buffer = !fresh || repeated ? typed : `${previous}${typed}`
+          typedRef.current = { text: buffer, at: now }
+          if (typeof event.preventDefault === 'function') event.preventDefault()
+          if (!isOpen) openWith(selectedEntryIndex)
+          const from = repeated ? activeIndexRef.current : -1
+          const hit = findTypedMatch(buffer, from)
+          if (hit >= 0) setActive(hit)
+          return
+        }
         if (key === 'ArrowDown' || key === 'ArrowUp') {
           if (typeof event.preventDefault === 'function') event.preventDefault()
           if (!isOpen) openWith(selectedEntryIndex)
@@ -2593,12 +2761,12 @@ window.__ModuleLoader__.load({
         }
         if (key === 'Home' && isOpen) {
           if (typeof event.preventDefault === 'function') event.preventDefault()
-          if (optionIndexes.length > 0) setActiveIndex(optionIndexes[0])
+          if (optionIndexes.length > 0) setActive(optionIndexes[0])
           return
         }
         if (key === 'End' && isOpen) {
           if (typeof event.preventDefault === 'function') event.preventDefault()
-          if (optionIndexes.length > 0) setActiveIndex(optionIndexes[optionIndexes.length - 1])
+          if (optionIndexes.length > 0) setActive(optionIndexes[optionIndexes.length - 1])
           return
         }
         if (key === 'Tab' && isOpen) close(false)
@@ -2893,7 +3061,7 @@ window.__ModuleLoader__.load({
             target: '_blank',
             rel: 'noopener noreferrer',
             title: `${REPO_NAME} v${PACKAGE_VERSION} · ${REPO_URL}`,
-            'aria-label': `${REPO_NAME} v${PACKAGE_VERSION}（在新标签页打开仓库 ${REPO_URL}）`,
+            'aria-label': tr('badge.label').replace('{repo}', REPO_NAME).replace('{version}', PACKAGE_VERSION).replace('{url}', REPO_URL),
           }, `${REPO_NAME}  v${PACKAGE_VERSION}`),
         ]),
         h('p', { key: 'subtitle', className: 'dib-cfg-intro dib-page-sub' }, tr('intro')),
@@ -2928,6 +3096,11 @@ window.__ModuleLoader__.load({
               patch({ editor: null, status: '', statusKind: 'info' })
             },
             onSubmit: (draft, keyDraft) => { void submitProvider(draft, keyDraft) },
+            /*
+             * 把"现在能不能提交"交给浮层问父组件：写操作是父组件发起的，用同一把锁才能
+             * 同时管住"回车连按两次"与"测试与保存互斥"（见 `pendingRef` 的说明）。
+             */
+            canSubmit: () => !pendingRef.current && state.phase === 'idle',
           }),
         routesBlock,
         /*
