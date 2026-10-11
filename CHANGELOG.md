@@ -6,6 +6,10 @@
 
 **加入 npm 安装**：包名从 `@local/dsh-image-bridge` 改为 **`kkj-luna-dsh-image-bridge`**，并发布到 npm。
 
+> **更正（发布状态）**：这个包**至今没有真正发布到 npm** —— `registry.npmjs.org/kkj-luna-dsh-image-bridge`
+> 返回 404，`kkj520-dsh-image-bridge` 同样是 404。所以本节描述的目标装法尚未可用，
+> 四份文档的安装节已改为以 `github:kkj-luna/dsh-image-bridge` 为主。发布之后再把文档改回 npm 一条命令。
+
 ```sh
 dsh plugin --profile web add kkj-luna-dsh-image-bridge
 ```

@@ -42,8 +42,12 @@
     "locale",
     "icon.svg",
     "README.md",
+    "README.en.md",
     "docs/manual.md",
     "docs/manual.en.md",
+    "docs/logo.png",
+    "docs/settings-zh.png",
+    "docs/settings-en.png",
     "CHANGELOG.md",
     "LICENSE"
   ],

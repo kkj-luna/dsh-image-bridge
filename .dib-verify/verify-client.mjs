@@ -850,7 +850,7 @@ globalThis.fetch = async (url, init) => {
   // test 的返回体按 Host 的新契约带上 models（在 value.models 这一层）。
   const okTest = { ok: true, value: { ok: true, message: '连接成功：GET .../models → 200', models: ALL_MODELS } }
   const result = body.method === 'models'
-    ? { ok: true, value: { models: ALL_MODELS } }
+    ? (modelsResultOverride ?? { ok: true, value: { models: ALL_MODELS } })
     : body.method === 'test'
       ? (testResultOverride ?? okTest)
       : { ok: true, value: { ok: true, message: 'HTTP 200' } }
@@ -862,6 +862,8 @@ globalThis.fetch = async (url, init) => {
 }
 /** 需要验证"失败落到对应卡片"的用例会临时把它设成失败的返回体，用完置回 null。 */
 let testResultOverride = null
+/** 需要验证"空模型列表"的用例临时把它设成空结果，用完置回 null。 */
+let modelsResultOverride = null
 const logPayloads = () => JSON.stringify(rpcCalls.filter((call) => call.url.endsWith('/log')))
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
 
@@ -1846,6 +1848,85 @@ check(
     && modelsCall.payload.baseUrl === editorInitial.baseUrl && typeof modelsCall.payload.apiKey === 'string',
   JSON.stringify(modelsCall ?? null).slice(0, 200),
 )
+
+/* ------------------------------------------------------------------ *
+ * 空模型列表**不能覆盖**已保存的列表
+ *
+ * 回归用例（曾经真实存在的数据丢失路径）：服务商回 `{data: []}`、或不提供 /models，
+ * 客户端把空结果当成"权威答案"写进 models，用户再点一次保存就把这家服务商的模型列表
+ * 抹成了空——四个模型下拉随之全部变灰，界面上还没有一句话说明是这一步抹掉的。
+ * 判定口径：点完「重新获取可用模型」后，界面仍然拿得到原来那份列表。
+ * ------------------------------------------------------------------ */
+{
+  modelsResultOverride = { ok: true, value: { models: [] } }
+  const keepBundle = sectionWithRecording({ size: '1024x1024' })
+  const keepSession = createSession(keepBundle.component, {
+    t: undefined,
+    close: () => {},
+    __initial: {
+      phase: 'idle',
+      providers: [providerRecord],
+      activeProviderId: 'zhipu',
+      editor: { mode: 'edit', initial: editorInitialFor(ALL_MODELS) },
+    },
+  })
+  const keepTree = keepSession.tree()
+  keepSession.click(buttonByText(keepTree, '重新获取可用模型'))
+  await sleep(30)
+  const afterEmpty = keepSession.tree()
+  check(
+    '「获取可用模型」拿到空结果时不覆盖已保存的列表（按钮仍显示「重新获取」）',
+    buttonByText(afterEmpty, '重新获取可用模型') !== undefined
+      && afterEmpty.text.includes('已保留原有模型列表'),
+    JSON.stringify({ buttons: afterEmpty.buttons.map((button) => textOfElement(button).trim()).slice(0, 12) }),
+  )
+  /*
+   * 再验"保存之后仍然是原来那份"：列表先被清空、再被 Save 写进配置，才是数据丢失真正发生的那一步。
+   */
+  keepBundle.updates.length = 0
+  keepSession.submit(keepSession.tree().forms[0])
+  await sleep(30)
+  const keptModels = keepBundle.updates[0]?.patch?.providers?.[0]?.models
+  check(
+    '空结果之后保存，写进去的仍是原有模型列表（不是空数组）',
+    Array.isArray(keptModels) && keptModels.length === ALL_MODELS.length,
+    JSON.stringify({ models: keptModels?.length ?? null, expected: ALL_MODELS.length }),
+  )
+  modelsResultOverride = null
+}
+
+/* ------------------------------------------------------------------ *
+ * 无障碍：自绘下拉的**触发器**必须有可访问名
+ *
+ * 触发器渲染成 `<button>`，而可见标签是与它并列的 `<label htmlFor>`——`<button>` 不在
+ * ARIA 的可被 label 关联元素集合里，所以那条可见标签给不出可访问名。备用槽位与尺寸下拉
+ * 各自都漏过这个属性，读屏里就是几个没有名字的按钮。
+ * ------------------------------------------------------------------ */
+{
+  const a11yDropdownBundle = sectionWithRecording({ size: '1024x1024' })
+  const a11yDropdownSession = createSession(a11yDropdownBundle.component, {
+    t: undefined,
+    close: () => {},
+    __initial: {
+      phase: 'idle',
+      providers: [providerRecord],
+      activeProviderId: 'zhipu',
+      keyConfigured: { zhipu: true },
+    },
+  })
+  const a11yDropdownTree = a11yDropdownSession.tree()
+  const dropdownNames = ['dib-route-generate-primary', 'dib-route-generate-fallback', 'dib-route-edit-primary', 'dib-route-edit-fallback', 'dib-size']
+    .map((id) => {
+      const trigger = triggerById(a11yDropdownTree, id)
+      return { id, label: trigger?.props?.['aria-label'] ?? '' }
+    })
+  check(
+    '五个自绘下拉的触发器都有 aria-label（label+button 关联不上，必须自带可访问名）',
+    dropdownNames.every((entry) => entry.label !== ''),
+    JSON.stringify(dropdownNames),
+  )
+}
+
 rpcCalls.length = 0
 buttonByText(editorTree, '测试连接').props.onClick()
 await sleep(30)

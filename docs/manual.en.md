@@ -10,15 +10,17 @@ Give **models that cannot draw** a connection to an external image model. Config
 
 ## Installation
 
-**From npm (recommended — one command):**
+**From GitHub (the only working remote install right now — one command):**
 
 ```sh
-dsh plugin --profile web add kkj-luna-dsh-image-bridge
+dsh plugin --profile web add github:kkj-luna/dsh-image-bridge
 ```
 
-**To track the latest commits** (when npm lags behind): `dsh plugin --profile web add github:kkj-luna/dsh-image-bridge`
+> **This package is not published to npm yet.** `kkj-luna-dsh-image-bridge` returns 404 on
+> `registry.npmjs.org`, so `dsh plugin --profile web add kkj-luna-dsh-image-bridge` fails today.
+> Once it ships, this section goes back to the npm one-liner.
 
-Either way, the plugin row is inserted into the profile's config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). **Restart `dsh web` afterwards**, then open **Settings → Image Bridge**.
+Either way (`github:` or a local directory, below), the plugin row is inserted into the profile's config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). **Restart `dsh web` afterwards**, then open **Settings → Image Bridge**.
 
 Package name `kkj-luna-dsh-image-bridge`, version `0.4.0`. The author prefix keeps it unique on npm (the plain name `dsh-image-bridge` was already taken); the settings-page badge shows only the repository name, `dsh-image-bridge`.
 
@@ -66,7 +68,7 @@ These are the only arguments the model sees:
 | | `size` | no | Overrides the size for this call; blank uses the global size from the settings page |
 | `image_edit` | `prompt` | yes | How to change it, e.g. "make the background a night street" |
 | | `image_path` | yes | Path of the image to edit — relative to the workspace or absolute, both work |
-| | `size` | no | Output size; blank keeps the original image's size or the configured default |
+| | `size` | no | Output size; blank uses the size configured in settings (default `1024x1024`) and is **always sent** — it does not keep the source image's size |
 
 Both tools also take `model` (optional) to override the model for that one call.
 
@@ -352,7 +354,7 @@ All-false `services` usually means this report came from a **test harness** (or 
 | "No usable API key" | This card has no key typed and none stored, so **no request was sent at all**. It is not the same as "key rejected (401/403)". Enter the key and click Save |
 | 401/403 key rejected | The key is wrong, or the service does not accept `Authorization: Bearer`. Remember **environment variables take precedence over the credential service**: with multiple providers each reads **its own** variable (id `zhipu` → `DSH_IMAGE_BRIDGE_KEY_ZHIPU`), while legacy fallback mode uses `DSH_IMAGE_BRIDGE_API_KEY` |
 | 404 | Usually the provider simply has no `/models`, which does not affect generation; if generation itself 404s, the API path is not OpenAI-compatible |
-| All four dropdowns are empty (disabled) | No model list has been saved yet: test connection / fetch models → **Save**. You can also use "Manual input…" right away |
+| All four dropdowns are empty (disabled) | No model list has been saved yet: test connection / fetch models → **Save**. Note "Manual input…" is an entry **inside** the dropdown, and the dropdown is disabled in this state — save a list first, then pick it |
 | There are candidates but not the model I want | Only image models are shown by default — tick "Show all models" or use "Manual input…"; a model just fetched must be saved in the dialog first; it may also belong to another provider, so expand that group |
 | No "Image Bridge" page in Settings | Check that the plugin is enabled; look for `fatal` on `client apply` in the client log; check for a degraded file |
 | **Nothing changed after installing / editing code** | **Restart `dsh web`**: Node caches loaded modules and hot reload ignores `node_modules`, so editing `index.js` and refreshing the page is not enough — the same goes for `client.js`. **Config** travels a separate channel (the settings page saves through hot update) and is unaffected. Before restarting, confirm the plugin manager really shows it as enabled |

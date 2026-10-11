@@ -10,15 +10,16 @@
 
 ## 安装
 
-**从 npm 装（推荐，一条命令）：**
+**从 GitHub 装（当前唯一能用的远程装法，一条命令）：**
 
 ```sh
-dsh plugin --profile web add kkj-luna-dsh-image-bridge
+dsh plugin --profile web add github:kkj-luna/dsh-image-bridge
 ```
 
-**跟最新提交**（npm 上还没发到那一版时）：`dsh plugin --profile web add github:kkj-luna/dsh-image-bridge`
+> **这个包还没发布到 npm。** `kkj-luna-dsh-image-bridge` 在 `registry.npmjs.org` 上查不到（404），
+> 所以 `dsh plugin --profile web add kkj-luna-dsh-image-bridge` 现在会失败。发布之后这里会改回 npm 一条命令。
 
-两种装法都会把插件行插入 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。**装完重启 `dsh web`**，再打开「设置 → 生图桥」。
+两种装法（`github:` 与下面的本地目录）都会把插件行插入 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。**装完重启 `dsh web`**，再打开「设置 → 生图桥」。
 
 包名 `kkj-luna-dsh-image-bridge`，版本 `0.4.0`。名字带作者前缀是为了在 npm 上唯一（`dsh-image-bridge` 已被他人占用）；设置页徽标只显示仓库名 `dsh-image-bridge`。
 
@@ -66,7 +67,7 @@ dsh plugin --profile web add <克隆下来的仓库绝对路径>
 | | `size` | 否 | 覆盖这一次的尺寸，留空用设置页的全局尺寸 |
 | `image_edit` | `prompt` | 是 | 要怎么改，例如「把背景换成夜晚的街道」 |
 | | `image_path` | 是 | 待修改图片的路径，工作区里的相对路径或绝对路径都行 |
-| | `size` | 否 | 输出尺寸；留空沿用原图或配置里的默认尺寸 |
+| | `size` | 否 | 输出尺寸；留空则用设置里配置的尺寸（默认 `1024x1024`），**总是会发出去**——不会沿用原图尺寸 |
 
 两个工具都带 `model`（选填），用来覆盖这一次的模型选择。
 
@@ -352,7 +353,7 @@ dsh-image-bridge/           ← 仓库根 = 插件包根
 | 「没有可用的 API Key」 | 这张卡片没填、也没存过密钥，**请求压根没发**；与「密钥被拒绝（401/403）」是两回事。填好 Key 点「保存」再试 |
 | 401/403 密钥被拒绝 | 密钥不对，或该服务不接受 `Authorization: Bearer`。注意**环境变量优先于凭据服务**：多服务商模式下每个服务商读**它自己**那个名字的环境变量（如 id `zhipu` → `DSH_IMAGE_BRIDGE_KEY_ZHIPU`），旧回退模式是 `DSH_IMAGE_BRIDGE_API_KEY` |
 | 报 404 | 通常是这家不提供 `/models`，不影响生图；若生图本身 404，说明接口路径不是 OpenAI 兼容形态 |
-| 四个下拉是空的（禁用） | 还没保存过模型列表：测试连接 / 获取可用模型 → **保存**；也可以直接用「手动输入…」 |
+| 四个下拉是空的（禁用） | 还没保存过模型列表：测试连接 / 获取可用模型 → **保存**。注意「手动输入…」是下拉**内部**的条目，下拉禁用时够不到它——先把列表存上再选它 |
 | 有候选但看不到我要的模型 | 默认只显示生图模型，勾「显示全部模型」或「手动输入…」；刚测到的新模型要先回浮层点保存；也可能属于另一家服务商，展开对应分组找 |
 | 设置里没有「生图桥」 | 查插件是否启用；看客户端日志里 `client apply` 是否 fatal；看有没有 degraded 文件 |
 | **装完/改了代码没生效** | **必须重启 `dsh web`**：Node 会缓存已加载的模块，热重载默认忽略 `node_modules`，所以改 `index.js` 之后光刷新页面没用；`client.js` 同理。**配置**是另一条通道（设置页保存走热更新），不受影响。重启前先确认 `plugin_manager` 那边确实是启用状态 |

@@ -217,15 +217,21 @@ check(
  * 为什么还要钉"旧字段真的没了"：`fallbackAfterMs`（按响应时间换备用那套）已按用户要求整体
  * 删除，改成"只看连接"。它若残留（schema 里还有定义、代码里还有人读），界面上就会出现一个
  * 填了没用的旋钮——这正是这次重构要消灭的东西。
+ *
+ * 判定只看**代码**、不看注释：注释里正当地记着"这个旧字段已被删除"（那是有价值的沿革信息），
+ * 若连注释一起查，就会逼着维护者不敢提这个字段的名字。所以先把注释剥掉再查。
  */
+const hostCode = host
+  .replace(/\/\*[\s\S]*?\*\//gu, ' ')
+  .replace(/(^|[^:])\/\/[^\n]*/gu, '$1 ')
 const defaultConnectSeconds = Number(/const DEFAULT_CONNECT_TIMEOUT_S = (\d+)/u.exec(host)?.[1] ?? Number.NaN)
 const schemaConnectSeconds = Number(/connectTimeoutSeconds: z[\s\S]{0,160}?\.default\((\d+)\)/u.exec(host)?.[1] ?? Number.NaN)
 check(
-  '连接超时以秒声明：Host 常量与 schema 默认值都是 15，且 fallbackAfterMs 已彻底移除',
+  '连接超时以秒声明：Host 常量与 schema 默认值都是 15，且 fallbackAfterMs 已从代码里彻底移除',
   defaultConnectSeconds === 15
     && schemaConnectSeconds === defaultConnectSeconds
-    && !/fallbackAfterMs/u.test(host)
-    && !/DEFAULT_FALLBACK_AFTER_MS/u.test(host),
+    && !/fallbackAfterMs/u.test(hostCode)
+    && !/DEFAULT_FALLBACK_AFTER_MS/u.test(hostCode),
   JSON.stringify({ constant: defaultConnectSeconds, schema: schemaConnectSeconds }),
 )
 

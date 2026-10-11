@@ -15,13 +15,17 @@
 
 ## 安装
 
-装插件（包在 npm 上，一条命令）：
+装插件（一条命令，从 GitHub 装）：
 
 ```sh
-dsh plugin --profile web add kkj-luna-dsh-image-bridge
+dsh plugin --profile web add github:kkj-luna/dsh-image-bridge
 ```
 
-重启 `dsh web`，打开 **设置 → 生图桥**。装的是预构建产物，不用克隆仓库、不用记本地路径。
+重启 `dsh web`，打开 **设置 → 生图桥**。装的是仓库里的预构建产物，不用克隆、不用记本地路径。
+
+> **npm 上还没有这个包。** `kkj-luna-dsh-image-bridge` 尚未发布到 npm（`registry.npmjs.org` 查不到），
+> 所以 `dsh plugin --profile web add kkj-luna-dsh-image-bridge` 现在会失败——请用上面的 `github:` 写法。
+> 发布之后这一节会改回 npm 一条命令。
 
 前提是本机装着 `@deepseek-ai/dsh`（`dsh web` 跑得起来）。没有就先装：
 
@@ -32,14 +36,14 @@ npm i -g @deepseek-ai/dsh
 **懒得敲命令？** 让 Agent 装：新建对话，把下面这句发过去，它会自己装、重启并核对结果。
 
 ```text
-帮我安装这个插件：dsh plugin --profile web add kkj-luna-dsh-image-bridge
+帮我安装这个插件：dsh plugin --profile web add github:kkj-luna/dsh-image-bridge
 装完重启 dsh web，并确认「设置 → 生图桥」能打开、两个工具已注册。
 ```
 
-**想跟最新提交**（npm 上还没发到那一版时）：
+**跟本地源码开发**（改代码时用）：
 
 ```sh
-dsh plugin --profile web add github:kkj-luna/dsh-image-bridge
+dsh plugin --profile web add <本仓库绝对路径>
 ```
 
 ### 装完怎么确认
@@ -61,6 +65,7 @@ dsh plugin --profile web remove kkj-luna-dsh-image-bridge
 | 你可能想知道 | 答案 |
 | --- | --- |
 | 包名为什么带 `kkj-luna-` | 为了在 npm 上唯一——`dsh-image-bridge` 已被别人占用。设置页徽标只显示仓库名 `dsh-image-bridge` |
+| 为什么用 `github:` 装而不是 npm | 这个包**还没发布到 npm**，所以只能用 `github:`（或本地目录）。发布后 npm 一条命令即可 |
 | 装完要不要重启 | **要**，插件代码不会被热重载 |
 | 从旧版本升上来配置会丢吗 | 不会。行 id 与设置命名空间一直是 `image-bridge-v4`，包名换过两次但它只是个安装标识 |
 | 想改代码怎么办 | 见[完整手册](docs/manual.md)的「开发本插件」——那是开发者路径，普通使用不需要 |
@@ -114,7 +119,7 @@ dsh plugin --profile web remove kkj-luna-dsh-image-bridge
 | 「没有可用的 API Key」 | 这张卡片没填、也没存过密钥。**不是**网络错误——请求根本没发出去 |
 | 「密钥被拒绝（401/403）」 | 请求发出去了，服务商不认这把 Key |
 | 「获取可用模型」报 404 | 这家不提供 `/models`，不影响生图 |
-| 四个下拉是空的（禁用） | 还没保存过模型列表：测试连接 → **保存**；也可以直接「手动输入…」 |
+| 四个下拉是空的（禁用） | 还没保存过模型列表：测试连接 → **保存**。四处提示里说的「手动输入…」是**下拉里的一个条目**，而空状态下下拉本身是禁用的——先按上面两步把列表存上，才能选到它 |
 | 设置里没有「生图桥」这一页 | 查插件是否启用、客户端日志里 `client apply` 是否 fatal；**改过代码要重启 DSH**（热重载默认忽略 `node_modules`） |
 
 ## 安全与隐私

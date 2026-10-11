@@ -37,6 +37,20 @@ const PNG = Buffer.from(
 const outbound = []
 /** `/models` 的应答开关：RPC 用例需要它回一个合法 JSON。 */
 let rpcMode = 'image'
+/**
+ * 重定向用例的"第二跳"服务器。
+ *
+ * 单独起一个：这样"守卫只看了第一跳"这件事可以用**它有没有被访问**来判定，
+ * 而不是靠读错误文案。历史上这个洞就是靠文案看不出来的（第一跳是合法地址）。
+ */
+const redirectHits = []
+const redirectTarget = createServer((request, response) => {
+  redirectHits.push(`${request.method} ${request.url}`)
+  response.writeHead(200, { 'content-type': 'image/png' })
+  response.end(PNG)
+})
+await new Promise((ready) => redirectTarget.listen(0, '127.0.0.1', ready))
+const redirectTargetPort = redirectTarget.address().port
 
 const server = createServer((request, response) => {
   const chunks = []
@@ -48,23 +62,61 @@ const server = createServer((request, response) => {
      * 用 body 里的 prompt 判定"这是一次生图请求"，而不是靠路径前缀：
      * 本验收在意的是"服务商回了什么"，路径细节属于别的套件的范围。
      *
-     * 两类暗号：
-     *   - `target:<名字>` → 回**恶意形态**（内网地址 / 超大正文），用于 SSRF 与上限用例；
+     * 暗号：
+     *   - `target:<名字>` → 回**恶意形态**（内网地址 / 超大正文 / 只会 RST 的地址）；
+     *   - `hop:<端口>` → 回一个指向本机某个端口、它自己会 302 到别处的地址；
+     *   - `blackhole:<端口>` → 回一个指向"只会 RST"的本机端口；
+     *   - `many` → 一次回很多条目；
      *   - `plain` → 回一张**正常的内联图片**，用于"正常路径仍然可用"这类对照用例
      *     （必须成功，否则"拒绝了该拒的"就无从区分"把功能整体改坏了"）。
      */
     const target = /"prompt":"target:([a-z]+)"/u.exec(body)?.[1]
+    const blackhole = /"prompt":"blackhole:(\d+)"/u.exec(body)?.[1]
+    if (blackhole !== undefined) {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ data: [{ url: `http://127.0.0.1:${blackhole}/img.png` }] }))
+      return
+    }
+    const hopTo = /"prompt":"hop:(\d+)"/u.exec(body)?.[1]
+    if (hopTo !== undefined) {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ data: [{ url: `http://127.0.0.1:${hopTo}/hop` }] }))
+      return
+    }
     if (target === undefined && /"prompt":"plain/u.test(body)) {
       response.writeHead(200, { 'content-type': 'application/json' })
       response.end(JSON.stringify({ data: [{ b64_json: PNG.toString('base64') }] }))
       return
     }
+    if (target === 'many') {
+      // 12 个条目：插件必须只采纳上限内的张数，并如实说明截断了。
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ data: Array.from({ length: 12 }, () => ({ b64_json: PNG.toString('base64') })) }))
+      return
+    }
     if (target !== undefined) {
       if (target === 'huge') {
-        // 先声明一个很大的 content-length，然后持续吐数据：客户端必须在上限处停下。
+        // 先声明一个很大的 content-length，然后持续吐数据：客户端必须按**声明**就停下。
         response.writeHead(200, { 'content-type': 'application/json', 'content-length': String(64 * 1024 * 1024) })
         const filler = `"${'A'.repeat(512 * 1024)}"`
         for (let index = 0; index < 24; index += 1) response.write(filler)
+        response.end('"}')
+        return
+      }
+      if (target === 'hugechunked') {
+        /*
+         * **不报 content-length**（分块传输），持续吐 160 MiB。
+         *
+         * 这是"只信声明"那一层的照妖镜：声明式预检在这里无事可做，只有"边读边计数"
+         * 才能在越过上限时停下。旧实现是 `response.text()` 全量读完再比长度，
+         * 于是整段正文会先被吃进内存（160 MiB 足以让内存断言与"读一点就停"区分开）。
+         */
+        response.writeHead(200, { 'content-type': 'application/json' })
+        const filler = `"${'B'.repeat(512 * 1024)}"`
+        for (let index = 0; index < 320; index += 1) {
+          if (response.writableEnded || response.destroyed) break
+          response.write(filler)
+        }
         response.end('"}')
         return
       }
@@ -72,12 +124,25 @@ const server = createServer((request, response) => {
         ? 'http://169.254.169.254/latest/meta-data/'
         : target === 'loopback'
           ? `http://127.0.0.1:${server.address().port}/internal-secret`
-          : 'http://10.0.0.5/secret.png'
+          : target === 'private'
+            ? 'http://10.0.0.5/secret.png'
+            : target === 'mapped'
+              // 环回地址的 IPv4-mapped 写法：URL 归一化后是 [::ffff:7f00:1]，字符串前缀匹配会漏
+              ? `http://[::ffff:127.0.0.1]:${server.address().port}/internal-secret`
+              : target === 'mappedmetadata'
+                ? 'http://[::ffff:169.254.169.254]/latest/meta-data/'
+                : 'http://10.0.0.5/secret.png'
       response.writeHead(200, { 'content-type': 'application/json' })
       response.end(JSON.stringify({ data: [{ url: link }] }))
       return
     }
     outbound.push(`${request.method} ${url}`)
+    if (url === '/hop') {
+      // 第一跳：302 到另一个回环端口。守卫必须在这一跳把它拦下来。
+      response.writeHead(302, { location: `http://127.0.0.1:${redirectTargetPort}/redirected-secret` })
+      response.end()
+      return
+    }
     if (url.startsWith('/models') && rpcMode === 'json') {
       response.writeHead(200, { 'content-type': 'application/json' })
       response.end(JSON.stringify({ object: 'list', data: [{ id: 'sec-image' }] }))
@@ -211,6 +276,192 @@ for (const [target, label] of [['metadata', '云元数据 169.254.169.254'], ['l
     error.includes('上限') || error.includes('超过'),
     error || '(没有报错)',
   )
+}
+
+/* ------------------------------------------------------------------ *
+ * ②b 分块回包：**不报 content-length** 时的上限
+ *
+ * 上一组（②）走的是"声明式预检"：服务商自己报了 64 MiB，所以在上限处直接拒答。
+ * 真正的风险是**不报长度**（分块传输）或谎报长度：那时只能靠"边读边计数"。
+ * 旧实现是 `response.text()` 全量读完再比长度，于是 160 MiB 会先被读进内存。
+ * 这里不仅断言报错，还断言**内存没有按正文规模增长**——只看错误文案的话，
+ * "读完再报错"和"读到上限就停"是分不出来的。
+ * ------------------------------------------------------------------ */
+{
+  const before = process.memoryUsage().rss
+  const { error } = await attempt('hugechunked')
+  const growth = process.memoryUsage().rss - before
+  check(
+    '②b 不报 content-length 的分块回包也在上限处停下',
+    error.includes('上限') || error.includes('超过'),
+    error || '(没有报错)',
+  )
+  check(
+    '②b 且没有被整体读进内存（正文 160 MiB，增量应远小于它）',
+    growth < 80 * 1024 * 1024,
+    `RSS 增量 ${(growth / 1024 / 1024).toFixed(1)} MiB`,
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ * ①b/①c 换个写法也要拦住：IPv4-mapped IPv6 与重定向
+ *
+ * 这些形态都实测绕过过旧守卫，逐条钉住：
+ *   - `[::ffff:127.0.0.1]`：URL 归一化成 `[::ffff:7f00:1]`，字符串前缀 `/^(…|::ffff:127\.)/`
+ *     永远匹配不到 → 环回放行；
+ *   - `[::ffff:169.254.169.254]`：同一个洞，目标是云元数据；
+ *   - 302：守卫只看了第一个 URL 字符串，跟随重定向后不再复检。
+ * 判定一律用**目标服务器有没有被访问**，不靠错误文案。
+ * ------------------------------------------------------------------ */
+{
+  for (const [target, label] of [['mapped', 'IPv4-mapped 环回 [::ffff:127.0.0.1]'], ['mappedmetadata', 'IPv4-mapped 云元数据 [::ffff:169.254.169.254]']]) {
+    const { error, requests } = await attempt(target)
+    check(`①b 图片地址用${label} → 拒收`, error.includes('已拒绝请求'), error || '(没有报错)')
+    check('①b 且一个请求都没替它发出去', requests.length === 0, JSON.stringify(requests))
+  }
+
+  /* 合法第一跳（本机地址是正当用法）302 到另一个端口：必须拒绝跟随。 */
+  redirectHits.length = 0
+  outbound.length = 0
+  let hopError = ''
+  try {
+    await generate.execute({ prompt: `hop:${server.address().port}` }, exec)
+  } catch (caught) {
+    hopError = caught instanceof Error ? caught.message : String(caught)
+  }
+  check(
+    '①c 合法第一跳 302 到内网端口 → 拒绝跟随（不是只看第一跳）',
+    hopError.includes('重定向') || hopError.includes('拒绝'),
+    hopError || '(没有报错)',
+  )
+  check('①c 且重定向目标一个请求都没收到', redirectHits.length === 0, JSON.stringify(redirectHits))
+
+  /*
+   * 反向对照：守卫不能把"名字里带 fc/fd"的合法主机名误判成私网。
+   * 旧写法 `/^(…|fc|fd)/` 不锚定 IPv6 字面量，`fdic.gov`、`fc2.com` 这类域名会被拒收。
+   * 直接喂函数判定，避免本机 DNS 依赖。
+   */
+  const guard = mod.__testImageUrlRejection
+  check(
+    '①d 守卫对合法主机名不误判（fdic.gov / fc2.com / fcdn.example.com）',
+    typeof guard === 'function'
+      && guard('https://fdic.gov/a.png') === undefined
+      && guard('https://fc2.com/a.png') === undefined
+      && guard('https://fcdn.example.com/a.png') === undefined,
+    typeof guard === 'function' ? '函数已导出但判定不符' : '（插件没有导出 __testImageUrlRejection）',
+  )
+  check(
+    '①d 同时仍然拦住真正的 IPv6 私网/链路本地（fd00::1 / fe80::1 / ::1）',
+    typeof guard === 'function'
+      && guard('http://[fd00::1]/a.png') !== undefined
+      && guard('http://[fe80::1]/a.png') !== undefined
+      && guard('http://[::1]/a.png') !== undefined,
+    typeof guard === 'function' ? '函数已导出但判定不符' : '（插件没有导出 __testImageUrlRejection）',
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ * ②c 一次回包的条目数封顶
+ *
+ * 请求只发 `n: 1`，但回包内容由服务商决定：每个条目都会 saveImage + 在工作区落一个文件。
+ * 旧实现照单全收（实测 500 个条目 → 500 个附件 + 500 个文件）。
+ * ------------------------------------------------------------------ */
+{
+  let saved = 0
+  const originalAttachments = services.attachments
+  services.attachments = {
+    async saveImage({ mediaType, data, name }) {
+      saved += 1
+      return { attachmentId: `sha256:${String(saved).padStart(64, '0')}`, mediaType, bytes: data.byteLength, width: 1, height: 1, name }
+    },
+  }
+  let value
+  let error = ''
+  try {
+    value = await generate.execute({ prompt: 'target:many' }, exec)
+  } catch (caught) {
+    error = caught instanceof Error ? caught.message : String(caught)
+  } finally {
+    services.attachments = originalAttachments
+  }
+  check(
+    '②c 一次回包给 12 个条目 → 只采纳上限内的张数，且附件写入次数一致',
+    error === '' && value !== undefined && value.images.length > 0 && value.images.length <= 4 && saved === value.images.length,
+    error || `saveImage ${saved} 次，images=${value?.images?.length}`,
+  )
+  check(
+    '②c 且如实告知被截断（不是静默丢弃）',
+    Array.isArray(value?.warnings) && value.warnings.some((line) => line.includes('只采纳')),
+    JSON.stringify(value?.warnings ?? []),
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ * ②d 凭据名不能当"读环境变量"的入口
+ *
+ * 只校验形状时，`keyRef: "AWS_SECRET_ACCESS_KEY"` 会被照单接受，再由 `resolveApiKey`
+ * 回退读同名环境变量，最后当 `Bearer` 发给**同一次请求里指定的** baseUrl——
+ * 一个名字输入框就变成了"读宿主任意环境变量并外发"的原语（实测可复现）。
+ * ------------------------------------------------------------------ */
+{
+  const marker = 'CANARY-LEAK-MARKER-VALUE'
+  process.env.AWS_SECRET_ACCESS_KEY = marker
+  const seen = []
+  const probe = createServer((request, response) => {
+    seen.push(request.headers.authorization ?? '')
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ object: 'list', data: [{ id: 'probe' }] }))
+  })
+  await new Promise((ready) => probe.listen(0, '127.0.0.1', ready))
+  const probeOrigin = `http://127.0.0.1:${probe.address().port}`
+  try {
+    await callRpc('models', { baseUrl: probeOrigin, keyRef: 'AWS_SECRET_ACCESS_KEY' }, 'sec-keyref')
+    check('②d 命名空间外的 keyRef 不会被读成环境变量发出去', seen.every((header) => !header.includes(marker)), JSON.stringify(seen))
+    // 对照：本插件自己的名字仍然照常工作（用没在凭据服务注册过的名字，验环境变量回退这条路还通）。
+    process.env.DSH_IMAGE_BRIDGE_KEY_ENVFALLBACK = marker
+    await callRpc('models', { baseUrl: probeOrigin, keyRef: 'DSH_IMAGE_BRIDGE_KEY_ENVFALLBACK' }, 'sec-keyref-ok')
+    check('②d 且本插件命名空间内的 keyRef 照常可用（对照，没有把功能改坏）', seen.some((header) => header.includes(marker)), JSON.stringify(seen))
+    delete process.env.DSH_IMAGE_BRIDGE_KEY_ENVFALLBACK
+  } finally {
+    delete process.env.AWS_SECRET_ACCESS_KEY
+    probe.closeAllConnections?.()
+    await new Promise((done) => probe.close(done))
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * ①e 重试不能丢掉超时与取消
+ *
+ * 旧实现的兜底重试会 `delete init.signal`：下载的 15 秒超时与调用方取消都挂在那个信号上，
+ * 于是"先 RST 再黑洞"的服务商能让工具调用永久挂住（实测插件预算 3 秒、调用方 1.5 秒取消，
+ * 调用依然不返回）。
+ * ------------------------------------------------------------------ */
+{
+  const blackhole = createServer((request, response) => {
+    request.socket.destroy()
+    void response
+  })
+  await new Promise((ready) => blackhole.listen(0, '127.0.0.1', ready))
+  const controller = new AbortController()
+  const startedAt = Date.now()
+  const running = generate.execute({ prompt: `blackhole:${blackhole.address().port}` }, {
+    signal: controller.signal,
+    agent: { session: { header: { cwd: workRoot } } },
+    session: undefined,
+  }).then(() => 'settled').catch(() => 'settled')
+  setTimeout(() => controller.abort(new Error('caller-cancel')), 1500)
+  const settled = await Promise.race([
+    running.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 8000)),
+  ])
+  const elapsed = Date.now() - startedAt
+  check(
+    '①e 调用方取消后，下载重试也必须跟着结束（不会永久挂住）',
+    settled === true && elapsed < 8000,
+    `settled=${settled} 用时 ${elapsed}ms`,
+  )
+  blackhole.closeAllConnections?.()
+  await new Promise((done) => blackhole.close(done))
 }
 
 /* baseUrl 策略：本机地址可用；空地址必须直接失败且不回退。 */
@@ -370,6 +621,8 @@ for (const [target, label] of [['metadata', '云元数据 169.254.169.254'], ['l
 
 server.closeAllConnections?.()
 await new Promise((closed) => server.close(closed))
+redirectTarget.closeAllConnections?.()
+await new Promise((closed) => redirectTarget.close(closed))
 await rm(workRoot, { recursive: true, force: true })
 await rm(logHome, { recursive: true, force: true })
 

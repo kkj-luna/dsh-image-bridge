@@ -15,13 +15,17 @@ Give a [DeepSeek Harness](https://github.com/deepseek-ai) model that **cannot dr
 
 ## Install
 
-Install the plugin (it is on npm — one command):
+Install the plugin (one command, from GitHub):
 
 ```sh
-dsh plugin --profile web add kkj-luna-dsh-image-bridge
+dsh plugin --profile web add github:kkj-luna/dsh-image-bridge
 ```
 
 Restart `dsh web` and open **Settings → Image Bridge**. You get a prebuilt install: no cloning, no local path to remember.
+
+> **This package is not on npm yet.** `kkj-luna-dsh-image-bridge` has not been published
+> (`registry.npmjs.org` returns 404), so `dsh plugin --profile web add kkj-luna-dsh-image-bridge`
+> fails today — use the `github:` form above. This section goes back to the npm one-liner once it ships.
 
 This requires a local `@deepseek-ai/dsh` (a working `dsh web`). If you do not have one:
 
@@ -32,16 +36,16 @@ npm i -g @deepseek-ai/dsh
 **Rather not type commands?** Let your agent do it — start a new conversation and send this:
 
 ```text
-Install this plugin: dsh plugin --profile web add kkj-luna-dsh-image-bridge
+Install this plugin: dsh plugin --profile web add github:kkj-luna/dsh-image-bridge
 Then restart dsh web and confirm that Settings → Image Bridge opens and both tools are registered.
 ```
 
 The agent installs, restarts, and checks the result for you.
 
-**To track the latest commits** (when npm lags behind):
+**Working from a local checkout** (when you edit the code):
 
 ```sh
-dsh plugin --profile web add github:kkj-luna/dsh-image-bridge
+dsh plugin --profile web add <absolute path to this repo>
 ```
 
 ### How to confirm it loaded
@@ -63,6 +67,7 @@ You can also remove it under **Settings → Plugins**.
 | You may be wondering | Answer |
 | --- | --- |
 | Why does the package name carry `kkj-luna-`? | To stay unique on npm — the plain name `dsh-image-bridge` was already taken. The settings-page badge shows only the repository name |
+| Why install from `github:` instead of npm? | The package is **not published to npm yet**, so `github:` (or a local directory) is the only way. Once published, one npm command suffices |
 | Do I have to restart? | **Yes** — plugin code is not hot-reloaded |
 | Will upgrading lose my configuration? | No. The row id and settings namespace have always been `image-bridge-v4`; the package name changed twice but it is only an install identifier |
 | What if I want to change the code? | See "Developing this plugin" in the [full manual](docs/manual.en.md) — a developer path, not needed for normal use |
