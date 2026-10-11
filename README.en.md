@@ -15,31 +15,44 @@ Give a [DeepSeek Harness](https://github.com/deepseek-ai) model that **cannot dr
 
 ## Install
 
+### Recommended: let your agent do it
+
+Open DSH (the web UI), start a new conversation, and send it this:
+
+```text
+Install the plugin in this repository: https://github.com/kkj520/dsh-image-bridge
+Then restart dsh web and confirm that Settings → Image Bridge opens and both tools are registered.
+```
+
+The agent clones the repo, adds the plugin to your profile, restarts, and checks the result — **you never touch a command**. This plugin is not published to npm, so installing it always starts with getting the repo onto your machine; letting the agent handle that step is the least work.
+
+### Doing it yourself
+
 Requires a local `@deepseek-ai/dsh` (a working `dsh web`). If you do not have one:
 
 ```sh
 npm i -g @deepseek-ai/dsh
 ```
 
-Install the plugin, using the absolute path to this repo:
+Clone this repo, then install using **the directory you cloned into** (`add` only accepts a local path, which is exactly why the agent instruction above clones first):
 
 ```sh
-dsh plugin --profile web add <absolute path to this repo>/plugins/dsh-image-bridge-v4
+dsh plugin --profile web add <absolute path to the cloned repo>/plugins/dsh-image-bridge-v4
 ```
 
-Your agent can also install it through the plugin manager: `install_bundle` with that directory as the target.
+### About the names, and the restart
 
-- Package name `@local/dsh-image-bridge`, version **0.2.1**. The `@local/` prefix is the DSH convention for locally authored plugins; it is not published to npm.
-- Installation adds the plugin row to the profile config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to).
+- Package name `@local/dsh-image-bridge`, version **0.2.1**. The `@local/` prefix is DSH's official convention for locally authored plugins — it exists so a local plugin never collides with a real npm package — and the plugin is **not published to npm**. The settings-page badge shows only `dsh-image-bridge`, without that prefix.
+- Installation adds the plugin row to the profile config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). The `-v4` in that directory name and row id is an **internal rewrite counter**, there only to avoid colliding with older copies on the same machine; it means nothing for day-to-day use.
 - **Restart `dsh web` afterwards** — plugin code is not hot-reloaded, and the settings page will not appear before the restart.
 
-**Confirm it loaded** — any one of the three:
+### Confirm it loaded — any one of the three
 
 - **Settings → Image Bridge** shows the settings page;
 - `$DSH_HOME/dsh-image-bridge-startup.json` lists three `steps` (schema ready, both tools registered, test channel mounted) and `services.tools` is `true`;
 - The model can call both `image_generate` and `image_edit` in a session.
 
-Uninstall:
+### Uninstall
 
 ```sh
 dsh plugin --profile web remove @local/dsh-image-bridge

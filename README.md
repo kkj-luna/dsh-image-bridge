@@ -15,31 +15,44 @@
 
 ## 安装
 
+### 最推荐：让 Agent 帮你装
+
+打开 DSH（Web 界面），新建对话，把下面这句话发给它：
+
+```text
+帮我安装这个仓库里的插件：https://github.com/kkj520/dsh-image-bridge
+装完重启 dsh web，并确认「设置 → 生图桥」能打开、两个工具已注册。
+```
+
+Agent 会自己克隆仓库、把插件加进 profile、重启并核对结果，**你不用敲任何命令**——本插件不发布到 npm，装它本来就要先把仓库弄到本地，这一步交给 Agent 最省事。
+
+### 自己敲命令
+
 前提：本机装着 `@deepseek-ai/dsh`（`dsh web` 跑得起来）。没有就先装：
 
 ```sh
 npm i -g @deepseek-ai/dsh
 ```
 
-装插件（用本仓库的绝对路径）：
+把仓库克隆到本机，然后**用克隆下来的那个目录**装（`add` 只接受本地路径，这也是为什么上面那条 Agent 指令要先克隆）：
 
 ```sh
-dsh plugin --profile web add <本仓库绝对路径>/plugins/dsh-image-bridge-v4
+dsh plugin --profile web add <克隆下来的仓库绝对路径>/plugins/dsh-image-bridge-v4
 ```
 
-也可以让 Agent 用插件管理器装：`install_bundle`，target 传上面那个目录。
+### 关于名字与重启
 
-- 包名 `@local/dsh-image-bridge`，版本 **0.2.1**。`@local/` 是 DSH 对本地自作插件的惯例，不发布到 npm。
-- 安装会把插件行加进 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。
+- 包名 `@local/dsh-image-bridge`，版本 **0.2.1**。`@local/` 是 DSH 给本地自作插件的官方命名约定（作用是不与 npm 上的真包撞名），**不发布到 npm**；设置页徽标只显示 `dsh-image-bridge`，不显示这个前缀。
+- 安装会把插件行加进 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。目录名与行 id 里那个 `-v4` 是**内部重写版本号**，只用于避免与本机旧副本冲突，对使用没有影响。
 - **装完必须重启 `dsh web`**：插件代码不会被热重载，重启前设置页不会出现。
 
-**确认装好了**，三条任选：
+### 确认装好了，三条任选
 
 - 打开 **设置 → 生图桥**，能看到设置页；
 - `$DSH_HOME/dsh-image-bridge-startup.json` 里 `steps` 有三步（`Config schema 就绪` / `两个工具已注册` / `测试通道已挂载`）、`services.tools` 为 `true`；
 - 会话里模型能调用 `image_generate` 与 `image_edit` 两个工具。
 
-卸载：
+### 卸载
 
 ```sh
 dsh plugin --profile web remove @local/dsh-image-bridge
