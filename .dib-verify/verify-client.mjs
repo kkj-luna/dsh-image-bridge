@@ -1109,7 +1109,7 @@ const inputById = (tree, id) => tree.nodes.find((node) => node.type === 'input' 
 /*
  * icon.svg 的**图形组**：`<g id="dib-icon-glyph">…</g>`。
  *
- * 图标现在是"蓝底白图"——多了一块品牌蓝的圆角底。导航遮罩与跨文件几何一致性都只关心
+ * 图标现在是"黑底 + 渐变蓝图形"——多了一块近黑的圆角底。导航遮罩与跨文件几何一致性都只关心
  * **图形**那一组，所以断言一律比"图形组内的几何数据"，而不是整份文件：底色不属于图形，
  * 也不该进遮罩（进了遮罩就会渲染成一个实心方块，而不是桥）。
  */
@@ -1627,8 +1627,9 @@ const iconGlyphPairs = geometryPairsIn(iconGlyphGroup)
  * 因为导航那一行是靠 CSS mask-image 上色的（mask 只读 alpha，可见颜色来自 currentColor），
  * 一旦写死颜色，深色主题下就会变成一块不跟主题的色斑。
  *
- * `icon.svg` **不受这条约束**：它是插件列表里的品牌图标，蓝底白图是有意为之（见下面的
- * 图标断言）。以后不要因为"看着不一致"就把这条规则又套回 icon.svg 上。
+ * `icon.svg` **不受这条约束**：它是插件列表里的品牌图标，**黑底 + 渐变蓝图形**是有意为之
+ * （配色理由与亮度下限见下面的图标断言）。以后不要因为"看着不一致"就把这条规则又套回
+ * icon.svg 上，也不要因为"想让它更亮"就把渐变改成纯白。
  */
 const colorPattern = /#[0-9a-fA-F]{3,8}|rgba?\(|hsla?\(|(^|[^-])(white|black)\b/u
 check(
@@ -1647,18 +1648,38 @@ check(
   JSON.stringify({ shapes: glyphChildren.map((shape) => shape.type), pairs: glyphPairs.length, size: inlineGlyph?.props?.width ?? null, missing: iconGlyphPairs.filter((pair) => !glyphPairs.includes(pair)) }).slice(0, 260),
 )
 check(
-  '① icon.svg 是蓝底白图的品牌图标：蓝色圆角底铺满画布，图形几何与内联图形逐条一致',
+  '① icon.svg 是黑底渐变蓝的品牌图标：近黑圆角底铺满画布，图形用引用式渐变，几何与内联图形逐条一致',
   (() => {
+    /* 底色：铺满画布、圆角、深色。不写死具体色值，但要求它"确实深"——
+       否则深色列表里这块砖会发白，比邻居更跳。 */
     const base = /<rect\s+x="0"\s+y="0"\s+width="24"\s+height="24"\s+rx="([\d.]+)"\s+fill="(#[0-9a-fA-F]{6})"\s*\/>/u.exec(iconSvgText)
-    const groupTag = /<g id="dib-icon-glyph"[^>]*stroke="(#[0-9a-fA-F]{6})"[^>]*>/u.exec(iconSvgText)
-    // 注释里出现 "<style>" 这样的字眼不该影响判断：先剥掉 XML 注释再看。
+    /* 图形：stroke 必须是 url(#…) 引用，且该渐变**在本文件里定义**（不引外部资源）。 */
+    const groupTag = /<g id="dib-icon-glyph"[^>]*stroke="url\(#([\w-]+)\)"[^>]*>/u.exec(iconSvgText)
+    const gradientId = groupTag?.[1] ?? ''
+    const gradient = new RegExp(`<linearGradient[^>]*id="${gradientId}"[^>]*>([\\s\\S]*?)</linearGradient>`, 'u').exec(iconSvgText)
+    const stops = [...String(gradient?.[1] ?? '').matchAll(/stop-color="(#[0-9a-fA-F]{6})"/gu)].map((m) => m[1].toLowerCase())
+    /* 注释里出现 "<style>" 这样的字眼不该影响判断：先剥掉 XML 注释再看。 */
     const bare = iconSvgText.replace(/<!--[\s\S]*?-->/gu, '')
+    /*
+     * 相对亮度（WCAG 定义）。用途是**挡住"渐变暗到看不见"**：
+     * 蓝底白图换成黑底之后，渐变里最深的那一端如果贴到品牌蓝（#2f6bff，亮度约 0.17），
+     * 压在 #111318 上对比度只有 1.7:1 左右，图标会糊成一块。要求最亮端 ≥0.35 才留得住形状。
+     */
+    const luminance = (hex) => {
+      const channel = (offset) => {
+        const value = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255
+        return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+      }
+      return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5)
+    }
     return base !== null
       && groupTag !== null
       && Number(base[1]) > 0
-      // 品牌蓝：外壳调色板里的 --dsw-static-deepseek-500
-      && base[2].toLowerCase() === '#4176e6'
-      && groupTag[1].toLowerCase() === '#ffffff'
+      && luminance(base[2]) < 0.02
+      && gradient !== null
+      && stops.length >= 2
+      && stops.every((stop) => stop !== '#ffffff')
+      && Math.max(...stops.map(luminance)) >= 0.35
       && iconGlyphPairs.length >= 12
       && iconGlyphPairs.join('|') === [...glyphPairs].sort().join('|')
       // 不引外部资源、不用内联样式表（否则外壳的内容安全策略/主题切换都会出问题）
@@ -1666,7 +1687,24 @@ check(
       && !/xlink:href|href="http/iu.test(bare)
       && iconSvgText.includes('aria-label="Image Bridge"')
   })(),
-  JSON.stringify({ base: /<rect[^>]*fill="[^"]*"[^>]*>/u.exec(iconSvgText)?.[0] ?? null, glyph: iconGlyphPairs.length }).slice(0, 240),
+  JSON.stringify({ base: /<rect[^>]*fill="[^"]*"[^>]*>/u.exec(iconSvgText)?.[0] ?? null, gradientId: /stroke="url\(#([\w-]+)\)"/u.exec(iconSvgText)?.[1] ?? null, glyph: iconGlyphPairs.length }).slice(0, 240),
+)
+/*
+ * ⑥ XML 良构性：这个文件曾经因为**注释里出现连续两个连字符**而在远端渲染成破图
+ * （XML 规范禁止；GitHub 的 sanitizer 与 librsvg 直接拒绝整份文件，浏览器却宽容，
+ * 所以本机怎么看都是好的）。这条断言把那个坑钉死，不再依赖"有人记得"。
+ */
+check(
+  '⑥ icon.svg 的注释里没有连续连字符（XML 禁止；曾让 README 里的内嵌图标变成破图）',
+  (() => {
+    const bodies = [...iconSvgText.matchAll(/<!--([\s\S]*?)-->/gu)].map((match) => match[1])
+    const offenders = bodies.filter((body) => /--/u.test(body))
+    // 再确认剥掉注释后只剩一个根元素：多一个顶层元素同样不是良构 XML。
+    const bare = iconSvgText.replace(/<!--[\s\S]*?-->/gu, '')
+    const roots = bare.match(/<svg[\s>]/gu) ?? []
+    return bodies.length > 0 && offenders.length === 0 && roots.length === 1
+  })(),
+  JSON.stringify({ comments: [...iconSvgText.matchAll(/<!--([\s\S]*?)-->/gu)].length, offenders: [...iconSvgText.matchAll(/<!--([\s\S]*?)-->/gu)].filter((m) => /--/u.test(m[1])).length }),
 )
 check(
   '② 导航遮罩仍然只由 currentColor 与几何数据构成：底色的品牌蓝没有渗进遮罩或样式表',

@@ -31,3 +31,6 @@ Thumbs.db
 .refcache-test.tmp
 # 提交消息的临时文件（本机提交用；沙箱内删不掉，用忽略规则挡住）
 .dib-verify/*.tmp.txt
+
+# 图标配色验收时渲染出来的预览图（开发期肉眼比对用，不入库也不入包）
+preview-*.png

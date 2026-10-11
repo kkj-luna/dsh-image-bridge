@@ -180,7 +180,7 @@ generated-images/                   生图输出（已忽略，不入库）
 | 文档 | 内容 |
 | --- | --- |
 | [插件完整手册](docs/manual.md) | 配置项、行为细节、排查、实现要点 |
-| [变更记录](CHANGELOG.md) | 每个版本改了什么（当前 **v0.4.1**） |
+| [变更记录](CHANGELOG.md) | 每个版本改了什么（当前 **v0.4.2**） |
 | [验证报告](.dib-verify/verify-report.md) · [第二轮](.dib-verify/verify-report-2.md) | 独立验证结论（含未覆盖范围） |
 
 ## 反馈

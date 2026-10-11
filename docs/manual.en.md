@@ -20,7 +20,7 @@ dsh plugin --profile web add kkj-luna-dsh-image-bridge
 
 Either remote install inserts the plugin row into the profile's config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). **Restart `dsh web` afterwards**, then open **Settings → Image Bridge**.
 
-Package name `kkj-luna-dsh-image-bridge`, version `0.4.1`. The author prefix keeps it unique on npm (the plain name `dsh-image-bridge` was already taken); the settings-page badge shows only the repository name, `dsh-image-bridge`.
+Package name `kkj-luna-dsh-image-bridge`, version `0.4.2`. The author prefix keeps it unique on npm (the plain name `dsh-image-bridge` was already taken); the settings-page badge shows only the repository name, `dsh-image-bridge`.
 
 ### Developing this plugin
 

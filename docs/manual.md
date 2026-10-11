@@ -20,7 +20,7 @@ dsh plugin --profile web add kkj-luna-dsh-image-bridge
 
 两种远程装法都会把插件行插入 profile 配置层（行 id `image-bridge-v4`，同时就是设置页写入的命名空间）。**装完重启 `dsh web`**，再打开「设置 → 生图桥」。
 
-包名 `kkj-luna-dsh-image-bridge`，版本 `0.4.1`。名字带作者前缀是为了在 npm 上唯一（`dsh-image-bridge` 已被他人占用）；设置页徽标只显示仓库名 `dsh-image-bridge`。
+包名 `kkj-luna-dsh-image-bridge`，版本 `0.4.2`。名字带作者前缀是为了在 npm 上唯一（`dsh-image-bridge` 已被他人占用）；设置页徽标只显示仓库名 `dsh-image-bridge`。
 
 ### 开发本插件
 
