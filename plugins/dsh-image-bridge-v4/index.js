@@ -1527,6 +1527,21 @@ export const OUTPUT = {
 }
 
 /**
+ * 面向模型的一条说明：**每次**用完生图/修图工具，都要在给用户的回复里说明这张图由哪个模型生成。
+ *
+ * 它作为 **system prompt 的一个独立段落**注册（见 `apply` 里的 `systemPrompt.section(...)`），
+ * **不**写进工具 description：
+ *   · description 回答"这个工具做什么"；"用完要转述"是跨调用的会话级要求，属于系统提示段；
+ *   · 同一件事只说一次——工具描述里不再重复这句，两个工具的 schema 少 102 字符/轮。
+ * 导出是为了让验收**真的读这条文案**（`verify-manifest` 断言它的三层要求），而不是 grep 源码
+ * ——"看起来在验、其实没人验"是本项目踩过的坑。**请不要删掉这个 export**。
+ *
+ * 措辞按 `agent-experience` 的边界写：事实性、非命令式长句、只讲"结果里有什么 + 期望你做什么"，
+ * 不讲内部机制（为什么这么设计、界面怎么渲染，那些在代码注释与 README 里）。
+ */
+export const MODEL_ATTRIBUTION_NOTE = '生图/修图结果里带一行 `model: <实际使用的模型名>`：每次用完后，请在回复里说明这张图由哪个模型生成；若这次是备用模型接管，也请说明。'
+
+/**
  * 探测接口可达性与密钥有效性。
  *
  * 用 `GET {baseUrl}/models` 做轻量探针：它不产生生图费用，OpenAI 兼容服务普遍提供。
@@ -1785,17 +1800,37 @@ export function apply(ctx, config) {
     const tools = ctx.get('tools')
     if (tools === undefined) throw new Error('tools 服务未挂载，无法注册工具')
     /*
-     * 面向模型的一句说明：结果里带着 `model: <实际使用的模型名>`，请把它转述给用户。
+     * 让模型**每次都把所用模型说出来**的说明，放在 **system prompt 的独立段落**里，
+     * 而不是把工具描述写长。
      *
-     * 为什么必须写在这里：这行字是**模型可见**的信息源，没被告知的模型不会去用它，
-     * 用户就永远看不到"这张图是谁生成的"。写成共用常量 = 同一事实只说一次，两个工具
-     * 各自引用一遍；措辞只讲"结果里有什么 + 期望你做什么"，不写内部机制（那些在代码
-     * 注释与 README 里）。
+     * 判断依据（`agent-experience` 技能：面向模型的工具定义该怎么写）：
+     *   · 工具 description 讲的是"这个工具做什么"；而"每次用完都要向用户转述模型名"是**跨调用的
+     *     会话级行为要求**，属于系统提示段，塞进 description 只会让两个工具的 schema 每轮都变长；
+     *   · "同一件事只说一次"：这条要求只在这里出现一次，工具描述里不再重复；
+     *   · `systemPrompt.section()` 的契约（Host 的 systemPrompt 服务）：`{ name, order, text }`，
+     *     注册与销毁会发出 `system-prompt/change`，返回的正是 Cordis effect 的 disposer——
+     *     所以放进 `ctx.effect` 里，插件卸载即撤销。
+     *
+     * 顺序取 3050：仓库的 `SECTION_ORDERS` 里工具类说明占 1000–3000（TOOL_BASH…TOOL_COMPUTER_USE），
+     * MCP 在 3100；我们的两个工具属于"外部工具说明"，落在 3000 与 3100 之间最自然。
      */
-    const MODEL_ATTRIBUTION_HINT = '结果末尾有 model: <实际使用的模型名>；请在回复中说明这张图由哪个模型生成（备用接管时说明）。'
+    const MODEL_ATTRIBUTION_ORDER = 3050
+    const systemPrompt = ctx.get('systemPrompt')
+    if (systemPrompt !== undefined && typeof systemPrompt.section === 'function') {
+      ctx.effect(() => systemPrompt.section({
+        name: 'dsh-image-bridge/model-attribution',
+        order: MODEL_ATTRIBUTION_ORDER,
+        // 文本里没有 `{var}` 占位符，关掉插值免得将来有人写进花括号被误解析
+        interpolate: false,
+        text: MODEL_ATTRIBUTION_NOTE,
+      }), 'image-bridge: model attribution section')
+    } else {
+      // 没有 systemPrompt 服务（桩环境或精简组装）时只记一笔，绝不影响工具注册
+      note('systemPrompt 服务不可用：未注册"说明所用模型"的提示段，模型可能不会主动转述')
+    }
     tools.register(defineTool({
       name: 'image_generate',
-      description: `用外部生图模型按提示词生成图片，并把结果保存为可查看的图片。当用户要求画图、生成插画/图标/海报，或需要任何图像产物时使用；本工具不依赖当前模型自身的绘图能力。${MODEL_ATTRIBUTION_HINT}`,
+      description: '用外部生图模型按提示词生成图片，并把结果保存为可查看的图片。当用户要求画图、生成插画/图标/海报，或需要任何图像产物时使用；本工具不依赖当前模型自身的绘图能力。',
       parameters: {
         prompt: { type: 'string', required: true, description: '图片内容的描述，越具体越好（主体、风格、构图、光线、文字等）。' },
         size: { type: 'string', description: `图片尺寸，例如 1024x1024、1024x1536、1536x1024。默认 ${resolved.size}。` },
@@ -1847,7 +1882,7 @@ export function apply(ctx, config) {
 
     tools.register(defineTool({
       name: 'image_edit',
-      description: `用外部生图模型按提示词修改一张已有图片（局部重绘、换风格、增删元素等）。图片来自会话工作区里的文件路径。${MODEL_ATTRIBUTION_HINT}`,
+      description: '用外部生图模型按提示词修改一张已有图片（局部重绘、换风格、增删元素等）。图片来自会话工作区里的文件路径。',
       parameters: {
         prompt: { type: 'string', required: true, description: '要如何修改这张图，例如「把背景换成夜晚的街道」。' },
         image_path: { type: 'string', required: true, description: '待修改图片的路径，由文件系统后端解析。' },
