@@ -11,7 +11,13 @@ English | [中文](README.md)
 
 Give a [DeepSeek Harness](https://github.com/deepseek-ai) model that **cannot draw** access to an external image service: install one plugin and the model gains two tools — `image_generate` and `image_edit` — with each result shown in the conversation as a persistent image attachment and saved to `generated-images/` in the session workspace.
 
+![Image Bridge](docs/promo-banner-en.png)
+
+The settings page and the promo poster:
+
 ![Image Bridge settings page](docs/settings-en.png)
+
+<a href="docs/promo-poster-en.png"><img src="docs/promo-poster-en.png" width="420" alt="Image Bridge promo poster"></a>
 
 ## Install
 

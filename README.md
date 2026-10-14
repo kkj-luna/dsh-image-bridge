@@ -11,7 +11,13 @@
 
 给 [DeepSeek Harness](https://github.com/deepseek-ai) 里**没有作图能力的模型**接上外部生图服务。装一个插件，模型就多出 `image_generate`（生图）与 `image_edit`（改图）两个工具，图片作为持久附件出现在对话里，同时另存到会话工作区 `generated-images/`。
 
+![生图桥](docs/promo-banner-zh.png)
+
+设置页与宣传海报：
+
 ![生图桥设置页](docs/settings-zh.png)
+
+<a href="docs/promo-poster-zh.png"><img src="docs/promo-poster-zh.png" width="420" alt="生图桥宣传海报"></a>
 
 ## 安装
 
