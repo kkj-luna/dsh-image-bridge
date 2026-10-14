@@ -13,11 +13,9 @@ Give a [DeepSeek Harness](https://github.com/deepseek-ai) model that **cannot dr
 
 ![Image Bridge](docs/promo-banner-en.png)
 
-The settings page and the promo poster:
+The settings page:
 
 ![Image Bridge settings page](docs/settings-en.png)
-
-<a href="docs/promo-poster-en.png"><img src="docs/promo-poster-en.png" width="420" alt="Image Bridge promo poster"></a>
 
 ## Install
 
@@ -89,6 +87,8 @@ You can also remove it under **Settings → Plugins**.
 | Do I have to restart? | **Yes** — plugin code is not hot-reloaded |
 | Will upgrading lose my configuration? | No. The row id and settings namespace have always been `image-bridge-v4`; the package name changed twice but it is only an install identifier |
 | What if I want to change the code? | See "Developing this plugin" in the [full manual](docs/manual.en.md) — a developer path, not needed for normal use |
+
+<a href="docs/promo-poster-en.png"><img src="docs/promo-poster-en.png" width="420" alt="Image Bridge promo poster"></a>
 
 ## Three steps to start
 

@@ -13,11 +13,9 @@
 
 ![生图桥](docs/promo-banner-zh.png)
 
-设置页与宣传海报：
+设置页：
 
 ![生图桥设置页](docs/settings-zh.png)
-
-<a href="docs/promo-poster-zh.png"><img src="docs/promo-poster-zh.png" width="420" alt="生图桥宣传海报"></a>
 
 ## 安装
 
@@ -87,6 +85,8 @@ dsh plugin --profile web remove kkj-luna-dsh-image-bridge
 | 装完要不要重启 | **要**，插件代码不会被热重载 |
 | 从旧版本升上来配置会丢吗 | 不会。行 id 与设置命名空间一直是 `image-bridge-v4`，包名换过两次但它只是个安装标识 |
 | 想改代码怎么办 | 见[完整手册](docs/manual.md)的「开发本插件」——那是开发者路径，普通使用不需要 |
+
+<a href="docs/promo-poster-zh.png"><img src="docs/promo-poster-zh.png" width="420" alt="生图桥宣传海报"></a>
 
 ## 三步开始
 
