@@ -27,12 +27,6 @@ dsh plugin --profile web add kkj-luna-dsh-image-bridge
 
 重启 `dsh web`，打开 **设置 → 生图桥**。装的是预构建产物，不用克隆仓库、不用记本地路径，也不会触发源码构建授权。
 
-前提是本机装着 `@deepseek-ai/dsh`（`dsh web` 跑得起来）。没有就先装：
-
-```sh
-npm i -g @deepseek-ai/dsh
-```
-
 **懒得敲命令？** 让 Agent 装：新建对话，把下面这句发过去，它会自己装、重启并核对结果。
 
 ```text

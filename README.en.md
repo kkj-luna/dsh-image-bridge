@@ -27,12 +27,6 @@ dsh plugin --profile web add kkj-luna-dsh-image-bridge
 
 Restart `dsh web` and open **Settings → Image Bridge**. You get a prebuilt install: no cloning, no local path to remember, and no source-build approval step.
 
-This requires a local `@deepseek-ai/dsh` (a working `dsh web`). If you do not have one:
-
-```sh
-npm i -g @deepseek-ai/dsh
-```
-
 **Rather not type commands?** Let your agent do it — start a new conversation and send this:
 
 ```text
