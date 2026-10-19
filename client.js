@@ -255,6 +255,8 @@ window.__ModuleLoader__.load({
         'editModel': '改图模型',
         'editModel.placeholder': '留空表示沿用生图模型',
         'manualOption': '手动输入…',
+        'searchModels': '搜索模型',
+        'searchEmpty': '没有匹配的模型',
         'noModelsYet': '还没有获取到模型列表：先点「测试连接」或「获取可用模型」，也可以直接填写模型名',
         'none': '未选择',
         'inheritImage': '沿用生图模型',
@@ -372,6 +374,8 @@ window.__ModuleLoader__.load({
         'editModel': 'Edit model',
         'editModel.placeholder': 'Blank reuses the image model',
         'manualOption': 'Type a model name…',
+        'searchModels': 'Search models',
+        'searchEmpty': 'No matching models',
         'noModelsYet': 'No model list yet: run "Test connection" or "Fetch models" first — you can also type a model name.',
         'none': 'not selected',
         'inheritImage': 'reuse the image model',
@@ -552,7 +556,15 @@ window.__ModuleLoader__.load({
       '.dib-dd-value{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dib-dd-caret{flex:0 0 auto;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:1}',
       /* 菜单面板：圆角 + 层级背景 + 阴影 + 边框，长列表内部滚动 */
-      '.dib-menu{position:absolute;z-index:30;left:0;right:0;top:calc(100% + 4px);max-height:280px;overflow-y:auto;padding:4px;box-sizing:border-box;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-elevation-prominent)}',
+      '.dib-menu{position:absolute;z-index:30;left:0;right:0;top:calc(100% + 4px);display:flex;flex-direction:column;max-height:280px;padding:4px;box-sizing:border-box;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-elevation-prominent)}',
+      /*
+       * 搜索框是面板的固定部分、选项列表是滚动容器：列表在 176 项时滚动，搜索框不该跟着滚走。
+       * min-height:0 是 flex 子项能真正收缩的前提，否则 overflow 不生效。
+       */
+      '.dib-menu-list{min-height:0;overflow-y:auto}',
+      '.dib-menu-search{flex:0 0 auto;width:100%;height:30px;margin:0 0 4px;padding:0 8px;box-sizing:border-box;border:0.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-layer-3);font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary)}',
+      '.dib-menu-search:focus-visible{outline:none;border-color:var(--dsw-alias-state-business-primary)}',
+      '.dib-menu-empty{padding:10px 8px;color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px}',
       '.dib-menu-item{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;cursor:pointer}',
       '.dib-menu-item:hover{background:var(--dsw-alias-interactive-bg-hover)}',
       '.dib-menu-item.is-active{background:var(--dsw-alias-interactive-bg-hover)}',
@@ -1170,7 +1182,7 @@ window.__ModuleLoader__.load({
      * - 仓库地址也只留这一个常量，不在别处散落硬编码。
      */
     const PACKAGE_NAME = 'kkj-luna-dsh-image-bridge'
-    const PACKAGE_VERSION = '0.4.3'
+    const PACKAGE_VERSION = '0.5.0'
     /** 徽标上显示的仓库名。 */
     const REPO_NAME = 'dsh-image-bridge'
     /** 徽标点击后打开的仓库地址。 */
@@ -2617,9 +2629,35 @@ window.__ModuleLoader__.load({
     function Dropdown(props) {
       const [open, setOpen] = React.useState(false)
       const [activeIndex, setActiveIndex] = React.useState(-1)
+      /** 搜索框里的关键词（只有 searchable 的下拉才有；关闭即清空）。 */
+      const [query, setQuery] = React.useState('')
       const triggerRef = React.useRef(null)
       const wrapperRef = React.useRef(null)
-      const entries = Array.isArray(props.entries) ? props.entries : []
+      const searchRef = React.useRef(null)
+      const allEntries = Array.isArray(props.entries) ? props.entries : []
+      const searchable = props.searchable === true
+      /**
+       * 按关键词过滤条目。
+       *
+       * 只保留 label 里**包含**关键词的选项（大小写不敏感：`wan` 能命中 `Wan2.7-Image`），
+       * 并让商分组头跟着它的第一个命中项一起出现——没有命中项的组头单独留着就是空分组。
+       */
+      const filteredEntriesOf = (text) => {
+        const needle = String(text ?? '').trim().toLowerCase()
+        if (!searchable || needle === '') return allEntries
+        const kept = []
+        let pendingGroup = null
+        for (const entry of allEntries) {
+          if (entry.kind === 'group') { pendingGroup = entry; continue }
+          if (entry.kind !== 'option') continue
+          if (String(entry.label ?? '').toLowerCase().includes(needle)) {
+            if (pendingGroup !== null) { kept.push(pendingGroup); pendingGroup = null }
+            kept.push(entry)
+          }
+        }
+        return kept
+      }
+      const entries = filteredEntriesOf(query)
       /** 可选项在 entries 里的下标（键盘只在可选项之间移动，跳过小标题）。 */
       const optionIndexes = entries.map((entry, index) => (entry.kind === 'option' ? index : -1)).filter((index) => index >= 0)
       const optionIdOf = (index) => `${props.id}-opt-${index}`
@@ -2635,10 +2673,12 @@ window.__ModuleLoader__.load({
         setOpen(false)
         setActive(-1)
         /*
-         * 清空搜索缓冲：它属于"这一次打开菜单"的输入，不该跨交互存活。
-         * 不清的话，用户上次搜过 `z`、关掉再打开按 `w`，会被当成"在输入更长的词"拼成 `zw`——
+         * 搜索词与搜索缓冲都只属于"这一次打开菜单"的输入，不该跨交互存活。
+         * 搜索词不清的话，重新打开会停在上次的过滤结果里，用户看到的是"列表丢了模型"。
+         * 缓冲不清的话，用户上次搜过 `z`、关掉再打开按 `w`，会被当成"在输入更长的词"拼成 `zw`——
          * 匹配不到任何项，表现为**输入跳转静默失灵**（实测踩到过）。
          */
+        setQuery('')
         typedRef.current = { text: '', at: 0 }
         if (refocus === true) focusTrigger()
       }
@@ -2686,6 +2726,17 @@ window.__ModuleLoader__.load({
         if (node !== null && node !== undefined && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'nearest' })
       }, [isOpen, activeEntryIndex])
 
+      /*
+       * 打开时把焦点放进搜索框：用户点开下拉就是为了挑一个具体的模型，直接可以打字。
+       * 只在"打开状态"变化时跑，不跟着每次输入重跑（否则每敲一个字都会重新聚焦、夺走光标）。
+       * 能力全部探测：没有 focus 的宿主（测试桩、极端环境）不该因此报错。
+       */
+      React.useEffect(() => {
+        if (!isOpen || !searchable) return
+        const node = searchRef.current
+        if (node !== null && node !== undefined && typeof node.focus === 'function') node.focus()
+      }, [isOpen, searchable])
+
       /**
        * 输入跳转（type-ahead）的缓冲。
        *
@@ -2723,6 +2774,48 @@ window.__ModuleLoader__.load({
       const setActive = (index) => {
         activeIndexRef.current = index
         setActiveIndex(index)
+      }
+
+      /*
+       * 搜索框：输入即过滤，过滤结果里键盘照旧可用（↑↓ 移动、回车选中、Esc 收起）。
+       *
+       * 输入变化时把高亮挪到**第一个命中项**：用户打完词直接回车就能选中，不必再按下箭头；
+       * 无命中时高亮清掉（Enter 不会盲选一个看不见的项）。
+       */
+      const onSearchChange = (event) => {
+        const value = event !== null && event !== undefined && event.target !== null && event.target !== undefined && typeof event.target.value === 'string'
+          ? event.target.value
+          : ''
+        setQuery(value)
+        const list = filteredEntriesOf(value)
+        setActive(list.findIndex((entry) => entry.kind === 'option'))
+      }
+      const onSearchKeyDown = (event) => {
+        const key = event === null || event === undefined ? '' : event.key
+        if (key === 'ArrowDown' || key === 'ArrowUp') {
+          if (typeof event.preventDefault === 'function') event.preventDefault()
+          move(key === 'ArrowDown' ? 1 : -1)
+          return
+        }
+        if (key === 'Enter') {
+          if (typeof event.preventDefault === 'function') event.preventDefault()
+          const highlighted = activeEntryIndex >= 0 ? entries[activeEntryIndex] : undefined
+          commit(highlighted !== undefined && highlighted.kind === 'option' ? highlighted : entries[optionIndexes[0]])
+          return
+        }
+        if (key === 'Home' || key === 'End') {
+          if (typeof event.preventDefault === 'function') event.preventDefault()
+          if (optionIndexes.length > 0) setActive(key === 'Home' ? optionIndexes[0] : optionIndexes[optionIndexes.length - 1])
+          return
+        }
+        if (key === 'Escape') {
+          if (typeof event.preventDefault === 'function') event.preventDefault()
+          // 与触发器上的 Esc 同理：菜单是更内层的控件，先由它消费，别让浮层跟着一起关。
+          if (typeof event.stopPropagation === 'function') event.stopPropagation()
+          close(true)
+          return
+        }
+        if (key === 'Tab') close(false)
       }
 
       const onTriggerKeyDown = (event) => {
@@ -2820,14 +2913,31 @@ window.__ModuleLoader__.load({
         h('span', { key: 'caret', className: 'dib-dd-caret', 'aria-hidden': 'true' }, '▾'),
       ])
       if (!isOpen) return h('div', { className: 'dib-dd', ref: wrapperRef }, trigger)
-      const menu = h('div', {
-        key: 'menu',
-        id: `${props.id}-menu`,
-        className: 'dib-menu',
+      /*
+       * 搜索框与选项列表是两个兄弟节点：输入框固定在面板顶部，只有列表滚动。
+       * ARIA 上 listbox 只包选项（搜索框是它的兄弟），所以 aria-activedescendant 挂在 listbox 上。
+       */
+      const searchBox = searchable ? h('input', {
+        key: 'search',
+        id: `${props.id}-search`,
+        className: 'dib-menu-search',
+        type: 'search',
+        placeholder: tr('searchModels'),
+        'aria-label': tr('searchModels'),
+        autoComplete: 'off',
+        spellCheck: false,
+        autoFocus: true,
+        ref: searchRef,
+        value: query,
+        onChange: onSearchChange,
+        onKeyDown: onSearchKeyDown,
+      }) : null
+      const listbox = h('div', {
+        key: 'list',
+        className: 'dib-menu-list',
         role: 'listbox',
         'aria-label': typeof props.ariaLabel === 'string' && props.ariaLabel !== '' ? props.ariaLabel : props.menuLabel,
         ...(activeOption === undefined ? {} : { 'aria-activedescendant': optionIdOf(activeEntryIndex) }),
-        'data-dib-menu': props.id,
       }, entries.map((entry, index) => {
         if (entry.kind === 'group') {
           // 小标题：纯展示，不可点、不参与键盘（role=presentation）。
@@ -2844,12 +2954,21 @@ window.__ModuleLoader__.load({
           'data-value': entry.value,
           ...(entry.data === undefined ? {} : entry.data),
           onClick: () => commit(entry),
-          onMouseEnter: () => setActiveIndex(index),
+          onMouseEnter: () => setActive(index),
         }, [
           h('span', { key: 'label', className: 'dib-menu-label' }, entry.label),
           selected ? h('span', { key: 'check', className: 'dib-menu-check', 'aria-hidden': 'true' }, '✓') : null,
         ])
       }))
+      const empty = searchable && optionIndexes.length === 0
+        ? h('div', { key: 'empty', className: 'dib-menu-empty', role: 'status' }, tr('searchEmpty'))
+        : null
+      const menu = h('div', {
+        key: 'menu',
+        id: `${props.id}-menu`,
+        className: 'dib-menu',
+        'data-dib-menu': props.id,
+      }, [searchBox, listbox, empty])
       return h('div', { className: 'dib-dd', ref: wrapperRef }, [trigger, menu])
     }
 
@@ -2933,6 +3052,11 @@ window.__ModuleLoader__.load({
           triggerText,
           entries: routeEntries(id),
           value: entry,
+          /*
+           * 四个模型槽位都带搜索框：候选是所有服务商模型的并集，一家服务商就有几十上百个，
+           * 176 项时纯滚动找模型已经不现实。尺寸下拉不加——预设只有几个，搜索反而多余。
+           */
+          searchable: true,
           disabled: disabled || !hasConnected,
           /*
            * **每个槽位都要有 ariaLabel**，不能只给备用槽位。

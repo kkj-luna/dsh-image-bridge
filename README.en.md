@@ -88,7 +88,7 @@ You can also remove it under **Settings → Plugins**.
 
 1. **Add a provider**: Settings → Image Bridge → "＋ Add model provider", then fill in the endpoint (e.g. `https://api.openai.com/v1`) and the API key.
 2. **Test first, then save**: click "Test connection", and once the model list appears click **Save** in the dialog.
-3. **Pick models and draw**: back on the page, in the **Models** section choose one model each for generation and editing (each may have a fallback), click "Save model settings", then just ask — "draw me a Shiba Inu in an astronaut helmet".
+3. **Pick models and draw**: back on the page, in the **Models** section choose one model each for generation and editing (each may have a fallback; the dropdown has a search box for long lists), click "Save model settings", then just ask — "draw me a Shiba Inu in an astronaut helmet".
 
 > **The step people trip on**: the dropdowns draw from the model list that has been **saved**. Test without saving, close the dialog, and those models never appear — the order is "Test connection / Fetch models" → **Save** → the dropdowns.
 
@@ -97,7 +97,7 @@ You can also remove it under **Settings → Plugins**.
 - **Drawing does not depend on the model** — vision or no vision, it works the same: the model calls the plugin, the plugin asks your external image service, and the image comes back as an attachment in the conversation
 - **Several providers side by side** — each with its own endpoint and API key, with a connection light right on the card; one "Test connection" also lists the models that provider offers
 - **Mix and match models** — generation and editing may use models from different vendors, each with a primary and a fallback; if the primary fails the fallback takes over and the reply says which one was used
-- **Only drawable models are listed** — your key may expose hundreds of models; by default only the ones recognised as image models show up, and one toggle reveals the rest
+- **Only drawable models are listed** — your key may expose hundreds of models; by default only the ones recognised as image models show up, and one toggle reveals the rest. The dropdowns have a search box too, so there is no scrolling through a long list
 - **Size is up to you** — eight common presets, or any size string you type
 - **Keys stay put** — API keys live in the DSH credential store (`$DSH_HOME/.credentials.yaml`, mode `0600`), never in the config file and never back to the browser
 - **Updates keep your config** — providers, models and size live in the profile, so updating the plugin leaves them alone
@@ -195,7 +195,7 @@ generated-images/                   generated output (ignored, not committed)
 | Document | Contents |
 | --- | --- |
 | [Full plugin manual](docs/manual.en.md) | configuration, behaviour details, troubleshooting, implementation notes |
-| [Changelog](CHANGELOG.md) | what changed in each version (currently **v0.4.3**) |
+| [Changelog](CHANGELOG.md) | what changed in each version (currently **v0.5.0**) |
 | [Verification report](.dib-verify/verify-report.md) · [second round](.dib-verify/verify-report-2.md) | independent verification results, including what was not covered |
 | [Listing on the plugin marketplace](docs/marketplace.md) | want it to show up in the marketplace? entry file and PR steps |
 

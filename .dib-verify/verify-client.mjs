@@ -829,8 +829,14 @@ const modelOptionsOf = (tree, id) => entryOptionsOf(tree, id).filter((entry) => 
 const groupLabelsOf = (tree, id) => entriesOf(tree, id).filter((entry) => entry.kind === 'group').map((entry) => entry.label)
 /** 展开后的菜单面板与菜单项（只在 open 状态存在）。 */
 const menuOf = (tree, id) => tree.nodes.find((node) => node.props?.['data-dib-menu'] === id)
-const menuItemsOf = (menu) => (menu === undefined ? [] : (menu.props.children ?? []).filter((child) => child?.props?.role === 'option'))
-const menuGroupsOf = (menu) => (menu === undefined ? [] : (menu.props.children ?? []).filter((child) => child?.props?.className === 'dib-menu-group'))
+/** 面板里滚动的 listbox 容器（搜索框是它的兄弟，不在 listbox 里——ARIA 不允许 textbox 塞进 listbox）。 */
+const menuListOf = (menu) => (menu === undefined ? undefined : (menu.props.children ?? []).find((child) => child?.props?.className === 'dib-menu-list'))
+const menuItemsOf = (menu) => (menuListOf(menu)?.props.children ?? []).filter((child) => child?.props?.role === 'option')
+const menuGroupsOf = (menu) => (menuListOf(menu)?.props.children ?? []).filter((child) => child?.props?.className === 'dib-menu-group')
+/** 搜索框（只有模型下拉有；尺寸下拉这类不带 searchable 的下拉不渲染）。 */
+const menuSearchOf = (menu) => (menu === undefined ? undefined : (menu.props.children ?? []).find((child) => child?.props?.className === 'dib-menu-search'))
+/** 空态文案节点（搜索无匹配时出现）。 */
+const menuEmptyOf = (menu) => (menu === undefined ? undefined : (menu.props.children ?? []).find((child) => child?.props?.className === 'dib-menu-empty'))
 const menuItemByNameOf = (menu, label) => menuItemsOf(menu).find((item) => textOfElement(item).replace('✓', '').trim() === label)
 const menuItemByValueOf = (menu, value) => menuItemsOf(menu).find((item) => String(item.props['data-value'] ?? '') === value)
 /** 点击触发器打开菜单（已经开着就不点，避免又关掉），返回展开后的树。 */
@@ -3435,7 +3441,7 @@ check(
       menuTree = openDropdownTree(menuSession, PRIMARY)
       const menu = menuOf(menuTree, PRIMARY)
       return menu !== undefined
-        && menu.props.role === 'listbox'
+        && menuListOf(menu)?.props.role === 'listbox'
         && triggerById(menuTree, PRIMARY)?.props['aria-expanded'] === 'true'
         && triggerById(menuTree, PRIMARY)?.props['aria-controls'] === menu.props.id
         && menuItemsOf(menu).length === modelOptionsOf(menuTree, PRIMARY).length + 1
@@ -3519,7 +3525,8 @@ check(
     menuTree = menuSession.tree()
     const menu = menuOf(menuTree, PRIMARY)
     const inline = String(menu?.props?.style ?? '')
-    return cssTextAll.includes('.dib-menu{') && cssTextAll.includes('max-height:280px') && cssTextAll.includes('overflow-y:auto')
+    return cssTextAll.includes('.dib-menu{') && cssTextAll.includes('max-height:280px')
+      && cssTextAll.includes('.dib-menu-list{') && cssTextAll.includes('overflow-y:auto')
       // jsdom 里量不到真实高度，所以断言"滚动究竟有没有被触发"：每次键盘移动都会调一次 scrollIntoView。
       && domCalls.scrollIntoView.length > scrollBefore
       && domCalls.scrollIntoView[domCalls.scrollIntoView.length - 1]?.options?.block === 'nearest'
@@ -3611,6 +3618,95 @@ check(
   })(),
   JSON.stringify(menuGroupsOf(menuOf(menuTree, PRIMARY)).map((group) => textOfElement(group).trim())).slice(0, 200),
 )
+/* ------------------------------------------------------------------ *
+ * ⑦ 模型下拉的搜索框
+ *
+ * 真实配置里有的服务商 `/models` 能返回 176 项（实测），上下键一格格翻不可行。
+ * 搜索框只加在「模型」下拉上：尺寸下拉是固定短列表，多一个输入框只是噪音。
+ * ------------------------------------------------------------------ */
+{
+  const PRIMARY_MENU = () => menuOf(menuTree, PRIMARY)
+  const visibleValues = () => menuItemsOf(PRIMARY_MENU()).map((item) => String(item.props['data-value'] ?? ''))
+  const searchNodeOf = () => menuSearchOf(PRIMARY_MENU())
+  /** 输入关键词；搜索框还不存在时安静跳过（这条套件在功能落地前必须能跑完并报红，而不是抛错中断）。 */
+  const typeSearch = (value) => {
+    const handler = searchNodeOf()?.props?.onChange
+    if (typeof handler === 'function') menuSession.fire(handler, { target: { value } })
+  }
+  menuTree = openDropdownTree(menuSession, PRIMARY)
+  check(
+    '⑦ 模型下拉打开后有搜索框（占位/aria-label/自动聚焦），尺寸下拉没有',
+    searchNodeOf() !== undefined
+      && searchNodeOf().props.placeholder === '搜索模型'
+      && searchNodeOf().props['aria-label'] === '搜索模型'
+      && searchNodeOf().props.autoFocus === true
+      && dropdownById(routesPageWith(routesBundle, {}), PRIMARY)?.props.searchable === true
+      && dropdownById(routesPageWith(routesBundle, {}), SIZE_SELECT)?.props.searchable === undefined,
+    JSON.stringify({
+      hasSearch: searchNodeOf() !== undefined,
+      primary: dropdownById(routesPageWith(routesBundle, {}), PRIMARY)?.props.searchable ?? null,
+      size: dropdownById(routesPageWith(routesBundle, {}), SIZE_SELECT)?.props.searchable ?? null,
+    }).slice(0, 220),
+  )
+
+  // 输入过滤：保留名称包含关键词的项（大小写不敏感），没有命中项的商分组头也一并消失。
+  typeSearch('WAN')
+  menuTree = menuSession.tree()
+  const wanValues = visibleValues()
+  check(
+    '⑦ 输入关键词只保留匹配项，没有匹配项的商分组头一起消失',
+    wanValues.length === 2
+      && wanValues.every((value) => value.includes('::wan2.7'))
+      && menuGroupsOf(PRIMARY_MENU()).length === 1,
+    JSON.stringify({ wanValues, groups: menuGroupsOf(PRIMARY_MENU()).map((group) => textOfElement(group).trim()) }).slice(0, 220),
+  )
+
+  // 过滤后键盘照旧可用：下移一格 + 回车，提交的是过滤结果里的项。
+  keyDownOn(menuSession, searchNodeOf(), 'ArrowDown')
+  menuTree = menuSession.tree()
+  keyDownOn(menuSession, searchNodeOf(), 'Enter')
+  menuTree = menuSession.tree()
+  check(
+    '⑦ 过滤后用键盘下移 + 回车，选中的是过滤结果里的项并落盘',
+    PRIMARY_MENU() === undefined
+      && String(dropdownById(menuTree, PRIMARY)?.props.value) === 'zhipu::wan2.7-image-pro',
+    JSON.stringify({ value: dropdownById(menuTree, PRIMARY)?.props.value ?? null }).slice(0, 200),
+  )
+
+  // 无匹配：不能静默成空面板——明确写「没有匹配的模型」，菜单保持打开可继续改词。
+  menuTree = openDropdownTree(menuSession, PRIMARY)
+  typeSearch('zzz-no-such-model')
+  menuTree = menuSession.tree()
+  const emptyMenu = PRIMARY_MENU()
+  check(
+    '⑦ 搜索无匹配时显示空态文案，菜单不关（还能继续改关键词）',
+    menuItemsOf(emptyMenu).length === 0
+      && menuEmptyOf(emptyMenu) !== undefined
+      && textOfElement(menuEmptyOf(emptyMenu)).includes('没有匹配的模型'),
+    JSON.stringify({
+      items: menuItemsOf(emptyMenu).length,
+      empty: menuEmptyOf(emptyMenu) === undefined ? null : textOfElement(menuEmptyOf(emptyMenu)),
+    }).slice(0, 200),
+  )
+
+  // 关掉再打开：搜索词不能跨交互存活（否则下次打开看到的是上次的过滤结果，像"模型丢了"）。
+  keyDownOn(menuSession, searchNodeOf(), 'Escape')
+  menuTree = menuSession.tree()
+  menuTree = openDropdownTree(menuSession, PRIMARY)
+  check(
+    '⑦ 重新打开时搜索词已清空，选项恢复全量',
+    (searchNodeOf()?.props.value ?? '') === ''
+      && visibleValues().length === modelOptionsOf(menuTree, PRIMARY).length + 1,
+    JSON.stringify({
+      value: searchNodeOf()?.props.value ?? null,
+      items: visibleValues().length,
+      expected: modelOptionsOf(menuTree, PRIMARY).length + 1,
+    }).slice(0, 220),
+  )
+  keyDownOn(menuSession, searchNodeOf(), 'Escape')
+  menuTree = menuSession.tree()
+}
+
 /* 补一条：未设置时触发器显示占位而不是"第一个模型的名字"（与上面的占位断言配对） */
 check(
   '未设置的槽位：触发器显示占位文案，不会显示成第一个模型的名字',

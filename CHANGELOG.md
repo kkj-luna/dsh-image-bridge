@@ -2,6 +2,14 @@
 
 版本号在仓库根的 `package.json`，同时会显示在设置页页头徽标上（`client.js` 的 `PACKAGE_VERSION` 必须与它逐字一致，验收有断言盯着）。
 
+## v0.5.0 — 2026-10-19
+
+**模型下拉加了搜索框。** 候选是「所有服务商模型列表的并集」，一家的 Key 就可能带出几百个模型（真实场景里一个下拉有 176 项），纯靠滚动找模型已经不现实。现在四个模型槽位的下拉顶部都有搜索框：输入即按模型名过滤（大小写不敏感，`wan` 能命中 `Wan2.7-Image`），服务商分组头只跟着它命中的模型一起出现，没有命中时显示「没有匹配的模型」；↑↓、回车、Esc、Home/End 照旧可用，回车直接选中第一个命中项；**关闭下拉即清空搜索词**。尺寸下拉不加搜索——那里只有几个预设。
+
+**搜索框是 listbox 的兄弟节点，不在 listbox 里。** 语义上它是过滤控件而不是一个选项，所以 `role=listbox` 只包选项，`aria-activedescendant` 挂在 listbox 上；打开下拉时焦点直接落在搜索框里，读屏不会把它念成选项。
+
+**验收**：六套件 449 条断言全绿（manifest 47 / client 189 / host 147 / security 34 / resolve 8 / upgrade 24），其中 client 新增了一组搜索相关断言：过滤结果、分组头跟随、无命中提示、键盘在过滤后仍可选中、关闭后清空、以及「搜索框不是 listbox 的子节点」这条语义结构。
+
 ## v0.4.3 — 2026-10-11
 
 **新增「上架插件市场」文档**（`docs/marketplace.md`）：条目 YAML、格式坑、PR 描述与步骤。插件市场不直接收录，它的列表来自精选清单 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)，投稿是往那边提一个 `data/plugins/kkj-luna__dsh-image-bridge.yml`。文档把两件事写清楚了：**只声明 `dsh.client` 不算可安装**（这是最常见的被拒原因），以及面对目录里同类插件（`dsh-image-create`、`dsh-ark9canvas` 等）该主动说明哪些差异——指南的规则是"不是先来后到，是谁更好"。

@@ -20,7 +20,7 @@ dsh plugin --profile web add kkj-luna-dsh-image-bridge
 
 Either remote install inserts the plugin row into the profile's config layer (row id `image-bridge-v4`, which is also the namespace the settings page writes to). **Restart `dsh web` afterwards**, then open **Settings → Image Bridge**.
 
-Package name `kkj-luna-dsh-image-bridge`, version `0.4.3`. The author prefix keeps it unique on npm (the plain name `dsh-image-bridge` was already taken); the settings-page badge shows only the repository name, `dsh-image-bridge`.
+Package name `kkj-luna-dsh-image-bridge`, version `0.5.0`. The author prefix keeps it unique on npm (the plain name `dsh-image-bridge` was already taken); the settings-page badge shows only the repository name, `dsh-image-bridge`.
 
 ### Developing this plugin
 
@@ -82,6 +82,7 @@ Both tools also take `model` (optional) to override the model for that one call.
 
 - **Candidates come from** the **union** of every provider that has a saved model list, grouped by provider, and **model names are never rewritten**.
 - **Only image models are listed by default**, under a deliberately narrow rule (see "How image models are filtered"); tick "Show all models" to see language models too, or just type one with "Manual input…".
+- **Each model dropdown has a search box at the top**: typing filters by model name (case-insensitive — `wan` matches `Wan2.7-Image`), and a provider group header only appears alongside a matching model; when nothing matches it shows "No matching models". The keyboard still works (arrows to move, Enter to pick, Esc to close), and Enter picks the first match straight away. Searching never touches the config, and **closing the dropdown clears the query**. The size dropdown has no search box — it only holds a handful of presets.
 - **The selected model never disappears**: even if it does not look like an image model, it is added to the options.
 - Every dropdown ends with **"Manual input…"** (a reserved value, never written to config).
 
@@ -171,7 +172,7 @@ Image generation
 ```
 
 - **The two fallback rows have no visible label** (the dropdown already reads "Fallback model"), but each carries an equivalent `aria-label`, so screen readers can still tell the four controls apart.
-- The dropdowns are **hand-rolled menus**: click-outside to close, Esc, arrow keys plus Enter, Home/End, and focus returns to the trigger on close; `role=listbox` / `role=option` with `aria-activedescendant`; the panel has a max height and keyboard movement scrolls the active item into view.
+- The dropdowns are **hand-rolled menus**: click-outside to close, Esc, arrow keys plus Enter, Home/End, and focus returns to the trigger on close; `role=listbox` / `role=option` with `aria-activedescendant`; the panel has a max height and keyboard movement scrolls the active item into view. The model dropdowns also have a search box at the top (see "How model candidates are presented and filtered"); on open, focus lands in it.
 - **Options are the union of every provider that has ever fetched a model list**, grouped by provider (group headings look like `— OTHER —`), and **model names are never rewritten**. Every option carries `{ providerId, model }`, so generation can use A while the fallback uses B.
 - Each dropdown ends with a fixed **"Manual input…"** entry (reserved value `__dib_manual__`, **not written to config**); the text box only appears once it is explicitly selected, and a **manually typed model goes to the provider currently in effect**.
 - **Empty state** (no provider has ever fetched a model list): all four dropdowns are disabled and show their placeholders. The UI does **not** open four text boxes at once — just one hint line, "Add and test a model provider first".
@@ -354,7 +355,7 @@ All-false `services` usually means this report came from a **test harness** (or 
 | 401/403 key rejected | The key is wrong, or the service does not accept `Authorization: Bearer`. Remember **environment variables take precedence over the credential service**: with multiple providers each reads **its own** variable (id `zhipu` → `DSH_IMAGE_BRIDGE_KEY_ZHIPU`), while legacy fallback mode uses `DSH_IMAGE_BRIDGE_API_KEY` |
 | 404 | Usually the provider simply has no `/models`, which does not affect generation; if generation itself 404s, the API path is not OpenAI-compatible |
 | All four dropdowns are empty (disabled) | No model list has been saved yet: test connection / fetch models → **Save**. Note "Manual input…" is an entry **inside** the dropdown, and the dropdown is disabled in this state — save a list first, then pick it |
-| There are candidates but not the model I want | Only image models are shown by default — tick "Show all models" or use "Manual input…"; a model just fetched must be saved in the dialog first; it may also belong to another provider, so expand that group |
+| There are candidates but not the model I want | Only image models are shown by default — tick "Show all models" or use "Manual input…", or type part of the model name into the search box at the top of the dropdown; a model just fetched must be saved in the dialog first; it may also belong to another provider, so expand that group |
 | No "Image Bridge" page in Settings | Check that the plugin is enabled; look for `fatal` on `client apply` in the client log; check for a degraded file |
 | **Nothing changed after installing / editing code** | **Restart `dsh web`**: Node caches loaded modules and hot reload ignores `node_modules`, so editing `index.js` and refreshing the page is not enough — the same goes for `client.js`. **Config** travels a separate channel (the settings page saves through hot update) and is unaffected. Before restarting, confirm the plugin manager really shows it as enabled |
 | Changing `timeoutMs` / `connectTimeoutSeconds` did nothing | Both are re-read on every call and take effect as soon as they are saved. If nothing changes at all, make sure you edited the row `config` of **this** profile (the settings page writes to the same row, id `image-bridge-v4`), and check whether `config` in the startup report shows your new value |
